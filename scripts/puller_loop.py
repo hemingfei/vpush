@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from puller_retry import call_with_retry
 from lab_common import (  # noqa: E402
+    COOKIE_ERRNOS,
     RETRY_SUFFIX,
     append_jsonl,
     atomic_write_json,
@@ -38,8 +39,11 @@ from lab_common import (  # noqa: E402
     iso_now,
     lab_root,
     make_client,
+    redact,
     rel_under,
+    resolve_under,
     safe_exc,
+    safe_relpath,
     skip_file,
     upload_ok,
     utcnow,
@@ -125,6 +129,25 @@ def read_sidecar(path: Path) -> dict:
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def _upload_rejected(result: object) -> RuntimeError:
+    """Reject without dumping the 115 body (tokens may appear as JSON fields).
+
+    Keep a short redacted ``error=`` so ``puller_retry`` can still see
+    empty-filesha1 flakes. Never interpolate ``result!r``.
+    """
+    errno = result.get("errno") if isinstance(result, dict) else None
+    kind = "cookie" if errno in COOKIE_ERRNOS else "other"
+    reason = ""
+    if isinstance(result, dict):
+        for key in ("error", "message", "msg"):
+            val = result.get(key)
+            if val:
+                reason = redact(str(val))[:120]
+                break
+    extra = f" error={reason}" if reason else ""
+    return RuntimeError(f"upload rejected errno={errno} kind={kind}{extra}")
 
 
 def backoff(attempts: int, schedule: list[int]) -> int:
@@ -406,10 +429,7 @@ class Puller:
                 client = self.client_get()
                 result = client.upload_file(str(src), pid=cid, filename=src.name)
                 if not upload_ok(result):
-                    errno = result.get("errno") if isinstance(result, dict) else None
-                    raise RuntimeError(
-                        f"upload rejected errno={errno} body={result!r}"
-                    )
+                    raise _upload_rejected(result)
                 return result
             up = call_with_retry(_do_up)
             self.on_ok(src, rel, remote, size, attempts, source, up=up)
@@ -426,10 +446,7 @@ class Puller:
                         client = self.client_get()
                         result = client.upload_file(str(src), pid=cid, filename=src.name)
                         if not upload_ok(result):
-                            errno = result.get("errno") if isinstance(result, dict) else None
-                            raise RuntimeError(
-                                f"upload rejected errno={errno} body={result!r}"
-                            )
+                            raise _upload_rejected(result)
                         return result
                     up = call_with_retry(_do_up2)
                     if upload_ok(up):
@@ -508,14 +525,45 @@ class Puller:
             if not stable(src, self.stable_secs):
                 continue
             try:
-                rel = Path(str(meta.get("relpath") or rel_under(src, self.failed).as_posix()))
-            except ValueError:
+                rel = self._retry_relpath(src, meta)
+            except ValueError as exc:
+                raw = redact(str(meta.get("relpath") or "")[:200])
+                logging.error(
+                    "retry skipped error_kind=other src=%s raw_relpath=%s err=%s",
+                    src.name,
+                    raw,
+                    safe_exc(exc),
+                )
+                self.last_error = {
+                    "error_kind": "other",
+                    "last_error": "retry sidecar relpath rejected",
+                    "relpath": None,
+                }
+                self.skipped += 1
+                self.tick_skip += 1
                 continue
             attempts = int(meta.get("attempts") or 0) + 1
             n += 1
             logging.info("retry rel=%s attempts=%s", rel.as_posix(), attempts)
             self.upload_one(src, rel, attempts, "failed")
         return n
+
+    def _retry_relpath(self, src: Path, meta: dict) -> Path:
+        """Whitelist sidecar relpath; dests must stay under failed|hot|staging."""
+        if src.is_symlink():
+            raise ValueError("symlink")
+        try:
+            src.resolve().relative_to(self.failed.resolve())
+        except ValueError as exc:
+            raise ValueError("src escapes failed") from exc
+        raw = meta.get("relpath")
+        if raw:
+            rel = safe_relpath(str(raw))
+        else:
+            rel = rel_under(src, self.failed)
+        for root in (self.failed, self.hot, self.staging):
+            resolve_under(root, rel)
+        return rel
 
     def tick(self) -> None:
         self.tick_ok = self.tick_fail = self.tick_skip = 0

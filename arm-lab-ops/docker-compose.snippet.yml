@@ -67,6 +67,9 @@ services:
       # mount this into any public service. Host path is secrets/ (never git).
       - /opt/vpush-ima-lab/secrets:/secrets
       # Puller container status (compose name vpush-ima-lab-puller-1).
+      # :ro on the socket is not a read-only Docker API. Prefer
+      # PULLER_HEALTH_FILE / logs when you can drop this mount.
+      # Do not copy this volume into production compose.
       - /var/run/docker.sock:/var/run/docker.sock:ro
     # Fallback if Tailscale is down: ARM_OPS_BIND=127.0.0.1 and SSH tunnel.
     # Do not use ports: ["0.0.0.0:8055:8055"] — that is the public NIC.

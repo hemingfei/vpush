@@ -24,6 +24,8 @@
     staging/local/cicc-research/YYYY/MM/DD/<sanitized>_<id>.pdf
     staging/local/cicc-research/YYYY/MM/DD/<sanitized>_<id>.json  # 可选 sidecar，对齐日后 lab.sqlite
     不 chown 99:100（除非仍指向经典 /srv/vpush-ima/local）
+    熔断 paused.json 写在 $CACHE_ROOT/.cicc/ 或 $VPUSH_ARM_STAGING_ROOT/.cicc/
+    （不在 ARM 上 mkdir /srv/vpush-ima）
     不直写 NFS / 115 / OpenList；上传只走 puller
 
 目录契约见 docs/superpowers/specs/2026-08-29-local-storage-library-mount-design.md
@@ -54,7 +56,9 @@ TZ_BJ = timezone(timedelta(hours=8))
 PAGE_SIZE = 50
 SLEEP_PAGE, SLEEP_DL = 0.6, 0.25
 MAX_PAGES = 2000
-PAUSED_FILE = "/srv/vpush-ima/local/.cicc/paused.json"
+CLASSIC_PAUSED_FILE = "/srv/vpush-ima/local/.cicc/paused.json"
+# Tests may replace this; write_paused / clear honor an override.
+PAUSED_FILE = CLASSIC_PAUSED_FILE
 DEFAULT_COOKIE_FILE = "/root/cicc/cookies.txt"
 DEFAULT_STORAGE_ROOT = "/srv/vpush-ima/local"
 DEFAULT_ARM_STAGING_ROOT = "/data/vpush-ima-cache/staging"
@@ -100,11 +104,32 @@ def date_parts(publish_time: str) -> tuple[str, str, str]:
     return "unknown", "00", "00"
 
 
+def resolve_paused_file(*, middleware: bool | None = None) -> Path:
+    """Classic storage pause path, or ARM cache/staging when middleware is on.
+
+    Do not mkdir a fake ``/srv/vpush-ima`` tree on ARM. Tests that replace
+    ``PAUSED_FILE`` keep that override.
+    """
+    if PAUSED_FILE != CLASSIC_PAUSED_FILE:
+        return Path(PAUSED_FILE)
+    if middleware is None:
+        middleware = middleware_enabled()
+    if not middleware:
+        return Path(CLASSIC_PAUSED_FILE)
+    cache = os.environ.get("CACHE_ROOT", "").strip()
+    if cache:
+        return Path(cache) / ".cicc" / "paused.json"
+    staging = os.environ.get("VPUSH_ARM_STAGING_ROOT", "").strip()
+    if staging:
+        return Path(staging) / ".cicc" / "paused.json"
+    return Path(DEFAULT_ARM_STAGING_ROOT) / ".cicc" / "paused.json"
+
+
 def write_paused(reason: str, detail: str) -> None:
     """熔断前尽力记录原因（quota=配额满 / auth=登录失效），供状态展示与增量门控。
     脚本可能以非 root 跑（目录属主 99:100），写失败静默忽略，不改变退出行为。"""
     try:
-        p = Path(PAUSED_FILE)
+        p = resolve_paused_file()
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(f".paused.tmp.{os.getpid()}")
         tmp.write_text(json.dumps({"reason": reason, "ts": int(time.time()),
@@ -852,7 +877,7 @@ def main() -> None:
     all_cats = param.get("treeData") or []
     id_name = category_id_names(param)
     try:
-        os.remove(PAUSED_FILE)  # 新一轮跑起来了：清掉上次的熔断标记（再熔断会重写）
+        os.remove(resolve_paused_file(middleware=middleware))  # 清掉上次熔断标记（再熔断会重写）
     except OSError:
         pass
     if wanted:

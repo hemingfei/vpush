@@ -22,6 +22,17 @@ _COOKIE_RE = re.compile(
     r"(UID|CID|KID|SEID|SID|USERID|PHPSESSID|access_token|refresh_token)=[^\s;]+",
     re.IGNORECASE,
 )
+# Align with arm-lab-ops/ops_status.redact: key: value / key=value.
+_KV_SECRET_RE = re.compile(
+    r"(refresh_token|access_token|cookie)\s*[:=]\s*\S+",
+    re.IGNORECASE,
+)
+# JSON "refresh_token": "..." / "access_token":"..." (ops colon form misses the quotes).
+_JSON_SECRET_RE = re.compile(
+    r'(["\']?(?:refresh_token|access_token|cookie|UID|CID|SEID|KID)["\']?\s*:\s*)'
+    r'(["\'][^"\']*["\']|[^\s,;}"\']+)',
+    re.IGNORECASE,
+)
 
 
 def utcnow() -> datetime:
@@ -101,6 +112,8 @@ def fail(msg: str, code: int = 1) -> None:
 
 def redact(text: str) -> str:
     text = _COOKIE_RE.sub(r"\1=<redacted>", text)
+    text = _KV_SECRET_RE.sub(r"\1=<redacted>", text)
+    text = _JSON_SECRET_RE.sub(r"\1<redacted>", text)
     if len(text) > 400:
         return text[:400] + "..."
     return text
@@ -261,12 +274,30 @@ def get_path_cid(client, remote_path: str, create: bool = False) -> int | None:
     return _cid_from(resp)
 
 
+def _nonzero_errno(up: dict) -> bool:
+    errno = up.get("errno")
+    if errno in (None, "", False):
+        return False
+    try:
+        return int(errno) != 0
+    except (TypeError, ValueError):
+        return True
+
+
 def upload_ok(up: Any) -> bool:
+    """True only for a successful 115 upload payload.
+
+    Missing ``state`` or a nonzero ``errno`` is never success. A present
+    ``state: false`` can still count if a pickcode / file id is there and
+    errno is absent or 0 (same as the previous pickcode fallback).
+    """
     if not isinstance(up, dict):
         return False
-    if up.get("errno") and not up.get("state", True):
+    if "state" not in up:
         return False
-    if up.get("state", True):
+    if _nonzero_errno(up):
+        return False
+    if up.get("state"):
         return True
     return any(k in up for k in ("pickcode", "file_id", "fid", "fileid"))
 
@@ -405,6 +436,45 @@ def skip_file(path: Path) -> bool:
         return True
     lowered = name.lower()
     return any(lowered.endswith(suf) for suf in SKIP_SUFFIXES)
+
+
+def safe_relpath(raw: str) -> Path:
+    """Relative path whitelist matching ops ``safe_relpath``.
+
+    Rejects empty, NUL, absolute, ``~``, and ``..`` segments. Does not
+    touch the filesystem.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("path required")
+    if "\x00" in raw:
+        raise ValueError("invalid path")
+    text = raw.strip().replace("\\", "/")
+    if text.startswith(("/", "~")):
+        raise ValueError("path must be relative")
+    parts: list[str] = []
+    for part in text.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            raise ValueError("path escapes root")
+        parts.append(part)
+    if not parts:
+        raise ValueError("path required")
+    return Path(*parts)
+
+
+def resolve_under(root: Path, rel: str | Path) -> Path:
+    """Resolve ``root / rel`` and require the result stay under ``root``."""
+    rel_path = rel if isinstance(rel, Path) else safe_relpath(rel)
+    if rel_path.is_absolute() or ".." in rel_path.parts:
+        raise ValueError("path escapes root")
+    root_res = root.resolve()
+    candidate = (root / rel_path).resolve()
+    try:
+        candidate.relative_to(root_res)
+    except ValueError as exc:
+        raise ValueError("path escapes root") from exc
+    return candidate
 
 
 def rel_under(path: Path, root: Path) -> Path:

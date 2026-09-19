@@ -48,10 +48,40 @@ def test_defaults_stay_on_storage_host(monkeypatch):
     monkeypatch.delenv("VPUSH_ARM_MIDDLEWARE", raising=False)
     monkeypatch.delenv("VPUSH_ARM_STAGING_ROOT", raising=False)
     monkeypatch.delenv("VPUSH_CICC_COOKIE_FILE", raising=False)
+    monkeypatch.delenv("CACHE_ROOT", raising=False)
     assert cicc.middleware_enabled(False) is False
     assert cicc.resolve_output_root(None, middleware=False) == Path(cicc.DEFAULT_STORAGE_ROOT)
     assert cicc.resolve_cookie_file(None) == Path(cicc.DEFAULT_COOKIE_FILE)
     assert cicc.should_fix_owner(Path(cicc.DEFAULT_ARM_STAGING_ROOT)) is False
+    assert cicc.resolve_paused_file(middleware=False) == Path(cicc.CLASSIC_PAUSED_FILE)
+    assert cicc.resolve_paused_file() == Path(cicc.CLASSIC_PAUSED_FILE)
+
+
+def test_paused_file_uses_cache_root_when_middleware_on(tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("VPUSH_ARM_MIDDLEWARE", "1")
+    monkeypatch.setenv("CACHE_ROOT", str(cache))
+    monkeypatch.setenv("VPUSH_ARM_STAGING_ROOT", str(cache / "staging"))
+    paused = cicc.resolve_paused_file()
+    assert paused == cache / ".cicc" / "paused.json"
+    assert "/srv/vpush-ima" not in paused.as_posix()
+    cicc.write_paused("quota", "code 400013 本月配额已满")
+    assert paused.is_file()
+    data = __import__("json").loads(paused.read_text(encoding="utf-8"))
+    assert data["reason"] == "quota"
+    assert not Path("/srv/vpush-ima").exists()
+
+
+def test_paused_file_uses_staging_root_without_cache_root(tmp_path, monkeypatch):
+    staging = tmp_path / "staging"
+    monkeypatch.setenv("VPUSH_ARM_MIDDLEWARE", "1")
+    monkeypatch.delenv("CACHE_ROOT", raising=False)
+    monkeypatch.setenv("VPUSH_ARM_STAGING_ROOT", str(staging))
+    paused = cicc.resolve_paused_file()
+    assert paused == staging / ".cicc" / "paused.json"
+    cicc.write_paused("auth", "code 40010 登录态失效")
+    assert paused.is_file()
+    assert not Path("/srv/vpush-ima").exists()
 
 
 def test_middleware_overrides_root_and_cookie_via_env(monkeypatch):

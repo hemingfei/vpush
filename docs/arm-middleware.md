@@ -212,7 +212,7 @@ ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**（脚本在�
 - **水位：** 对照 `CACHE_WARN_GB=30` / `CACHE_FORCE_GB=35`（与 `lab_common` GC 旋钮一致）。
 - **挂载：** phase 2 需要 `CACHE_ROOT` **rw**（requeue / audit）。host-network 容器 bind-mount `/opt/vpush-ima-lab/src`（ro）才能 exec 宿主机脚本（`VPUSH_SCRIPTS_ROOT=/opt/vpush-ima-lab/src/scripts`），并 bind-mount `/opt/vpush-ima-lab/venv`（ro）+ `VPUSH_PYTHON=/opt/vpush-ima-lab/venv/bin/python`（镜像 Python 缺 `app.*`）。凭据文件只在宿主机 `secrets/`，容器内 `/secrets`：`115-cookies.txt`、`cicc-cookies.txt`、`ima-pure.json`、`arm-ops-password.txt`（**不要提交**）。CICC Cookie 路径 `VPUSH_CICC_COOKIE_FILE=/secrets/cicc-cookies.txt`。
 - **OpenList：** 看板上的 `/lab-hot` 链接来自 `OPENLIST_PUBLIC_URL`（只读浏览热缓存，不暴露 115）。实验室可钉 Tailscale IPv4（不要写进仓库）。
-- **日跑 timer（宿主机 systemd，不是生产 compose）：** 样本 IMA `vpush-ima-lab-sync.timer` 10:30 / CICC `vpush-cicc-lab-sync.timer` 11:00 Asia/Shanghai。wrapper 读 `$CACHE_ROOT/ops-lab-settings.json` 的 LIMIT（CICC 默认 `DRY_RUN=1`，日志 `$CACHE_ROOT/logs/cicc-lab-sync-*.log`）。面板保存时钟后可用 `bin/apply-lab-sync-timers.sh` 把两个 timer 改成同一时刻。样本见 `arm-lab-ops/systemd/`。
+- **日跑 timer（宿主机 systemd，不是生产 compose）：** 样本 IMA `vpush-ima-lab-sync.timer` 10:30 / CICC `vpush-cicc-lab-sync.timer` 11:00 Asia/Shanghai。wrapper 读 `$CACHE_ROOT/ops-lab-settings.json` 的 LIMIT。**IMA 与 CICC 都默认 `DRY_RUN=1`（`--dry-run`）；unit 里显式 `DRY_RUN=0` 才 apply。** CICC 日志 `$CACHE_ROOT/logs/cicc-lab-sync-*.log`。面板保存时钟后可用 `bin/apply-lab-sync-timers.sh` 把两个 timer 改成同一时刻。样本见 `arm-lab-ops/systemd/`。
 
 本地跑法、合入 compose 与 recreate 步骤见 [arm-lab-ops/README.md](../arm-lab-ops/README.md)。 snippet 见 [arm-lab-ops/docker-compose.snippet.yml](../arm-lab-ops/docker-compose.snippet.yml)。
 

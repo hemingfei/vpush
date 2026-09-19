@@ -184,7 +184,7 @@ def test_apply_downloads_via_injected_fetch(tmp_path, capsys, monkeypatch):
 
 def test_quota_systemexit_is_not_swallowed(tmp_path, monkeypatch):
     monkeypatch.setenv("VPUSH_ARM_MIDDLEWARE", "1")
-    monkeypatch.setattr(cicc, "PAUSED_FILE", str(tmp_path / "paused.json"))
+    monkeypatch.setenv("CACHE_ROOT", str(tmp_path / "cache"))
     pages = FakePages({1: [_row(99, "配额篇")]})
 
     def download(sess, rid):
@@ -201,6 +201,9 @@ def test_quota_systemexit_is_not_swallowed(tmp_path, monkeypatch):
         )
     dest = tmp_path / "s" / "local" / "cicc-research" / "2026" / "08" / "01" / "配额篇_99.pdf"
     assert not dest.exists()
+    paused = tmp_path / "cache" / ".cicc" / "paused.json"
+    assert paused.is_file()
+    assert not Path("/srv/vpush-ima").exists()
 
 
 def test_compose_still_default_off():
@@ -208,6 +211,59 @@ def test_compose_still_default_off():
     for name in ("docker-compose.yml", "docker-compose.prod.yml", "docker-compose.unraid.yml"):
         text = (root / name).read_text(encoding="utf-8")
         assert "VPUSH_ARM_MIDDLEWARE=1" not in text
+
+
+def test_cookie_file_must_be_0600(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("VPUSH_ARM_MIDDLEWARE", raising=False)
+    cookie = tmp_path / "cookies.txt"
+    cookie.write_text(PLACEHOLDER_COOKIE, encoding="utf-8")
+    cookie.chmod(0o644)
+    code = lab.main([
+        "--enable",
+        "--dry-run",
+        "--cookie-file",
+        str(cookie),
+        "--staging-root",
+        str(tmp_path / "s"),
+    ])
+    assert code == 2
+    out = capsys.readouterr().out
+    assert "0600" in out
+    assert PLACEHOLDER_COOKIE not in out
+
+
+def test_cookie_file_0600_is_accepted(tmp_path, capsys, monkeypatch):
+    cookie = tmp_path / "cookies.txt"
+    cookie.write_text(PLACEHOLDER_COOKIE, encoding="utf-8")
+    cookie.chmod(0o600)
+    pages = FakePages({1: [_row(7, "宁德")]})
+
+    class CookieSess:
+        def __init__(self, raw: str):
+            assert raw == PLACEHOLDER_COOKIE
+
+        def request(self, *args, **kwargs):
+            raise AssertionError("lab tests must not call Session.request")
+
+    monkeypatch.setattr(cicc, "Session", CookieSess)
+    code = lab.main(
+        [
+            "--enable",
+            "--dry-run",
+            "--limit",
+            "1",
+            "--cookie-file",
+            str(cookie),
+            "--staging-root",
+            str(tmp_path / "s"),
+        ],
+        fetch_param_fn=lambda sess: _param(),
+        list_page_fn=pages,
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert PLACEHOLDER_COOKIE not in out
+    assert "宁德" in out
 
 
 def test_main_restores_middleware_env(tmp_path, monkeypatch):

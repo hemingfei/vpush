@@ -122,8 +122,8 @@ IMA 已在 ARM 上：`vpush-ima-lab-sync.timer` **10:30 Asia/Shanghai** → 宿�
 
 | 单元 | 时刻 | 包装脚本 | 行为 |
 |---|---|---|---|
-| `vpush-ima-lab-sync.{service,timer}` | 10:30 Asia/Shanghai | `bin/ima-lab-sync-all.sh`（宿主机已有） | 现网 IMA 日跑；日志 `$CACHE_ROOT/logs/ima-lab-sync-*.log` |
-| `vpush-cicc-lab-sync.{service,timer}` | 11:00 Asia/Shanghai | `bin/cicc-lab-sync.sh` | 调 `scripts/cicc_arm_lab_sync.py --enable --apply --limit 3`；**默认 `DRY_RUN=1`（走 `--dry-run`）**；Cookie `VPUSH_CICC_COOKIE_FILE`（宿主机 `secrets/cicc-cookies.txt`）；日志 `$CACHE_ROOT/logs/cicc-lab-sync-*.log` |
+| `vpush-ima-lab-sync.{service,timer}` | 10:30 Asia/Shanghai | `bin/ima-lab-sync-all.sh`（宿主机已有） | 调 `scripts/ima_arm_lab_sync.py --enable`（4 个白名单 group）；**默认 `DRY_RUN=1`（走 `--dry-run`）**；`DRY_RUN=0` 才 `--apply`；日志 `$CACHE_ROOT/logs/ima-lab-sync-*.log` |
+| `vpush-cicc-lab-sync.{service,timer}` | 11:00 Asia/Shanghai | `bin/cicc-lab-sync.sh` | 调 `scripts/cicc_arm_lab_sync.py --enable --limit N`；**默认 `DRY_RUN=1`（走 `--dry-run`）**；Cookie `VPUSH_CICC_COOKIE_FILE`（宿主机 `secrets/cicc-cookies.txt`）；日志 `$CACHE_ROOT/logs/cicc-lab-sync-*.log` |
 
 安装 CICC 样本（路径按现网 `/opt/vpush-ima-lab`）：
 
@@ -134,10 +134,10 @@ install -m 644 arm-lab-ops/systemd/vpush-cicc-lab-sync.service \
   arm-lab-ops/systemd/vpush-cicc-lab-sync.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now vpush-cicc-lab-sync.timer
-# 确认默认 DRY_RUN=1 后再把 unit 里 DRY_RUN 改成 0
+# IMA 与 CICC 样本 unit 都默认 DRY_RUN=1；确认 dry-run 后再把 unit 里 DRY_RUN 改成 0
 ```
 
-不要把 Cookie 写进 unit 或仓库。`DRY_RUN=1` 时 wrapper 用 `--dry-run`；只有把 `DRY_RUN=0` 写进 unit 才真正 `--apply`。
+不要把 Cookie 写进 unit 或仓库。**IMA 与 CICC wrapper 都默认 `DRY_RUN=1` → `--dry-run`；只有把 `DRY_RUN=0` 写进 unit 才真正 `--apply`。** 日跑要真正落盘时必须显式改 unit。
 
 ## 页面与 API
 
