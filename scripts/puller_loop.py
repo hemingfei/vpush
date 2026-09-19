@@ -7,9 +7,12 @@ rotating /cache/logs/puller.log. Never logs cookies.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import os
 import shutil
 import signal
+import stat
 import sys
 import time
 from datetime import datetime, timezone
@@ -53,6 +56,12 @@ from manifest import (  # noqa: E402
 )
 
 STOP = False
+HOT_FILE_MODE = 0o664
+HOT_DIR_MODE = 0o775
+OPS_LAB_SETTINGS_NAME = "ops-lab-settings.json"
+PULLER_BATCH_MIN = 1
+PULLER_BATCH_MAX = 200
+DEFAULT_BATCH_SIZE = 20
 
 
 def _stop(signum, _frame) -> None:
@@ -152,6 +161,74 @@ def fmt_ts(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def load_lab_settings(root: Path | None = None) -> dict:
+    """Read $CACHE_ROOT/ops-lab-settings.json. Empty dict if missing/invalid."""
+    path = (root or cache_root()) / OPS_LAB_SETTINGS_NAME
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def resolve_batch_size(default: int = DEFAULT_BATCH_SIZE, root: Path | None = None) -> int:
+    """Live knob: settings JSON overrides PULLER_BATCH_SIZE env."""
+    data = load_lab_settings(root)
+    raw = data.get("puller_batch_size") if data else None
+    if raw not in (None, ""):
+        try:
+            value = int(raw)
+            return min(max(value, PULLER_BATCH_MIN), PULLER_BATCH_MAX)
+        except (TypeError, ValueError):
+            pass
+    return min(max(env_int("PULLER_BATCH_SIZE", default), PULLER_BATCH_MIN), PULLER_BATCH_MAX)
+
+
+def ensure_dir_mode(path: Path, minimum: int = HOT_DIR_MODE) -> None:
+    """Ensure directory permission bits include *minimum* (umask-friendly)."""
+    try:
+        current = stat.S_IMODE(path.stat().st_mode)
+        desired = current | minimum
+        if current != desired:
+            os.chmod(path, desired)
+    except OSError as exc:
+        logging.warning("hot dir chmod failed path=%s err=%s", path, safe_exc(exc))
+
+
+def ensure_hot_modes(dest: Path, stop_at: Path | None = None) -> None:
+    """Set a hot/ file to 0664 and parent dirs to at least 0775.
+
+    OpenList / non-root readers can then open IMA hot PDFs the same way as CICC.
+    """
+    try:
+        os.chmod(dest, HOT_FILE_MODE)
+    except OSError as exc:
+        logging.warning("hot file chmod failed path=%s err=%s", dest, safe_exc(exc))
+    parent = dest.parent
+    stop = None
+    if stop_at is not None:
+        try:
+            stop = stop_at.resolve()
+        except OSError:
+            stop = stop_at
+    seen: set[Path] = set()
+    while parent not in seen:
+        seen.add(parent)
+        ensure_dir_mode(parent, HOT_DIR_MODE)
+        try:
+            resolved = parent.resolve()
+        except OSError:
+            resolved = parent
+        if stop is not None and resolved == stop:
+            break
+        nxt = parent.parent
+        if nxt == parent:
+            break
+        parent = nxt
+
+
 class Puller:
     def __init__(self) -> None:
         paths = ensure_cache_dirs()
@@ -166,7 +243,7 @@ class Puller:
         self.keep_hot = env_bool("PULLER_KEEP_HOT", True)
         self.poll = env_int("PULLER_POLL_SECONDS", 5)
         self.stable_secs = env_int("PULLER_STABLE_SECONDS", 3)
-        self.batch_size = env_int("PULLER_BATCH_SIZE", 20)
+        self.batch_size = resolve_batch_size()
         self.backoff_sched = parse_backoff(env_str("PULLER_BACKOFF_SECONDS", "60,300,1800"))
         self.client = None
         self.dir_cids: dict[str, int] = {}
@@ -219,6 +296,7 @@ class Puller:
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.copy2(src, dest)
+            ensure_hot_modes(dest, stop_at=self.hot)
         except OSError as exc:
             logging.warning("hot copy failed rel=%s err=%s", rel.as_posix(), safe_exc(exc))
 
@@ -364,6 +442,7 @@ class Puller:
             return False
 
     def discover_batch(self) -> list[tuple[Path, Path, int]]:
+        self.batch_size = resolve_batch_size()
         batch: list[tuple[Path, Path, int]] = []
         for src in list_files(self.staging):
             if STOP or len(batch) >= self.batch_size:
@@ -411,6 +490,7 @@ class Puller:
     def process_retries(self) -> int:
         n = 0
         now = time.time()
+        self.batch_size = resolve_batch_size()
         if not self.failed.is_dir():
             return 0
         files = [

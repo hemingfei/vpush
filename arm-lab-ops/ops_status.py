@@ -27,6 +27,7 @@ from ops_settings import (
     cache_warn_bytes,
     cache_warn_gb,
     cicc_cookie_path,
+    cicc_timer_unit,
     cookies_path,
     docker_sock,
     ima_secrets_path,
@@ -794,6 +795,7 @@ def collect_status() -> dict[str, Any]:
     elif (root / "logs").is_dir():
         source = "logs"
     timer = timer_status()
+    cicc_timer = timer_status(cicc_timer_unit())
     if source == "none" and timer.get("active") not in {None, "unknown"}:
         source = "systemd"
 
@@ -817,6 +819,7 @@ def collect_status() -> dict[str, Any]:
             "docker": docker,
             "health": url_health or file_health,
             "timer": timer,
+            "cicc_timer": cicc_timer,
             "uploads": puller_upload_counts(root),
             "logs": log_tails(root),
         },

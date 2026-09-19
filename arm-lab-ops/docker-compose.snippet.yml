@@ -55,9 +55,9 @@ services:
       # Image Python lacks app.* deps. Host venv has them (not .venv).
       VPUSH_PYTHON: /opt/vpush-ima-lab/venv/bin/python
     volumes:
-      # Phase 2: rw so requeue can move failed/ → staging/ and append
-      # logs/ops-audit.jsonl. Phase 1 often used :ro — that is not enough
-      # for requeue. Alternative: mount failed+staging+logs rw separately.
+      # Phase 2/3: rw so requeue can move failed/ → staging/, append
+      # logs/ops-audit.jsonl, and write ops-lab-settings.json +
+      # ops-puller.env. Phase 1 often used :ro — that is not enough.
       - /data/vpush-ima-cache:/data/vpush-ima-cache
       # Host scripts (ima/cicc lab sync). Container is host-network.
       - /opt/vpush-ima-lab/src:/opt/vpush-ima-lab/src:ro

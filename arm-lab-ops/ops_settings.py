@@ -15,11 +15,23 @@ DEFAULT_COOKIES = "/secrets/115-cookies.txt"
 DEFAULT_CICC_COOKIES = "/secrets/cicc-cookies.txt"
 DEFAULT_PASSWORD_FILE = "/secrets/arm-ops-password.txt"
 DEFAULT_TIMER_UNIT = "vpush-ima-lab-sync.timer"
+DEFAULT_CICC_TIMER_UNIT = "vpush-cicc-lab-sync.timer"
+DEFAULT_TIMER_HELPER = "/opt/vpush-ima-lab/bin/apply-lab-sync-timers.sh"
 DEFAULT_SCRIPTS_ROOT = "/opt/vpush-ima-lab/src/scripts"
 # Host venv on Oracle-SJ-ARM. Image Python lacks app.* deps.
 # python_bin() only uses this when VPUSH_PYTHON is unset *and* the file exists
 # (lab compose always sets VPUSH_PYTHON). Tests / local stay on sys.executable.
 DEFAULT_PYTHON = "/opt/vpush-ima-lab/venv/bin/python"
+SETTINGS_FILE_NAME = "ops-lab-settings.json"
+PULLER_ENV_FILE_NAME = "ops-puller.env"
+DEFAULT_DAILY_SYNC_CLOCK = "03:00"
+DEFAULT_SYNC_TIMEZONE = "Asia/Shanghai"
+LAB_SYNC_LIMIT_DEFAULT = 10
+LAB_SYNC_LIMIT_MAX = 20
+PULLER_BATCH_DEFAULT = 40
+PULLER_BATCH_MIN = 1
+PULLER_BATCH_MAX = 200
+DEFAULT_IMA_GROUPS_PARALLEL = True
 SESSION_COOKIE = "arm_ops"
 SESSION_TTL_SECONDS = 12 * 3600
 QR_START_LIMIT = 5
@@ -211,6 +223,26 @@ def puller_container_name() -> str:
 
 def timer_unit() -> str:
     return env_str("ARM_OPS_TIMER_UNIT", DEFAULT_TIMER_UNIT)
+
+
+def cicc_timer_unit() -> str:
+    return env_str("ARM_OPS_CICC_TIMER_UNIT", DEFAULT_CICC_TIMER_UNIT)
+
+
+def lab_settings_path() -> Path:
+    return cache_root() / SETTINGS_FILE_NAME
+
+
+def puller_env_path() -> Path:
+    return cache_root() / PULLER_ENV_FILE_NAME
+
+
+def timer_helper_path() -> Path:
+    """Installed host helper, or ARM_OPS_TIMER_HELPER. Repo bin/ is a sample only."""
+    raw = env_str("ARM_OPS_TIMER_HELPER", "")
+    if raw:
+        return Path(raw)
+    return Path(DEFAULT_TIMER_HELPER)
 
 
 def _first_ipv4_line(text: str) -> str | None:
