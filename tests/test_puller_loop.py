@@ -107,7 +107,7 @@ def test_non_ok_result_raises_so_retry_can_see_filesha1():
         state["n"] += 1
         result = {"state": False, "errno": 1, "error": "empty filesha1"}
         if not lab_common.upload_ok(result):
-            raise RuntimeError(f"upload rejected errno=1 body={result!r}")
+            raise puller._upload_rejected(result)
         return result
 
     with pytest.raises(RuntimeError, match="filesha1"):

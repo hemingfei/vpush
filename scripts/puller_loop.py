@@ -132,10 +132,22 @@ def read_sidecar(path: Path) -> dict:
 
 
 def _upload_rejected(result: object) -> RuntimeError:
-    """Reject without dumping the 115 body (tokens may appear as JSON fields)."""
+    """Reject without dumping the 115 body (tokens may appear as JSON fields).
+
+    Keep a short redacted ``error=`` so ``puller_retry`` can still see
+    empty-filesha1 flakes. Never interpolate ``result!r``.
+    """
     errno = result.get("errno") if isinstance(result, dict) else None
     kind = "cookie" if errno in COOKIE_ERRNOS else "other"
-    return RuntimeError(f"upload rejected errno={errno} kind={kind}")
+    reason = ""
+    if isinstance(result, dict):
+        for key in ("error", "message", "msg"):
+            val = result.get(key)
+            if val:
+                reason = redact(str(val))[:120]
+                break
+    extra = f" error={reason}" if reason else ""
+    return RuntimeError(f"upload rejected errno={errno} kind={kind}{extra}")
 
 
 def backoff(attempts: int, schedule: list[int]) -> int:
