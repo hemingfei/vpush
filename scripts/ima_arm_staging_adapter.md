@@ -1,10 +1,11 @@
 # IMA → ARM staging
 
-两条路径，都默认关。都不读 IMA Cookie / Refresh Token / `ima_phone_sync.env`，都不写 NFS / 115 / OpenList。
+三条路径，都默认关。都不写 NFS / 115 / OpenList。live write 与 remap **不读** IMA Cookie / Refresh Token；实验室限量同步才读凭据。
 
 | 路径 | 作用 | 入口 |
 |---|---|---|
 | **Live write** | 新 PDF 下载直接落入 staging 日期分片 | `app/ima_documents.py`（`ImaDocumentStore.pdf_path` / `ImaPureClient.download`） |
+| **Lab sync** | ARM 上限量 list + download → staging | `scripts/ima_arm_lab_sync.py`（默认关；见 [ima_arm_lab_sync.md](ima_arm_lab_sync.md)） |
 | **Remap** | 把已有 `/srv/vpush-ima` 归档树拷进 staging | `scripts/ima_to_arm_staging.py`（本脚本，不采集） |
 
 ## Live write（新下载）
@@ -27,7 +28,7 @@ python3 -m app.arm_middleware --arm-middleware --print-dest --group legacy --day
 VPUSH_ARM_MIDDLEWARE=1 python3 -m app.arm_middleware --print-dest --group legacy --day 0918 --name demo.pdf
 ```
 
-实验室限量跑：设 `VPUSH_ARM_MIDDLEWARE=1`（及可选 `VPUSH_ARM_STAGING_ROOT`）后走现有 IMA 同步即可。不要在生产 compose 里打开。
+实验室限量跑请用 `scripts/ima_arm_lab_sync.py`（`--enable` / `--arm-middleware` 或 `VPUSH_ARM_MIDDLEWARE=1`；默认 dry-run）。不要在生产 compose 里打开中间层。115 仍由 puller_loop 上传。
 
 ## Remap（旧归档）
 
