@@ -212,6 +212,10 @@ docker compose up -d --build
 
 默认对外端口 **18084**（宿主机 8000 常被占用）：访问 `http://<NAS IP>:18084`。数据目录为 `./data`。
 
+## ARM 中间层
+
+ARM（Oracle-SJ-ARM）可作为采集与对象存储之间的中间层：采集只写 staging，由 puller 上传 115，存储恢复后再做 NFS 兼容同步。OpenList 只读 `/lab-hot`，不暴露 115。**默认关闭**，生产 compose 与存储机采集行为不变。说明见 [docs/arm-middleware.md](docs/arm-middleware.md)。
+
 ## 推送渠道配置
 
 ### Telegram

@@ -1,18 +1,33 @@
 #!/usr/bin/env python3
-"""中金点睛研报批量采集 → 存储机本地库（/srv/vpush-ima/local/<slug>/）。
+"""中金点睛研报批量采集 → 存储机本地库（默认）或 ARM staging（显式打开）。
 
-用法（存储 VPS 上）：
+用法（存储 VPS 上，默认生产/存储机行为）：
   python3 cicc_report_collector.py --days 30            # 最近30天
   python3 cicc_report_collector.py --all                # 全量（分页拉完为止）
   python3 cicc_report_collector.py --categories 宏观经济,市场策略 --days 7
-  python3 cicc_report_collector.py --self-test          # 离线自检
+  python3 cicc_report_collector.py --self-test          # 离线自检（含经典/中间层路径）
 
 登录态：/root/cicc/cookies.txt（一行原始 Cookie 头），chmod 600。
-目录契约见 docs/superpowers/specs/2026-08-29-local-storage-library-mount-design.md：
-  local/cicc-research/.vpush-local-library.json
-  local/cicc-research/.vpush-local-meta.jsonl   # 列表摘要/标签 sidecar，扫描器按 *_<id>.pdf 匹配
-  local/cicc-research/<品类>/<MMDD>/<中文原名>_<id>.pdf
-  属主 99:100。
+可用 VPUSH_CICC_COOKIE_FILE 覆盖路径（不要把 Cookie 写进仓库）。
+
+两种落盘模式（中间层默认关，不改存储机 CLI）：
+
+  经典 / 存储机（默认，VPUSH_ARM_MIDDLEWARE 未设或为 0）：
+    --root 默认 /srv/vpush-ima/local
+    local/cicc-research/.vpush-local-library.json
+    local/cicc-research/.vpush-local-meta.jsonl   # 列表摘要/标签 sidecar，扫描器按 *_<id>.pdf 匹配
+    local/cicc-research/<品类>/<MMDD>/<中文原名>_<id>.pdf
+    属主 99:100（仅当 --root 仍是 /srv/vpush-ima/local 且以 root 跑）
+
+  ARM 中间层（--arm-middleware 或 VPUSH_ARM_MIDDLEWARE=1）：
+    --root 改写为 VPUSH_ARM_STAGING_ROOT，默认 /data/vpush-ima-cache/staging
+    staging/local/cicc-research/YYYY/MM/DD/<sanitized>_<id>.pdf
+    staging/local/cicc-research/YYYY/MM/DD/<sanitized>_<id>.json  # 可选 sidecar，对齐日后 lab.sqlite
+    不 chown 99:100（除非仍指向经典 /srv/vpush-ima/local）
+    不直写 NFS / 115 / OpenList；上传只走 puller
+
+目录契约见 docs/superpowers/specs/2026-08-29-local-storage-library-mount-design.md
+与 docs/arm-middleware.md。
 """
 
 import argparse
@@ -40,6 +55,49 @@ PAGE_SIZE = 50
 SLEEP_PAGE, SLEEP_DL = 0.6, 0.25
 MAX_PAGES = 2000
 PAUSED_FILE = "/srv/vpush-ima/local/.cicc/paused.json"
+DEFAULT_COOKIE_FILE = "/root/cicc/cookies.txt"
+DEFAULT_STORAGE_ROOT = "/srv/vpush-ima/local"
+DEFAULT_ARM_STAGING_ROOT = "/data/vpush-ima-cache/staging"
+CLASSIC_CHOWN_ROOT = "/srv/vpush-ima/local"
+
+
+def env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def middleware_enabled(cli_flag: bool = False) -> bool:
+    """中间层默认关；--arm-middleware 或 VPUSH_ARM_MIDDLEWARE=1 才打开。"""
+    return bool(cli_flag) or env_flag("VPUSH_ARM_MIDDLEWARE")
+
+
+def resolve_cookie_file(cli_value: str | None) -> Path:
+    if cli_value:
+        return Path(cli_value)
+    env = os.environ.get("VPUSH_CICC_COOKIE_FILE", "").strip()
+    return Path(env or DEFAULT_COOKIE_FILE)
+
+
+def resolve_output_root(cli_root: str | None, *, middleware: bool) -> Path:
+    """中间层未显式 --root 时改写到 staging；经典模式保持 /srv/vpush-ima/local。"""
+    if cli_root:
+        return Path(cli_root)
+    if middleware:
+        env = os.environ.get("VPUSH_ARM_STAGING_ROOT", "").strip()
+        return Path(env or DEFAULT_ARM_STAGING_ROOT)
+    return Path(DEFAULT_STORAGE_ROOT)
+
+
+def should_fix_owner(root: Path) -> bool:
+    """只在经典存储机根上 chown 99:100；staging / 其它 --root 不改属主。"""
+    return os.geteuid() == 0 and str(root) == CLASSIC_CHOWN_ROOT
+
+
+def date_parts(publish_time: str) -> tuple[str, str, str]:
+    """publishTime → (YYYY, MM, DD)；非法则 unknown/00/00。"""
+    day = publish_date(publish_time)
+    if len(day) >= 10 and day[4] == "-" and day[7] == "-":
+        return day[0:4], day[5:7], day[8:10]
+    return "unknown", "00", "00"
 
 
 def write_paused(reason: str, detail: str) -> None:
@@ -287,10 +345,40 @@ def merge_sidecar(path: Path, updates: dict, *, fix_owner: bool = False) -> int:
         return len(rows)
 
 
-def target_path(root: Path, cat_name: str, publish_time: str, title: str, rid: int) -> Path:
-    """单库布局：root/cicc-research/<品类名>/<MMDD>/<中文名>_<id>.pdf"""
-    name = fit_bytes(sanitize_title(title), 200 - len(f"_{rid}")) + f"_{rid}.pdf"
+def pdf_basename(title: str, rid: int) -> str:
+    return fit_bytes(sanitize_title(title), 200 - len(f"_{rid}")) + f"_{rid}.pdf"
+
+
+def target_path(root: Path, cat_name: str, publish_time: str, title: str, rid: int,
+                *, middleware: bool = False) -> Path:
+    """经典：root/cicc-research/<品类>/<MMDD>/<中文名>_<id>.pdf
+    中间层：root/local/cicc-research/YYYY/MM/DD/<sanitized>_<id>.pdf"""
+    name = pdf_basename(title, rid)
+    if middleware:
+        year, month, day = date_parts(publish_time)
+        return root / "local" / LIB_SLUG / year / month / day / name
     return root / LIB_SLUG / cat_name / day_dir(publish_time) / name
+
+
+def arm_relpath(pdf_path: Path) -> str:
+    """staging 下的 local/... 相对路径；找不到 local 则只留文件名。"""
+    parts = pdf_path.parts
+    if "local" in parts:
+        return "/".join(parts[parts.index("local"):])
+    return pdf_path.name
+
+
+def write_arm_item_sidecar(pdf_path: Path, row: dict, cat_name: str = "") -> None:
+    """中间层每篇一份 JSON，字段对齐 sidecar_row，供日后 lab.sqlite 摄入。"""
+    payload = dict(row)
+    if cat_name and "category" not in payload:
+        payload["category"] = cat_name
+    payload["relpath"] = arm_relpath(pdf_path)
+    dest = pdf_path.with_suffix(".json")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, dest)
 
 
 def prepare_target_dir(path: Path, *, fix_owner: bool) -> None:
@@ -644,8 +732,13 @@ def write_completion_marker(path: Path, command_id: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--cookie-file", default="/root/cicc/cookies.txt")
-    ap.add_argument("--root", default="/srv/vpush-ima/local")
+    ap.add_argument("--cookie-file", default=None,
+                    help="Cookie 文件（默认 /root/cicc/cookies.txt；可用 VPUSH_CICC_COOKIE_FILE 覆盖）")
+    ap.add_argument("--root", default=None,
+                    help="输出根。默认 /srv/vpush-ima/local；中间层改为 "
+                         "VPUSH_ARM_STAGING_ROOT（默认 /data/vpush-ima-cache/staging）")
+    ap.add_argument("--arm-middleware", action="store_true",
+                    help="写 ARM staging 日期分片（或设 VPUSH_ARM_MIDDLEWARE=1）；默认关")
     ap.add_argument("--days", type=int, default=0, help="最近 N 天（含今天），0=不限")
     ap.add_argument("--since", default="", help="起始日期 YYYY-MM-DD（如 2026-01-01 采今年），优先于 --days")
     ap.add_argument("--all", action="store_true", help="全量，不按日期过滤")
@@ -676,6 +769,21 @@ def main() -> None:
         assert day_dir("2026-08-29T17:43:03Z") == "0830"  # 跨日归北京日期
         p = target_path(Path("/x"), "宏观经济", "2026-08-01T00:00:00Z", "标题/1", 42)
         assert str(p) == "/x/cicc-research/宏观经济/0801/标题 1_42.pdf", str(p)
+        arm = target_path(Path(DEFAULT_ARM_STAGING_ROOT), "宏观经济",
+                          "2026-08-01T00:00:00Z", "标题/1", 42, middleware=True)
+        assert str(arm) == (
+            "/data/vpush-ima-cache/staging/local/cicc-research/2026/08/01/标题 1_42.pdf"
+        ), str(arm)
+        # UTC 17:43 → 北京次日：经典 MMDD=0830，中间层日期分片=2026/08/30
+        classic_next = target_path(Path("/x"), "公司研究", "2026-08-29T17:43:03Z", "宁德", 7)
+        assert str(classic_next) == "/x/cicc-research/公司研究/0830/宁德_7.pdf"
+        arm_next = target_path(Path("/s"), "公司研究", "2026-08-29T17:43:03Z", "宁德", 7,
+                               middleware=True)
+        assert str(arm_next) == "/s/local/cicc-research/2026/08/30/宁德_7.pdf"
+        assert resolve_output_root(None, middleware=False) == Path(DEFAULT_STORAGE_ROOT)
+        assert resolve_output_root(None, middleware=True) == Path(DEFAULT_ARM_STAGING_ROOT)
+        assert resolve_cookie_file(None) == Path(DEFAULT_COOKIE_FILE)
+        assert should_fix_owner(Path("/data/vpush-ima-cache/staging")) is False
         row = sidecar_row({
             "id": 42,
             "title": "宁德时代深度",
@@ -724,12 +832,13 @@ def main() -> None:
         print("self-test ok")
         return
 
-    cookie_path = Path(args.cookie_file)
+    cookie_path = resolve_cookie_file(args.cookie_file)
     if not cookie_path.exists():
         sys.exit(f"Cookie 文件不存在: {cookie_path}")
     sess = Session(cookie_path.read_text(encoding="utf-8"))
-    root = Path(args.root)
-    fix_owner = os.geteuid() == 0 and str(root) == "/srv/vpush-ima/local"
+    middleware = middleware_enabled(args.arm_middleware)
+    root = resolve_output_root(args.root, middleware=middleware)
+    fix_owner = should_fix_owner(root)
     if fix_owner:
         root.mkdir(parents=True, exist_ok=True)
         os.chown(root, CHOWN_UID, CHOWN_GID)
@@ -761,14 +870,17 @@ def main() -> None:
     stop = False
     # 幂等只靠磁盘文件名（含报告 id，唯一）；无 state 文件，多进程并行无竞态
 
-    setup_library(root, LIB_SLUG, LIB_NAME, fix_owner=fix_owner)
+    if not middleware:
+        setup_library(root, LIB_SLUG, LIB_NAME, fix_owner=fix_owner)
     sidecar_path = root / LIB_SLUG / SIDECAR_NAME
     pending_meta: dict = {}
 
     def flush_sidecar() -> None:
         nonlocal pending_meta
-        if pending_meta:
+        if pending_meta and not middleware:
             merge_sidecar(sidecar_path, pending_meta, fix_owner=fix_owner)
+            pending_meta = {}
+        elif middleware:
             pending_meta = {}
 
     for cat in cats:
@@ -790,13 +902,16 @@ def main() -> None:
                 if args.limit and stats["downloaded"] >= args.limit:
                     stop = True
                     break
-                tp = target_path(root, name, it["publishTime"], it["title"], rid)
+                tp = target_path(root, name, it["publishTime"], it["title"], rid,
+                                 middleware=middleware)
                 row = sidecar_row(it, id_name, name)
-                if row["id"]:
+                if row["id"] and not middleware:
                     pending_meta[row["id"]] = row
                     if len(pending_meta) >= 20:
                         flush_sidecar()
                 if tp.exists():
+                    if middleware and row["id"] and not tp.with_suffix(".json").exists():
+                        write_arm_item_sidecar(tp, row, name)
                     stats["skipped"] += 1
                     continue
                 if args.dry_run:
@@ -812,6 +927,8 @@ def main() -> None:
                     if fix_owner:
                         os.chown(tp, CHOWN_UID, CHOWN_GID)
                         os.chmod(tp, 0o640)
+                    if middleware and row["id"]:
+                        write_arm_item_sidecar(tp, row, name)
                     stats["downloaded"] += 1
                     if stats["downloaded"] % 20 == 0:
                         print(f"  ... {stats['downloaded']} 下载 / {stats['skipped']} 已存在 / {stats['failed']} 失败")
