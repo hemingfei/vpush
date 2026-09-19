@@ -57,7 +57,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import auth, kol_requests, user_quota, wechat
@@ -804,6 +804,9 @@ IMAGE_PROXY_HOSTS = frozenset({
 # 60/分钟：图床正常时几乎打不满；图床故障时一页 100 帖约 46 张，仍有余量。
 IMAGE_PROXY_MAX_PER_WINDOW = 60
 IMAGE_PROXY_WINDOW_SECONDS = 60
+IMAGE_PROXY_VIDEO_MAX_PER_WINDOW = 180  # 播放器会打多次 Range，单独放宽
+IMAGE_PROXY_VIDEO_MAX_BYTES = 60 * 1024 * 1024
+IMAGE_PROXY_VIDEO_TYPES = frozenset({"video/mp4", "video/quicktime", "video/webm"})
 
 
 ACCOUNT_ORIGIN_LABELS = {
@@ -1226,6 +1229,88 @@ def create_api_router(
                 detail="图片加载过于频繁，请稍后再试",
                 headers={"Retry-After": str(max(int(retry_after), 1))},
             )
+
+    def _check_img_proxy_video_limit(ip: str) -> None:
+        now = time.time()
+        allowed, retry_after = db.consume_bind_quota(
+            f"img_proxy_video:{ip}",
+            user_quota.window_start(now, IMAGE_PROXY_WINDOW_SECONDS),
+            IMAGE_PROXY_VIDEO_MAX_PER_WINDOW,
+            IMAGE_PROXY_WINDOW_SECONDS,
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="视频加载过于频繁，请稍后再试",
+                headers={"Retry-After": str(max(int(retry_after), 1))},
+            )
+
+    def _img_proxy_video(url: str, request: Request):
+        """流式代理视频并透传 Range，让 <video> 能拖进度。"""
+        _check_img_proxy_video_limit(_client_ip(request))
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+            ),
+            "Accept": "*/*",
+        }
+        range_header = request.headers.get("range")
+        if range_header:
+            headers["Range"] = range_header
+        client = httpx.Client(timeout=30, follow_redirects=False)
+        stream_ctx = client.stream("GET", url, headers=headers, follow_redirects=False)
+        try:
+            resp = stream_ctx.__enter__()
+        except Exception as exc:
+            client.close()
+            raise HTTPException(status_code=502, detail="视频源请求失败") from exc
+        try:
+            if resp.status_code not in (200, 206):
+                raise HTTPException(status_code=502, detail="视频源请求失败")
+            content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+            if content_type not in IMAGE_PROXY_VIDEO_TYPES:
+                raise HTTPException(status_code=400, detail="非视频内容")
+            content_length = resp.headers.get("content-length")
+            if (
+                resp.status_code == 200
+                and content_length
+                and int(content_length) > IMAGE_PROXY_VIDEO_MAX_BYTES
+            ):
+                raise HTTPException(status_code=400, detail="视频过大")
+        except HTTPException:
+            stream_ctx.__exit__(None, None, None)
+            client.close()
+            raise
+
+        def iter_bytes():
+            sent = 0
+            try:
+                for chunk in resp.iter_bytes():
+                    sent += len(chunk)
+                    if sent > IMAGE_PROXY_VIDEO_MAX_BYTES:
+                        break
+                    yield chunk
+            finally:
+                stream_ctx.__exit__(None, None, None)
+                client.close()
+
+        out_headers = {
+            # 禁止边缘缓存：CF 默认按 URL 缓存，会把第一次 206 片段当成整段
+            "Cache-Control": "private, no-store",
+            "Accept-Ranges": "bytes",
+        }
+        if resp.headers.get("content-range"):
+            out_headers["Content-Range"] = resp.headers["content-range"]
+        if content_length:
+            out_headers["Content-Length"] = content_length
+        media_type = "video/mp4" if content_type == "video/quicktime" else content_type
+        return StreamingResponse(
+            iter_bytes(),
+            status_code=resp.status_code,
+            media_type=media_type,
+            headers=out_headers,
+        )
 
     def _turnstile_runtime() -> dict:
         stored_enabled = db.get_setting("turnstile_enabled")
@@ -5941,10 +6026,14 @@ def create_api_router(
 
     @router.get("/img-proxy")
     def img_proxy(url: str, request: Request):
-        """受信图床代理：精确域名、HTTPS、无重定向、流式限制 10 MB，按 IP 限速。"""
+        """受信图床代理：精确域名、HTTPS、无重定向、流式限制 10 MB，按 IP 限速。
+
+        视频（.mp4/.webm）单独走流式通道：透传 Range（206 分段，播放器拖动
+        进度必需）、上限 60MB、边下边发不整段缓冲——图床对视频不回 206，
+        播放统一从源站代理。
+        """
         from urllib.parse import urlparse
 
-        _check_img_proxy_limit(_client_ip(request))
         url = (url or "").strip()
         try:
             parsed = urlparse(url)
@@ -5964,6 +6053,10 @@ def create_api_router(
         if not img_proxy_resolved_ok(parsed.hostname):
             raise HTTPException(status_code=400, detail="不支持的图片地址")
 
+        if url.lower().split("?", 1)[0].endswith((".mp4", ".webm")):
+            return _img_proxy_video(url, request)
+
+        _check_img_proxy_limit(_client_ip(request))
         client = httpx.Client(
             timeout=15,
             follow_redirects=False,

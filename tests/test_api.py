@@ -3926,6 +3926,91 @@ def test_img_proxy_rejects_non_image(monkeypatch):
     assert resp.status_code == 400
 
 
+def test_img_proxy_streams_video_range(monkeypatch):
+    """视频代理透传 Range，返回 206 + Content-Range，供 <video> 拖进度。"""
+    import httpx as _httpx
+
+    seen = {}
+    body = b"V" * 1024
+    fake_resp = _httpx.Response(
+        206,
+        content=body,
+        headers={
+            "content-type": "video/mp4",
+            "content-range": "bytes 0-1023/34590354",
+            "content-length": "1024",
+        },
+    )
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.headers = {}
+
+        def stream(self, method, url, **kwargs):
+            seen["headers"] = kwargs.get("headers") or {}
+            seen["url"] = url
+
+            class Stream:
+                def __enter__(self):
+                    return fake_resp
+
+                def __exit__(self, *args):
+                    return False
+
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+    client = make_client()
+    video = "https://static-assets-1.truthsocial.com/media/clip.mp4"
+    resp = client.get(
+        "/api/img-proxy",
+        params={"url": video},
+        headers={"Range": "bytes=0-1023"},
+    )
+    assert resp.status_code == 206
+    assert resp.content == body
+    assert resp.headers["content-type"].startswith("video/mp4")
+    assert resp.headers["content-range"] == "bytes 0-1023/34590354"
+    assert resp.headers["accept-ranges"] == "bytes"
+    assert seen["headers"].get("Range") == "bytes=0-1023"
+
+
+def test_img_proxy_rejects_html_masquerading_as_mp4(monkeypatch):
+    import httpx as _httpx
+
+    fake_resp = _httpx.Response(
+        200, content=b"<html>nope</html>", headers={"content-type": "text/html"}
+    )
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def stream(self, method, url, **kwargs):
+            class Stream:
+                def __enter__(self):
+                    return fake_resp
+
+                def __exit__(self, *args):
+                    return False
+
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+    client = make_client()
+    resp = client.get(
+        "/api/img-proxy",
+        params={"url": "https://static-assets-1.truthsocial.com/x.mp4"},
+    )
+    assert resp.status_code == 400
+
+
 def test_recommend_weight_orders_recommendations():
     """推荐位排序：recommend_weight 优先于订阅人数。"""
     client = make_client()

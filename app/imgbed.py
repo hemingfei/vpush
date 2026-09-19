@@ -92,13 +92,18 @@ def public_url(url: str) -> bool:
     return source_host(url) == public_host()
 
 
+def _is_video_url(url: str) -> bool:
+    return str(url).lower().split("?", 1)[0].endswith(VIDEO_EXTS)
+
+
 def enqueue_urls(db, urls: list[str] | None) -> int:
     if not enabled() or not urls:
         return 0
     queued = 0
     for url in urls:
         raw = (url or "").strip()
-        if not is_source_url(raw):
+        if not is_source_url(raw) or _is_video_url(raw):
+            # 图床对视频不回 206，播放改走 /api/img-proxy 流式 Range
             continue
         if db.enqueue_hosted_image(raw):
             queued += 1
@@ -107,7 +112,7 @@ def enqueue_urls(db, urls: list[str] | None) -> int:
 
 def display_url(db, url: str) -> str:
     raw = (url or "").strip()
-    if not raw or public_url(raw) or not is_source_url(raw):
+    if not raw or public_url(raw) or not is_source_url(raw) or _is_video_url(raw):
         return raw
     hosted = db.hosted_image_url(raw)
     return hosted or raw
