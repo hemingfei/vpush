@@ -3583,14 +3583,17 @@ def test_xueqiu_badge_uses_official_mark():
     assert ":is(.post-item, .kol-card) .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }" in css
 
 
-def test_truth_badge_uses_single_cropped_viewbox():
-    """Truth 角标不得重复 viewBox：HTML 取第一个，0 0 24 24 会把 T 字画小。"""
+def test_truth_badge_is_scheme_d_glyph():
+    """Truth 角标：无底框断笔 T + 青绿点，单 viewBox。"""
     platforms = (APP_JS.parent / "core/platforms.js").read_text()
     icon = re.search(r"const TRUTH_ICON = `([^`]+)`", platforms).group(1)
     assert "${ICON_ATTRS}" not in icon
     assert icon.count("viewBox=") == 1
-    assert 'viewBox="0 0 24 24"' not in icon
-    assert 'viewBox="3.6 4.85 16 16"' in icon
+    assert 'viewBox="0 0 24 24"' in icon
+    assert 'fill="#2DD0B3"' in icon
+    assert 'fill="currentColor"' in icon
+    assert 'width="24"' not in icon
+    assert "M9.2 3.5H21.5V7.7H14.5V20.5H9.2V3.5z" in icon
 
 
 def test_post_origin_link_matches_adjacent_tags():
