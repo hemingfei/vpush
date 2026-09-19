@@ -61,6 +61,7 @@
   --color-brand-weibo: var(--color-accent-text);
   --color-brand-twitter: var(--color-accent-text);
   --color-brand-zsxq: var(--color-accent-text);
+  --color-brand-truth: var(--color-accent-text);
   --color-brand-telegram: #26a5e4;
   --color-brand-feishu: #3370ff;
   --color-brand-wecom: #07c160;
@@ -191,6 +192,7 @@
   --color-brand-weibo: var(--color-accent-text);
   --color-brand-twitter: var(--color-accent-text);
   --color-brand-zsxq: var(--color-accent-text);
+  --color-brand-truth: var(--color-accent-text);
   --color-brand-telegram: #4aa8e8;
   --color-brand-feishu: #5b8cff;
   --color-brand-wecom: #35c26e;

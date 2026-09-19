@@ -909,6 +909,7 @@ textarea.proxy-import { min-height: 96px; }
 .plaza-src-icon[data-platform="weibo"] .pt-icon { color: var(--color-brand-weibo); }
 .plaza-src-icon[data-platform="twitter"] .pt-icon { color: var(--color-brand-twitter); }
 .plaza-src-icon[data-platform="zsxq"] .pt-icon { color: var(--color-brand-zsxq); }
+.plaza-src-icon[data-platform="truth"] .pt-icon { color: var(--color-brand-truth); }
 .plaza-src-copy { min-width: 0; }
 .plaza-src-name {
   margin: 0;
@@ -1066,8 +1067,8 @@ textarea.proxy-import { min-height: 96px; }
 .platform-tab.selected .pt-icon { background: transparent; }
 .tl-pill[data-platform="live"]:not(.selected) .pt-icon { color: var(--color-accent); }
 /* 内联 Truth 图形继承主题强调色，选中后随按钮反白。 */
-.tl-pill[data-platform="truth"]:not(.selected) .pt-icon,
-.platform-tab[data-platform="truth"]:not(.selected) .pt-icon { color: var(--color-accent-text); }
+.platform-tab[data-platform="truth"]:not(.selected) .pt-icon,
+.tl-pill[data-platform="truth"]:not(.selected) .pt-icon { color: var(--color-brand-truth); }
 /* 快讯呼吸点：未选中时提示「有实时源可看」，选中后隐去（注意力只给未到达的地方） */
 .tl-pill[data-platform="live"] { position: relative; }
 .tl-pill[data-platform="live"]::after {
@@ -1912,6 +1913,7 @@ body.lightbox-open { overflow: hidden; }
 :is(.post-item, .kol-card) .p-name-line .p-platform[data-platform="weibo"] .pt-icon { color: var(--color-brand-weibo); }
 :is(.post-item, .kol-card) .p-name-line .p-platform[data-platform="twitter"] .pt-icon { color: var(--color-brand-twitter); }
 :is(.post-item, .kol-card) .p-name-line .p-platform[data-platform="zsxq"] .pt-icon { color: var(--color-brand-zsxq); }
+:is(.post-item, .kol-card) .p-name-line .p-platform[data-platform="truth"] .pt-icon { color: var(--color-brand-truth); }
 
 /* Compensate for the official mark's 18.4/24 artwork bounds without changing paths. */
 .pt-icon.xueqiu-icon { width: 21px; height: 21px; }
