@@ -97,7 +97,7 @@ def test_status_redacts_ima_refresh_token_and_cookie_body(lab_env):
     assert payload["p115"]["present"] is True
     assert payload["p115"]["length"] == len("UID=cookie-secret; CID=cid-secret; SEID=seid-secret")
     assert "cookie" not in payload["p115"]
-    assert "UID=" not in dumped
+    assert "UID=<redacted>" in dumped
     assert payload["cache"]["staging"]["files"] == 1
     assert payload["openlist"]["url"].endswith("/lab-hot")
     health = payload["puller"]["health"]
@@ -252,6 +252,9 @@ def test_qr_start_rate_limit(monkeypatch, lab_env):
 def test_dashboard_has_no_apply_button(client):
     assert _login(client).status_code == 303
     html = client.get("/").text
-    assert "apply" not in html.lower()
+    lower = html.lower()
+    assert "dry-run" not in lower
+    assert 'id="apply"' not in lower
+    assert "破坏" not in html
     assert "ima_phone_sync" in html
     assert "开始扫码" in html

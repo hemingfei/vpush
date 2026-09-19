@@ -52,17 +52,18 @@ def create_app() -> FastAPI:
         if logged_in(request):
             return RedirectResponse("/", status_code=303)
         return templates.TemplateResponse(
+            request,
             "login.html",
-            {"request": request, "error": None, "configured": password_configured()},
+            {"error": None, "configured": password_configured()},
         )
 
     @app.post("/login")
     def login_submit(request: Request, password: str = Form("")):
         if not password_configured():
             return templates.TemplateResponse(
+                request,
                 "login.html",
                 {
-                    "request": request,
                     "error": "口令未配置（ARM_OPS_PASSWORD 或 /secrets/arm-ops-password.txt）",
                     "configured": False,
                 },
@@ -71,8 +72,9 @@ def create_app() -> FastAPI:
         if not verify_password(password):
             log.info("login failed")
             return templates.TemplateResponse(
+                request,
                 "login.html",
-                {"request": request, "error": "口令不正确", "configured": True},
+                {"error": "口令不正确", "configured": True},
                 status_code=401,
             )
         log.info("login ok")
@@ -96,9 +98,9 @@ def create_app() -> FastAPI:
             log.warning("status collect failed: %s", redact(str(exc)))
             status = {"ok": False, "error": "status unavailable"}
         return templates.TemplateResponse(
+            request,
             "dashboard.html",
             {
-                "request": request,
                 "status": status,
                 "status_json": json.dumps(status, ensure_ascii=False).replace("<", "\\u003c"),
                 "device_types": P115_DEVICE_TYPES,
