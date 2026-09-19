@@ -15,7 +15,16 @@ sys.path.insert(0, str(OPS_DIR))
 
 from ops_app import create_app  # noqa: E402
 from ops_qr115 import QRError, QRManager, write_cookies  # noqa: E402
-from ops_settings import bind_host, bind_spec, binds_all_interfaces, tailscale_ipv4  # noqa: E402
+from ops_settings import (  # noqa: E402
+    DEFAULT_CICC_COOKIES,
+    DEFAULT_PYTHON,
+    bind_host,
+    bind_spec,
+    binds_all_interfaces,
+    cicc_cookie_path,
+    python_bin,
+    tailscale_ipv4,
+)
 from ops_status import (  # noqa: E402
     collect_status,
     cookie_meta,
@@ -255,6 +264,34 @@ def test_qr_start_rate_limit(monkeypatch, lab_env):
         mgr.start("web")
     with pytest.raises(QRError, match="rate limit"):
         mgr.start("web")
+
+
+def test_compose_snippet_matches_live_lab_contract():
+    text = (OPS_DIR / "docker-compose.snippet.yml").read_text(encoding="utf-8")
+    assert "VPUSH_PYTHON: /opt/vpush-ima-lab/venv/bin/python" in text
+    assert "VPUSH_SCRIPTS_ROOT: /opt/vpush-ima-lab/src/scripts" in text
+    assert "VPUSH_CICC_COOKIE_FILE: /secrets/cicc-cookies.txt" in text
+    assert "IMA_PURE_SECRETS_FILE: /secrets/ima-pure.json" in text
+    assert "/opt/vpush-ima-lab/src:/opt/vpush-ima-lab/src:ro" in text
+    assert "/opt/vpush-ima-lab/venv:/opt/vpush-ima-lab/venv:ro" in text
+    assert "/opt/vpush-ima-lab/secrets:/secrets" in text
+    cache_mount = next(line for line in text.splitlines() if "/data/vpush-ima-cache:" in line)
+    assert ":ro" not in cache_mount
+    assert "docker-compose.prod" not in text.lower()
+
+
+def test_python_bin_env_and_fallback(monkeypatch):
+    monkeypatch.delenv("VPUSH_PYTHON", raising=False)
+    assert python_bin() == sys.executable
+    monkeypatch.setenv("VPUSH_PYTHON", "/opt/vpush-ima-lab/venv/bin/python")
+    assert python_bin() == "/opt/vpush-ima-lab/venv/bin/python"
+    assert DEFAULT_PYTHON == "/opt/vpush-ima-lab/venv/bin/python"
+
+
+def test_cicc_cookie_default_is_secrets(monkeypatch):
+    monkeypatch.delenv("VPUSH_CICC_COOKIE_FILE", raising=False)
+    assert DEFAULT_CICC_COOKIES == "/secrets/cicc-cookies.txt"
+    assert cicc_cookie_path().as_posix() == "/secrets/cicc-cookies.txt"
 
 
 def test_bind_defaults_to_loopback(monkeypatch):

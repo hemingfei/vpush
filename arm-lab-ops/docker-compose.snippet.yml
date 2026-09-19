@@ -1,13 +1,26 @@
 # Add this service to /opt/vpush-ima-lab compose (lab only).
-# Not production vpush. Not a reading desk.
+# Not production vpush. Not a reading desk. Do not merge into
+# production docker-compose*.yml.
 #
 # Access (password still required):
 #   1. Preferred — Tailscale. Host network + ARM_OPS_BIND=tailscale
 #      (resolved at start via `tailscale ip -4` or iface tailscale0).
+#      Pin IPv4 in the lab .env if lookup fails inside the image:
+#        ARM_OPS_BIND=<tailscale-ipv4>
 #      From a tailnet node: http://$(tailscale ip -4):8055
 #   2. Fallback — loopback + tunnel:
 #      ssh -L 8055:127.0.0.1:8055 oracle-sj-arm
 #   3. Do not publish 0.0.0.0:8055 on the public NIC.
+#
+# Secrets live on the host under /opt/vpush-ima-lab/secrets/ and are
+# bind-mounted to /secrets. Never commit cookie / token / password files:
+#   115-cookies.txt, cicc-cookies.txt, ima-pure.json, arm-ops-password.txt
+# Keep those files 0600 on the host.
+#
+# Recreate after git pull (preserve host secrets/ and lab .env):
+#   cd /opt/vpush-ima-lab
+#   docker compose build arm-lab-ops
+#   docker compose up -d arm-lab-ops
 #
 # uvicorn binds an IP, not an interface name. Pin the address if lookup
 # fails inside the image:
@@ -28,21 +41,19 @@ services:
       ARM_OPS_PORT: "8055"
       CACHE_ROOT: /data/vpush-ima-cache
       P115_COOKIES_FILE: /secrets/115-cookies.txt
+      VPUSH_CICC_COOKIE_FILE: /secrets/cicc-cookies.txt
       IMA_PURE_SECRETS_FILE: /secrets/ima-pure.json
       ARM_OPS_PASSWORD_FILE: /secrets/arm-ops-password.txt
       # Prefer the file above. If you inject env instead, do it from a
       # host env file that is never committed.
       # ARM_OPS_PASSWORD: ""
       P115_DEVICE_TYPE: harmony
-      OPENLIST_PUBLIC_URL: http://127.0.0.1:5244/lab-hot
+      # Live ARM pins Tailscale IPv4, e.g. http://<tailscale-ipv4>:5244/lab-hot
+      OPENLIST_PUBLIC_URL: ${OPENLIST_PUBLIC_URL:-http://127.0.0.1:5244/lab-hot}
+      PULLER_CONTAINER_NAME: ${PULLER_CONTAINER_NAME:-vpush-ima-lab-puller-1}
       VPUSH_SCRIPTS_ROOT: /opt/vpush-ima-lab/src/scripts
-      VPUSH_CICC_COOKIE_FILE: /root/cicc/cookies.txt
-      # Optional: host venv if image Python lacks app.* deps for lab scripts
-      # VPUSH_PYTHON: /opt/vpush-ima-lab/.venv/bin/python
-      # Optional: HTTP or file JSON from healthcheck.py
-      # PULLER_HEALTH_URL: http://127.0.0.1:8099/health
-      # PULLER_HEALTH_FILE: /data/vpush-ima-cache/logs/health.json
-      # PULLER_CONTAINER_NAME: vpush-ima-lab-puller
+      # Image Python lacks app.* deps. Host venv has them (not .venv).
+      VPUSH_PYTHON: /opt/vpush-ima-lab/venv/bin/python
     volumes:
       # Phase 2: rw so requeue can move failed/ → staging/ and append
       # logs/ops-audit.jsonl. Phase 1 often used :ro — that is not enough
@@ -50,13 +61,13 @@ services:
       - /data/vpush-ima-cache:/data/vpush-ima-cache
       # Host scripts (ima/cicc lab sync). Container is host-network.
       - /opt/vpush-ima-lab/src:/opt/vpush-ima-lab/src:ro
+      # Host venv for VPUSH_PYTHON (app.* + lab deps). Image Python is not enough.
+      - /opt/vpush-ima-lab/venv:/opt/vpush-ima-lab/venv:ro
       # rw only so QR login can replace 115-cookies.txt (0600). Do not
-      # mount this into any public service.
-      - /secrets:/secrets
-      # Optional: CICC cookie for confirmed lab triggers (400 if missing).
-      # - /root/cicc:/root/cicc:ro
-      # Optional: puller container status when docker.sock is present.
-      # - /var/run/docker.sock:/var/run/docker.sock:ro
+      # mount this into any public service. Host path is secrets/ (never git).
+      - /opt/vpush-ima-lab/secrets:/secrets
+      # Puller container status (compose name vpush-ima-lab-puller-1).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     # Fallback if Tailscale is down: ARM_OPS_BIND=127.0.0.1 and SSH tunnel.
     # Do not use ports: ["0.0.0.0:8055:8055"] — that is the public NIC.
     # Loopback-only publish (no tailnet) if you must map ports instead of host net:
