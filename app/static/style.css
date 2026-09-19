@@ -1647,6 +1647,54 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
 .tag-detail-pending-row + .tag-detail-pending-row { border-top: 1px dashed var(--color-border); }
 .tag-detail-pending-meta { flex: 1; font-size: var(--text-xs); color: var(--color-text-muted); }
 .tag-detail-pending-ops { display: flex; gap: 6px; }
+/* 大V消息操作标注：消息卡角标（已生效实心 / 标注中虚线）+ 标注弹窗 */
+.am-chip { cursor: pointer; font-weight: 600; }
+.am-chip.is-effective {
+  background: rgba(64, 98, 213, .12); border-color: rgba(64, 98, 213, .45);
+  color: #3352b8;
+}
+.theme-dark .am-chip.is-effective {
+  background: rgba(122, 162, 255, .18); border-color: rgba(122, 162, 255, .5);
+  color: #9db9ff;
+}
+.am-chip.is-pending {
+  border-style: dashed; color: var(--color-text-muted); font-weight: 400;
+}
+.am-card .am-form { margin-top: 12px; }
+.am-card .am-label { display: block; font-size: var(--text-xs); color: var(--color-text-muted); margin: 10px 0 6px; }
+.am-target-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.am-target {
+  flex: 1; min-width: 160px; padding: 7px 10px; font-size: var(--text-sm, 14px);
+  border: 1px solid var(--color-border); border-radius: var(--radius-md, 10px);
+  background: var(--color-bg); color: var(--color-text);
+}
+.am-suggest {
+  font-size: var(--text-xs); padding: 3px 8px; border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border); background: transparent; cursor: pointer;
+  color: var(--color-text-muted);
+}
+.am-suggest:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+.am-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.am-act-btn {
+  font-size: var(--text-xs); padding: 4px 10px; border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border); background: transparent; cursor: pointer;
+  color: var(--color-text);
+}
+.am-act-btn:hover { border-color: var(--color-text-muted); }
+.am-act-btn.on {
+  background: rgba(64, 98, 213, .14); border-color: rgba(64, 98, 213, .55);
+  color: #3352b8; font-weight: 600;
+}
+.theme-dark .am-act-btn.on { background: rgba(122, 162, 255, .2); color: #9db9ff; }
+.am-marks { margin-top: 14px; }
+.am-marks-head { font-size: var(--text-xs); color: var(--color-text-muted); margin-bottom: 6px; }
+.am-mark-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--text-xs); padding: 5px 0; }
+.am-mark-row + .am-mark-row { border-top: 1px dashed var(--color-border); }
+.am-mark-admin {
+  font-style: normal; font-size: 10px; line-height: 14px; padding: 0 4px;
+  border-radius: var(--radius-pill); background: rgba(176, 127, 44, .16); color: #96690f;
+}
+.theme-dark .am-mark-admin { background: rgba(255, 193, 94, .16); color: #ffc861; }
 .tag-detail-msg {
   max-height: 130px; overflow: auto; padding: 10px 12px;
   background: var(--color-surface-muted); border: 1px solid var(--color-border); border-radius: var(--radius-sm);

@@ -69,6 +69,23 @@ SCHEMA_MIGRATIONS: list[tuple[int, str, str | tuple[str, ...]]] = [
         "    PRIMARY KEY (code, at)\n"
         ")",
     ),
+    (
+        2026092001,
+        "大V消息操作标注表 mx_action_marks",
+        (
+            "CREATE TABLE IF NOT EXISTS mx_action_marks (\n"
+            "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+            "    post_id INTEGER NOT NULL,\n"
+            "    user_id INTEGER NOT NULL,\n"
+            "    target_name TEXT NOT NULL,\n"
+            "    action TEXT NOT NULL,\n"
+            "    created_at TEXT NOT NULL DEFAULT (datetime('now')),\n"
+            "    updated_at TEXT NOT NULL DEFAULT (datetime('now')),\n"
+            "    UNIQUE(post_id, user_id)\n"
+            ")",
+            "CREATE INDEX IF NOT EXISTS idx_mx_action_marks_post ON mx_action_marks(post_id)",
+        ),
+    ),
 ]
 
 _SLOW_QUERY_SECONDS = 0.2
@@ -1219,6 +1236,22 @@ CREATE TABLE IF NOT EXISTS tag_review_votes (
     UNIQUE(review_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_tag_review_votes_review ON tag_review_votes(review_id);
+
+-- 大V消息操作标注：授权用户/管理员对单条 MX 消息标注「某个股的某操作（或非操作）」，
+-- 修正观点研判/标签管线漏判误判（如清仓未被识别）。UNIQUE(post_id, user_id)：
+-- 每人每帖一个当前标注，改标即 upsert 覆盖（标注是当前判断，与投票不可改不同）。
+-- 生效与否不落库：回放（mx_kol_holdings）每次请求按 mx_action_marks.resolve 现算
+CREATE TABLE IF NOT EXISTS mx_action_marks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    target_name TEXT NOT NULL,               -- 个股正式名（写入前经别名归一）
+    action TEXT NOT NULL,                    -- 操作词（词表内）或 'none'=非操作（仅压制）
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(post_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mx_action_marks_post ON mx_action_marks(post_id);
 
 -- MX 大V实时观点：结构化多空观点明细 / 研判批次 / 快照存档
 CREATE TABLE IF NOT EXISTS mx_opinions (
@@ -7040,6 +7073,79 @@ class DB:
         if not check or str(check[0]["status"]) != str(status):
             return None
         return rows[0]
+
+    # ---------- 大V消息操作标注（mx_action_marks） ----------
+
+    def upsert_mx_action_mark(self, post_id: int, user_id: int, target_name: str, action: str) -> None:
+        """写入/更新某用户对某帖的操作标注：一人一帖一标，改标即覆盖（upsert）。"""
+        self._execute(
+            "INSERT INTO mx_action_marks (post_id, user_id, target_name, action) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(post_id, user_id) DO UPDATE SET "
+            "target_name = excluded.target_name, action = excluded.action, "
+            "updated_at = datetime('now')",
+            (int(post_id), int(user_id), str(target_name), str(action)),
+        )
+
+    def delete_mx_action_mark(self, post_id: int, user_id: int) -> bool:
+        """撤销某用户对某帖的标注；先查再删，返回是否确有删除。"""
+        existing = self._rows(
+            "SELECT id FROM mx_action_marks WHERE post_id = ? AND user_id = ?",
+            (int(post_id), int(user_id)),
+        )
+        if not existing:
+            return False
+        self._execute(
+            "DELETE FROM mx_action_marks WHERE post_id = ? AND user_id = ?",
+            (int(post_id), int(user_id)),
+        )
+        return True
+
+    def _mx_action_mark_rows(self, where: str, params: tuple) -> list[dict]:
+        """标注行统一取法：带标注人 username/is_admin（生效解析需判现任身份）。"""
+        return self._rows(
+            "SELECT m.id, m.post_id, m.user_id, m.target_name, m.action, "
+            "m.created_at, m.updated_at, u.username, u.is_admin "
+            "FROM mx_action_marks m JOIN users u ON u.id = m.user_id "
+            f"WHERE {where} ORDER BY m.post_id, m.updated_at, m.id",
+            params,
+        )
+
+    def list_mx_action_marks_for_posts(self, post_ids) -> list[dict]:
+        """一批帖子的全部标注（弹窗名单与卡片角标的数据源）。"""
+        ids = [int(p) for p in (post_ids or []) if p is not None]
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        return self._mx_action_mark_rows(f"m.post_id IN ({placeholders})", tuple(ids))
+
+    def list_mx_action_marks_for_kol(self, kol_id, since_day: str) -> list[dict]:
+        """单大V窗口内帖子的全部标注（预估持仓回放的标注信号源）。
+
+        与 list_mx_action_tag_posts_for_kol 同口径：platform='mx'、窗口按
+        published_at 前 10 位、blocked/hidden 与停用大V排除——被屏蔽的消息
+        本就不进回放，其标注也不该生效。
+        """
+        return self._mx_action_mark_rows(
+            "m.post_id IN (SELECT p.id FROM posts p JOIN kols k ON k.id = p.kol_id "
+            "WHERE p.platform = 'mx' AND p.kol_id = ? "
+            "AND substr(p.published_at, 1, 10) >= ? "
+            "AND COALESCE(p.blocked, 0) = 0 AND COALESCE(p.hidden, 0) = 0 AND k.enabled = 1)",
+            (int(kol_id), str(since_day)),
+        )
+
+    def list_mx_action_marks_recent(self, limit: int = 100) -> list[dict]:
+        """最近标注列表（管理端监督视角），按更新时间倒序。"""
+        return self._rows(
+            "SELECT m.id, m.post_id, m.user_id, m.target_name, m.action, "
+            "m.created_at, m.updated_at, u.username, u.is_admin, "
+            "p.kol_id, p.published_at, p.content, k.name AS kol_name "
+            "FROM mx_action_marks m "
+            "JOIN users u ON u.id = m.user_id "
+            "JOIN posts p ON p.id = m.post_id "
+            "JOIN kols k ON k.id = p.kol_id "
+            "ORDER BY m.updated_at DESC, m.id DESC LIMIT ?",
+            (max(1, min(int(limit), 500)),),
+        )
 
     def attach_view_directions(self, rows: list[dict]) -> list[dict]:
         """给一批帖子行附加 view_directions（{标签: bull/bear}）。

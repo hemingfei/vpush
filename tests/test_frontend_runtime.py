@@ -1349,3 +1349,93 @@ def test_mx_kol_holdings_slider_drags_while_held_and_sorts(page: Page):
     page.keyboard.press("ArrowRight")
     assert page.evaluate("Number(document.getElementById('mxc-recent-range').value)") == 1
     assert page.evaluate("window.mxcTest.rows()") == ["乙股"]
+
+
+def test_action_mark_modal_flow_and_chip_refresh(page: Page, static_origin: str):
+    """操作标注弹窗（app.js 全局函数 + 网络层桩）：打开 → 选操作 → 填个股 → 提交
+    POST body 断言 → 未生效反馈 → 达成一致后角标就地翻成已生效。
+
+    回归口径：弹窗复用 tag-vote 外壳；POST body {target_name, action}；
+    refreshActionMarkChips 按响应 effective 有无切换角标两态。
+    app.js 的 api 是模块内 const，window 层覆盖不了——统一走 page.route 网络桩。"""
+    page.clock.install(time=datetime(2026, 9, 20, 3, 0, tzinfo=UTC))
+    # 完整引导 app.js：token + /api 全量路由拦截（me 带标注权限，feed 空列表）
+    page.context.add_init_script("localStorage.setItem('dav_token', 'test-token')")
+    state = {"effective": None, "calls": [], "flashes": []}
+
+    def respond(route):
+        path = urlsplit(route.request.url).path
+        body = route.request.post_data
+        data = []
+        if path == "/api/me":
+            data = {"id": 1, "username": "test", "is_admin": True,
+                    "can_mx_action_mark": True, "timeline_platforms": []}
+        elif path == "/api/posts/77/action-mark":
+            state["calls"].append({
+                "path": path, "method": route.request.method,
+                "body": json.loads(body) if body else None,
+            })
+            eff = state["effective"]
+            data = {
+                "post": {"id": 77, "kol_id": 5, "kol_name": "测试大V",
+                         "published_at": "2026-09-20 14:30:00",
+                         "excerpt": "全部清仓了，落袋为安", "stock_tags": ["贵州茅台"]},
+                "marks": ([
+                    {"username": "alice", "is_admin": False, "target_name": "贵州茅台",
+                     "action": "清仓", "updated_at": "2026-09-20 15:00:00"},
+                    {"username": "bob", "is_admin": False, "target_name": "贵州茅台",
+                     "action": "清仓", "updated_at": "2026-09-20 15:01:00"},
+                ] if eff else [
+                    {"username": "alice", "is_admin": False, "target_name": "贵州茅台",
+                     "action": "清仓", "updated_at": "2026-09-20 15:00:00"},
+                ]),
+                "effective": eff,
+                "my_mark": {"target_name": "贵州茅台", "action": "清仓"},
+                "can_mark": True, "is_admin": False,
+                "config": {"agree_n": 2, "usernames": ["alice", "bob"]},
+                "actions": ["建仓", "加仓", "低吸", "减仓", "高抛", "清仓", "做T", "观察", "none"],
+            }
+        route.fulfill(json=data)
+
+    page.route("**/api/**", respond)
+    page.goto(static_origin)
+    page.wait_for_function("typeof openActionMarkModal === 'function'")
+
+    page.evaluate("""() => {
+      // 卡片角标：初始标注中 1/2，裁决后就地翻已生效
+      document.body.insertAdjacentHTML('beforeend',
+        '<button class="cat am-chip is-pending" data-post-id="77">✍ 标注中 1/2</button>');
+    }""")
+    page.evaluate("openActionMarkModal(77)")
+    page.wait_for_selector("#action-mark-mask")
+    # 弹窗骨架：摘要、个股建议、操作词按钮（含非操作）、我的标注预选
+    expect(page.locator("#action-mark-mask .tag-vote-excerpt")).to_contain_text("全部清仓了")
+    expect(page.locator("#action-mark-mask .am-suggest")).to_have_text("贵州茅台")
+    expect(page.locator("#action-mark-mask .am-act-btn")).to_have_count(9)
+    expect(page.locator("#action-mark-mask .am-act-btn.on")).to_have_text("清仓")  # my_mark 预选
+    expect(page.locator("#action-mark-mask .am-mark-row")).to_have_count(1)
+    # 点建议填个股 → 选清仓 → 提交
+    page.locator("#action-mark-mask .am-suggest").click()
+    assert page.evaluate('document.getElementById("am-target").value') == "贵州茅台"
+    page.locator('#action-mark-mask .am-act-btn[data-action="清仓"]').click()
+    page.locator("#action-mark-mask .tag-vote-actions .btn-normal").click()
+    # POST body 断言（弹窗重绘出现两行标注即说明响应已落地）
+    expect(page.locator("#action-mark-mask .am-mark-row")).to_have_count(1)
+    post = next((c for c in state["calls"] if c["method"] == "POST"), None)
+    assert post and post["path"] == "/api/posts/77/action-mark"
+    assert post["body"] == {"target_name": "贵州茅台", "action": "清仓"}
+    # 达成一致后（响应带 effective）角标就地翻已生效
+    state["effective"] = {"target_name": "贵州茅台", "action": "清仓",
+                          "by_admin": False, "voters": ["alice", "bob"]}
+    page.evaluate("submitActionMark(77)")
+    chip = page.locator('.am-chip[data-post-id="77"]')
+    expect(chip).to_have_class(re.compile("is-effective"))
+    expect(chip).to_contain_text("人工:清仓 贵州茅台")
+    # 撤销标注走 DELETE，角标回落标注中
+    state["effective"] = None
+    page.evaluate("deleteActionMark(77)")
+    deleted = next((c for c in state["calls"] if c["method"] == "DELETE"), None)
+    assert deleted and deleted["path"] == "/api/posts/77/action-mark"
+    expect(chip).to_have_class(re.compile("is-pending"))
+    page.evaluate("closeActionMarkModal()")
+    expect(page.locator("#action-mark-mask")).to_have_count(0)

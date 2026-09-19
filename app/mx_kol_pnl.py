@@ -129,7 +129,11 @@ def build_kol_pnl(db, kol_id: int, days: int = 30, price_lookup=None) -> dict | 
             # 影子份额=清仓、部分=减仓；翻空单列。钳位后无实际变动的不记
             kind = _action_kind(delta, shadow_units, ev_kind) if delta > 0 or shadow_units > 0 else ""
             if kind:
-                actions.append({"kind": kind, "at": at})
+                # 人工标注注入的事件带 manual 标记，前端出「人工」角标（纯增字段向后兼容）
+                act = {"kind": kind, "at": at}
+                if str(ev.get("source") or "") == "manual":
+                    act["manual"] = True
+                actions.append(act)
             shadow_units = max(0.0, shadow_units + delta)
             px = _price(code, at) if code else None
             if not px:

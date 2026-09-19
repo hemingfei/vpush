@@ -1312,15 +1312,16 @@ export function createAdminKolsView(dependencies) {
   }
 
   async function loadAdminTagsTab() {
-    let data, tagStatus, tagReviews, aliasCands, tagPending, tagReviewCfg;
+    let data, tagStatus, tagReviews, aliasCands, tagPending, tagReviewCfg, markData;
     try {
-      [data, tagStatus, tagReviews, aliasCands, tagPending, tagReviewCfg] = await Promise.all([
+      [data, tagStatus, tagReviews, aliasCands, tagPending, tagReviewCfg, markData] = await Promise.all([
         api("/api/tags"),
         api("/api/admin/mx-llm-tag/status"),
         api(`/api/admin/post-tag-reviews?status=pending${_tagReviewSource ? `&source=${_tagReviewSource}` : ""}`),
         api("/api/admin/stock-alias-candidates"),
         api("/api/admin/mx-llm-tag/pending"),
         api("/api/admin/tag-review/config"),
+        api("/api/admin/mx-action-marks?limit=50"),
       ]);
     } catch (err) {
       if (!routeStillActive(currentAdminSeq())) return;
@@ -1399,7 +1400,7 @@ export function createAdminKolsView(dependencies) {
           <span id="tag-backfill-result" class="muted"></span>
         </div>
       </section>
-      ${adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending, tagReviewCfg)}
+      ${adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending, tagReviewCfg, markData)}
       <section class="section-panel">
         <header class="section-head"><div><h2 class="section-title">当前词表（${tags.length} 个）</h2></div></header>
         <div class="tag-vocab-preview">
@@ -1503,7 +1504,7 @@ export function createAdminKolsView(dependencies) {
     }
   }
 
-  function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending, tagReviewCfg) {
+  function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending, tagReviewCfg, markData) {
     const st = tagStatus || {};
     const pendingTotal = Number(tagPending?.total) || 0;
     const vt = st.view_tagging || {};
@@ -1602,6 +1603,7 @@ export function createAdminKolsView(dependencies) {
           <span class="muted" id="tag-review-sel-count">未选择</span>
         </div>
       </section>
+      ${adminMxActionMarkPanel(markData)}
       <section class="section-panel">
         <header class="section-head"><div><h2 class="section-title">黑话候选</h2>
         <p class="section-meta">LLM 判定为「社区通用」的新黑话（仅当前消息语境成立的不会进来）。通过后写入黑话别名表，后续消息免 LLM 直接命中。</p></div></header>
@@ -1610,6 +1612,78 @@ export function createAdminKolsView(dependencies) {
             <thead><tr><th scope="col">别名</th><th scope="col">正式名</th><th scope="col">出现次数</th><th scope="col">首次发现</th><th scope="col">操作</th></tr></thead>
             <tbody>${candRows}</tbody>
           </table>
+        </div>
+      </section>`;
+  }
+
+  // ---------- 操作标注（mx_action_marks）：授权名单 + 一致生效人数 + 最近标注 ----------
+  async function adminSaveMxMarkConfig() {
+    const usernames = (document.getElementById("mx-mark-users")?.value || "")
+      .split(/[\s,，;；]+/).map((s) => s.trim()).filter(Boolean);
+    const agreeN = Number(document.getElementById("mx-mark-agree-n")?.value || 0);
+    try {
+      await api("/api/admin/mx-action-marks/config", {
+        method: "PUT",
+        body: JSON.stringify({ usernames, agree_n: agreeN }),
+      });
+      flash("操作标注配置已保存");
+      loadAdminVocabTab("tags");
+    } catch (err) {
+      flash("保存失败: " + err.message, "error");
+    }
+  }
+
+  async function adminRefreshMxMarks() {
+    try {
+      const data = await api("/api/admin/mx-action-marks?limit=50");
+      const body = document.getElementById("mx-mark-tbody");
+      if (body) body.innerHTML = adminMxMarkRows(data?.items || []);
+    } catch (err) {
+      flash("刷新失败: " + err.message, "error");
+    }
+  }
+
+  function adminMxMarkRows(items) {
+    if (!items.length) return `<tr><td colspan="5" class="muted">暂无标注记录</td></tr>`;
+    return items.map((r) => {
+      const eff = r.effective;
+      return `
+      <tr>
+        <td>${escapeHtml(r.kol_name || "")}<span class="muted"> · ${escapeHtml(fmtDbTime(r.published_at || ""))}</span></td>
+        <td><span class="muted">${escapeHtml(r.username || "")}${r.is_admin ? "（管理员）" : ""}：</span><span class="mxv-badge act">${r.action === "none" ? "非操作" : escapeHtml(r.action)}</span> <b>${escapeHtml(r.target_name)}</b></td>
+        <td class="tag-review-msg"><span class="tag-review-msg-text">${escapeHtml(String(r.content || "").slice(0, 80))}</span></td>
+        <td>${eff
+          ? `<span class="tag-pending-badge is-approved">已生效</span>${eff.by_admin ? '<span class="muted">管理员</span>' : ""}`
+          : `<span class="tag-pending-badge">未生效</span>`}</td>
+        <td>${escapeHtml(fmtDbTime(r.updated_at || ""))}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  function adminMxActionMarkPanel(markData) {
+    const cfg = (markData && markData.config) || {};
+    const items = (markData && Array.isArray(markData.items)) ? markData.items : [];
+    return `
+      <section class="section-panel">
+        <header class="section-head"><div><h2 class="section-title">操作标注</h2>
+        <p class="section-meta">授权用户在消息卡/大V持仓时间线上人工标注「某消息是某个股的建仓/加仓/减仓/清仓/非操作」，修正预估持仓与盈亏的漏判误判。管理员标注立即生效；授权用户<b>满一致人数且标注相同（股票+操作）</b>才生效，意见分歧暂不生效。</p></div></header>
+        <div class="tag-review-vote-config" aria-label="操作标注配置">
+          <span class="tag-review-vote-num">授权用户
+            <input type="text" id="mx-mark-users" style="width:260px" value="${escapeHtml((cfg.usernames || []).join("，"))}"
+              placeholder="用户名，逗号或空格分隔" aria-label="授权标注用户名列表"></span>
+          <span class="tag-review-vote-num">一致生效
+            <input type="number" id="mx-mark-agree-n" min="2" max="10" value="${Number(cfg.agree_n) || 2}" aria-label="一致生效人数"> 人标注一致即生效</span>
+          <button type="button" class="btn-sm" onclick="adminSaveMxMarkConfig()">保存配置</button>
+          <span class="muted">留空则仅管理员可标注</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">大V/时间</th><th scope="col">标注</th><th scope="col">消息</th><th scope="col">生效</th><th scope="col">更新</th></tr></thead>
+            <tbody id="mx-mark-tbody">${adminMxMarkRows(items)}</tbody>
+          </table>
+        </div>
+        <div class="toolbar" style="margin-top:10px">
+          <button class="btn-ghost" onclick="adminRefreshMxMarks()">刷新列表</button>
         </div>
       </section>`;
   }
@@ -2395,6 +2469,8 @@ export function createAdminKolsView(dependencies) {
   return {
     loadAdminKols,
     loadAdminVocab,
+    adminSaveMxMarkConfig,
+    adminRefreshMxMarks,
     switchAdminKolsPlatform,
     adminKolsApplyFilter,
     adminKolsClearFilter,

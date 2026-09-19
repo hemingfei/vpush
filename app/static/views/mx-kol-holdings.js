@@ -296,13 +296,14 @@ export function createMxKolHoldingsView(dependencies) {
   }
 
   // 盈亏行内操作时间线徽章：后端 actions=[{kind,at}]，文案/配色与时间线徽章同源
-  // （MXC_KINDS）。建仓/加仓/减仓/清仓/翻空各带发生时间；多笔时折行铺开
+  // （MXC_KINDS）。建仓/加仓/减仓/清仓/翻空各带发生时间；多笔时折行铺开；
+  // 人工标注产生的操作带 manual:true，追加「人工」角标
   function mxcPnlActs(p) {
     const acts = (p && p.actions) || [];
     if (!acts.length) return "";
     return `<div class="mxc-pnl-acts">${acts.map((a) => {
       const k = MXC_KINDS[a.kind] || MXC_KINDS.hold;
-      return `<span class="mxc-kind ${k.cls}" title="${escapeHtml(k.label)} ${escapeHtml((a.at || "").slice(5, 16))}">${k.label} ${(a.at || "").slice(5, 16)}</span>`;
+      return `<span class="mxc-kind ${k.cls}" title="${escapeHtml(k.label)} ${escapeHtml((a.at || "").slice(5, 16))}">${k.label} ${(a.at || "").slice(5, 16)}${a.manual ? '<i class="mxc-manual-badge">人工</i>' : ""}</span>`;
     }).join("")}</div>`;
   }
 
@@ -486,6 +487,15 @@ export function createMxKolHoldingsView(dependencies) {
       : e.direction === "bear" ? `<span class="mxv-badge bear">↓看空</span>`
       : `<span class="mxv-badge neutral">中性</span>`;
     const at = (_mxc.pnl && _mxc.pnl.event_prices || {})[`${e.target_name}|${e.occurred_at || ""}`] || "";
+    // 人工标注事件出「人工」徽章；可标注用户可在行内就地对证据消息标注
+    // （预填该行标的，postId 取首条证据帖）
+    const manualBadge = e.source === "manual"
+      ? `<span class="mxc-src mxc-src-manual" title="该操作来自人工标注（管理员直判或多人一致生效），非自动解析">人工</span>` : "";
+    const markBtn = (e.evidence && e.evidence.length && state.user?.can_mx_action_mark)
+      ? `<button type="button" class="mxc-mark-btn" title="人工标注该消息的个股操作（修正/确认此操作）"
+          aria-label="标注${escapeHtml(e.target_name)}的操作"
+          onclick="openActionMarkModal(${Number(e.evidence[0])}, ${JSON.stringify(String(e.target_name))})">标注</button>`
+      : "";
     return `
     <div class="mxv-feed-item mxc-row">
       <span class="t" style="color:var(--mxv-accent)">${escapeHtml((e.occurred_at || "").slice(11, 16))}</span>
@@ -494,6 +504,8 @@ export function createMxKolHoldingsView(dependencies) {
       <span class="target" style="color:var(--mxv-text)" title="${escapeHtml(e.target_name)}">${escapeHtml(e.target_name)}</span>
       ${at ? `<span class="mxc-price">${escapeHtml(at)}</span>` : ""}
       ${e.source === "tag" ? `<span class="mxc-src" title="操作来自消息标签（观点研判未覆盖该条），仅供参考">标签</span>` : ""}
+      ${manualBadge}
+      ${markBtn}
       <span class="sum" style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(e.summary || "")}">${escapeHtml(e.summary || "")}</span>
     </div>`;
   }

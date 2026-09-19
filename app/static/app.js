@@ -3978,11 +3978,15 @@ function postCard(post) {
         ${post.platform === "mx" ? `<button type="button" class="cat tl-hold-btn" data-kol-id="${Number(post.kol_id) || 0}"
           onclick="mxcOpenDrawer(this.dataset.kolId)" title="按该大V近 30 天多空观点回放推演的预估持仓"
           aria-label="查看${escapeHtml(post.kol_name)}的预估持仓">持仓 ${HOLDINGS_ICON}</button>` : ""}
+        ${mxMarkChip(post)}
         ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
         ${post.post_type === "reply" ? `<span class="cat">回复</span>` : ""}
         ${renderPostTagChips(post.tags, post.view_directions, post.pending_tags)}
         <div class="p-meta-actions">
         <button type="button" class="cat cat-export post-card-export" onclick="exportPostCard(${post.id}, event)" aria-label="复制图卡" title="复制图卡">图卡 ${IMAGE_CARD_ICON}</button>
+        ${(post.platform === "mx" && state.user?.can_mx_action_mark) ? `<a href="#" class="cat" data-post-id="${post.id}"
+             onclick="event.preventDefault();openActionMarkModal(${post.id})"
+             title="人工标注该消息的个股操作（建仓/加仓/减仓/清仓/非操作），修正预估持仓">标注</a>` : ""}
         ${post.platform === "zsxq" || (post.platform === "mx" && !state.user?.is_admin) ? "" : RAW_MODAL_LABELS[post.platform]
           ? `<a href="#" data-raw-label="${escapeHtml(RAW_MODAL_LABELS[post.platform])}"
                onclick="event.preventDefault();openRawModal(${post.id}, this.dataset.rawLabel)"
@@ -3993,12 +3997,30 @@ function postCard(post) {
     </div>`;
 }
 
+// 操作标注角标：已生效实心「人工:清仓 赛力斯」；标注中虚线「标注中 1/2」。
+// 所有人可见（生效与否影响预估持仓展示）；可标注者点开弹窗，无权者只读提示
+function mxMarkChip(post) {
+  const m = post.mx_mark;
+  if (!m || post.platform !== "mx") return "";
+  if (m.effective) {
+    const eff = m.effective;
+    const label = eff.action === "none"
+      ? `人工:非操作 ${eff.target_name}` : `人工:${eff.action} ${eff.target_name}`;
+    return `<button type="button" class="cat am-chip is-effective" data-post-id="${post.id}"
+      onclick="openActionMarkModal(${post.id})" title="人工标注已生效，点击查看/修改">✍ ${escapeHtml(label)}</button>`;
+  }
+  if (m.total) {
+    return `<button type="button" class="cat am-chip is-pending" data-post-id="${post.id}"
+      onclick="openActionMarkModal(${post.id})" title="标注中尚未生效，点击查看/参与">✍ 标注中 ${m.total}/${m.agree_n || 2}</button>`;
+  }
+  return "";
+}
+
 // 标签徽章：最多直接显示 6 个，超出折叠进「更多N」，点击展开/收起；
 // 智囊团观点回流带方向的标签追加看多/看空角标（post.view_directions）；
 // 审核队列待审标签（post.pending_tags）虚线展示 + 待审角标，带审核 id 的可点开
 // 大众评审弹窗（投票/管理员直判），旧缓存 payload 无 id 退化为只读虚线样式
-function renderPostTagChips(tags, viewDirections, pendingTags) {
-  const dirs = (viewDirections && typeof viewDirections === "object") ? viewDirections : {};
+function renderPostTagChips(tags, viewDirections, pendingTags) {  const dirs = (viewDirections && typeof viewDirections === "object") ? viewDirections : {};
   const chip = (t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}${tagDirBadge(dirs[t])}</button>`;
   const pendingChip = (pt) => {
     const t = (pt && typeof pt === "object") ? pt.tag : pt;
@@ -4334,6 +4356,211 @@ function refreshTagVoteChips(data) {
     chip.title = approved ? "已通过审核" : "已拒绝";
     const badge = chip.querySelector(".tag-pending-badge");
     if (badge) badge.textContent = approved ? "已通过" : "已拒绝";
+  });
+}
+
+// ---------- 大V消息操作标注弹窗 ----------
+// 授权用户/管理员对单条 MX 消息标注「某个股的某操作（或非操作）」，
+// 修正预估持仓/盈亏回放的漏判误判：管理员直判立即生效；
+// 授权用户满一致人数（后台可配）生效，分歧不生效等管理员定夺。
+let _actionMarkData = null; // 当前弹窗数据（/api/posts/{id}/action-mark 响应）
+let _actionMarkPick = null; // 弹窗内当前选中的操作词（null=未选）
+
+async function openActionMarkModal(postId, presetTarget) {
+  closeActionMarkModal(); // 防连点叠开
+  lockBodyScroll();
+  const mask = document.createElement("div");
+  mask.className = "modal-mask tag-vote-mask";
+  mask.id = "action-mark-mask";
+  mask.setAttribute("role", "dialog");
+  mask.setAttribute("aria-modal", "true");
+  mask.setAttribute("aria-label", "操作标注");
+  mask.innerHTML = `<div class="modal-card tag-vote-card"><p class="muted">加载中…</p></div>`;
+  mask.addEventListener("click", (e) => {
+    if (e.target === mask) closeActionMarkModal();
+  });
+  mask._onKey = (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeActionMarkModal();
+    }
+  };
+  document.addEventListener("keydown", mask._onKey, true);
+  document.body.appendChild(mask);
+  try {
+    const data = await api(`/api/posts/${postId}/action-mark`);
+    _actionMarkData = data;
+    // 时间线入口预填个股；已有自己的标注时以标注为准
+    const preset = (data.my_mark && data.my_mark.target_name)
+      || (presetTarget && String(presetTarget).trim()) || "";
+    data._target = preset;
+    paintActionMarkModal(data);
+  } catch (err) {
+    closeActionMarkModal();
+    flash("打开操作标注失败: " + err.message, "error");
+  }
+}
+
+function closeActionMarkModal() {
+  const mask = document.getElementById("action-mark-mask");
+  if (!mask) return;
+  document.removeEventListener("keydown", mask._onKey, true);
+  unlockBodyScroll();
+  mask.remove();
+  _actionMarkData = null;
+  _actionMarkPick = null;
+}
+
+function _actionMarkStatusLabel(eff) {
+  if (!eff) return "";
+  if (eff.action === "none") return "已生效：非操作（自动信号被压制）";
+  return `已生效：${escapeHtml(eff.target_name)} ${escapeHtml(eff.action)}${eff.by_admin ? "（管理员）" : ""}`;
+}
+
+function paintActionMarkModal(data) {
+  const mask = document.getElementById("action-mark-mask");
+  if (!mask) return;
+  const canMark = !!data.can_mark;
+  const isAdmin = !!data.is_admin;
+  const cfg = data.config || {};
+  const agreeN = cfg.agree_n ?? 2;
+  const my = data.my_mark;
+  const eff = data.effective;
+  // 打开/重绘时选中态：我的标注 > null
+  _actionMarkPick = my ? my.action : null;
+  const actions = Array.isArray(data.actions) ? data.actions : [];
+  const actionBtn = (a) => {
+    const on = _actionMarkPick === a ? " on" : "";
+    const label = a === "none" ? "非操作" : escapeHtml(a);
+    return `<button type="button" class="am-act-btn${on}" data-action="${escapeHtml(a)}"
+      onclick="actionMarkPick(this.dataset.action)">${label}</button>`;
+  };
+  const suggest = (data.post && Array.isArray(data.post.stock_tags) && data.post.stock_tags.length)
+    ? data.post.stock_tags.map((s) => `<button type="button" class="am-suggest"
+        onclick="actionMarkFillTarget(this.textContent)">${escapeHtml(s)}</button>`).join("")
+    : "";
+  const markRows = (data.marks || []).map((m) => `
+    <div class="am-mark-row">
+      <b>${escapeHtml(m.username)}</b>${m.is_admin ? '<span class="am-mark-admin">管理员</span>' : ""}
+      <span class="mxv-badge act">${m.action === "none" ? "非操作" : escapeHtml(m.action)}</span>
+      <span class="muted">${escapeHtml(m.target_name)} · ${fmtDbTime(m.updated_at || "")}</span>
+    </div>`).join("");
+  const who = data.post?.kol_name ? `${escapeHtml(data.post.kol_name)} · ` : "";
+  const when = data.post?.published_at ? fmtPublished(data.post.published_at) : "";
+  let ruleHint;
+  if (eff) {
+    ruleHint = _actionMarkStatusLabel(eff);
+  } else if (canMark && isAdmin) {
+    ruleHint = "管理员直判：保存后立即生效，不经过多人一致";
+  } else if (my) {
+    ruleHint = `你已标注「${my.action === "none" ? "非操作" : escapeHtml(my.action)}」，满 ${agreeN} 人标注一致即生效；意见不同视为分歧，暂不生效`;
+  } else if (canMark) {
+    ruleHint = `满 ${agreeN} 人标注「同一股票+同一操作」即生效；意见不同视为分歧，暂不生效`;
+  } else {
+    ruleHint = "你没有标注权限，仅可查看（权限由管理员在后台配置）";
+  }
+  mask.innerHTML = `
+    <div class="modal-card tag-vote-card am-card">
+      <button type="button" class="tag-detail-close" aria-label="关闭" onclick="closeActionMarkModal()">×</button>
+      <h3 class="mx-raw-title">操作标注</h3>
+      <p class="mx-raw-meta">${who}${when}</p>
+      <p class="tag-vote-excerpt muted">${escapeHtml(data.post?.excerpt || "")}</p>
+      ${canMark ? `
+      <div class="am-form">
+        <label class="am-label" for="am-target">个股（正式名）</label>
+        <div class="am-target-row">
+          <input id="am-target" class="am-target" type="text" placeholder="如：贵州茅台"
+            value="${escapeHtml(data._target || "")}" autocomplete="off">
+          ${suggest}
+        </div>
+        <label class="am-label">操作</label>
+        <div class="am-acts">${actions.map(actionBtn).join("")}</div>
+        <div class="tag-vote-actions">
+          <button type="button" class="btn-normal" onclick="submitActionMark(${Number(data.post.id)})">
+            保存标注${isAdmin ? "（直判生效）" : ""}
+          </button>
+          ${my ? `<button type="button" class="btn-ghost danger" onclick="deleteActionMark(${Number(data.post.id)})">撤销我的标注</button>` : ""}
+        </div>
+      </div>` : ""}
+      <div class="am-marks">
+        <div class="am-marks-head">当前标注（${(data.marks || []).length}）${eff ? " · " + _actionMarkStatusLabel(eff) : ""}</div>
+        ${markRows || '<p class="muted">暂无标注</p>'}
+      </div>
+      <p class="tag-vote-hint muted">${ruleHint}</p>
+    </div>`;
+}
+
+function actionMarkPick(action) {
+  _actionMarkPick = action;
+  document.querySelectorAll("#action-mark-mask .am-act-btn").forEach((btn) => {
+    btn.classList.toggle("on", btn.dataset.action === action);
+  });
+}
+
+function actionMarkFillTarget(name) {
+  const input = document.getElementById("am-target");
+  if (input) input.value = name;
+}
+
+async function submitActionMark(postId) {
+  const target = (document.getElementById("am-target")?.value || "").trim();
+  const action = _actionMarkPick;
+  if (!action) {
+    flash("请选择操作类型", "error");
+    return;
+  }
+  if (!target) {
+    flash("请填写个股名称", "error");
+    return;
+  }
+  try {
+    const data = await api(`/api/posts/${postId}/action-mark`, {
+      method: "POST",
+      body: JSON.stringify({ target_name: target, action }),
+    });
+    data._target = target;
+    _actionMarkData = data;
+    paintActionMarkModal(data);
+    refreshActionMarkChips(data);
+    if (data.effective) {
+      flash(`标注已生效：${target} ${action === "none" ? "非操作" : action}`);
+    } else {
+      flash(data.is_admin ? "已保存管理员标注" : "已保存标注，等待其他用户确认");
+    }
+  } catch (err) {
+    flash("标注失败: " + err.message, "error");
+  }
+}
+
+async function deleteActionMark(postId) {
+  try {
+    const data = await api(`/api/posts/${postId}/action-mark`, { method: "DELETE" });
+    data._target = "";
+    _actionMarkData = data;
+    paintActionMarkModal(data);
+    refreshActionMarkChips(data);
+    flash("已撤销标注");
+  } catch (err) {
+    flash("撤销失败: " + err.message, "error");
+  }
+}
+
+// 裁决后就地更新消息卡上的标注角标（下次刷新列表自然与数据一致）
+function refreshActionMarkChips(data) {
+  if (!data || !data.post) return;
+  const eff = data.effective;
+  document.querySelectorAll(`.am-chip[data-post-id="${Number(data.post.id)}"]`).forEach((chip) => {
+    if (eff) {
+      chip.classList.remove("is-pending");
+      chip.classList.add("is-effective");
+      chip.title = "人工标注已生效";
+      chip.textContent = `人工:${eff.action === "none" ? "非操作" : eff.action} ${eff.target_name}`;
+    } else {
+      chip.classList.remove("is-effective");
+      chip.classList.add("is-pending");
+      chip.title = "标注中，尚未生效";
+      chip.textContent = `标注中 ${data.marks?.length || 0}/${(data.config && data.config.agree_n) || 2}`;
+    }
   });
 }
 
@@ -6641,7 +6868,7 @@ let kolView, loadAdminKols, loadAdminVocab, switchAdminKolsPlatform, adminKolsAp
   adminKolWebhookSaveSecret, adminEditKolKeywords, saveKolKeywords, adminViewKolBlock, adminMxTagAutoSave, adminMxTagAutoAddSpecial, adminMxTagAutoRemoveSpecial,
   adminMxTagCancel, adminMxTagOpenRunModal, adminMxTagSelAll, adminMxTagStartRun, adminMxTagTest, adminOpenTagReviewModal, closeTagReviewModal, toggleTagReviewMsg,
   adminTagReviewModalReview, adminTagReviewSelAll, adminTagReviewSelChange, adminReviewTag, adminReviewTagsBatch, adminReviewAliasCandidate, adminTagDetailAddTag,
-  adminTagDetailRemoveTag, adminToggleViewTagging, adminTagReviewSourceChange, adminSaveTagReviewConfig, newsKolToggle, newsKolToggleItem, newsKolAll, newsKolNone, newsKolSearch,
+  adminTagDetailRemoveTag, adminToggleViewTagging, adminTagReviewSourceChange, adminSaveTagReviewConfig, adminSaveMxMarkConfig, adminRefreshMxMarks, newsKolToggle, newsKolToggleItem, newsKolAll, newsKolNone, newsKolSearch,
   newsKolSave, newsKolDiscard, loadResearchKolPanel, researchKolToggle, researchKolToggleItem, researchKolAll, researchKolNone, researchKolSearch, researchKolSave,
   researchKolDiscard, loadWscnBroadcastPanel, saveWscnBroadcastSettings;
 
@@ -6901,6 +7128,8 @@ async function ensureAdminViews() {
   adminToggleViewTagging,
   adminTagReviewSourceChange,
   adminSaveTagReviewConfig,
+  adminSaveMxMarkConfig,
+  adminRefreshMxMarks,
     } = (kolView = modKol.createAdminKolsView({
   $,
   state,
@@ -8663,6 +8892,7 @@ const INLINE_HANDLERS = {
   adminRevokeCode,
   adminSaveAliases,
   adminSaveInactivePolicy,
+  adminSaveMxMarkConfig,
   adminSavePassword,
   adminSaveStockNames,
   adminSaveTags,
@@ -8670,6 +8900,7 @@ const INLINE_HANDLERS = {
   adminSaveUserKnowledge,
   adminSaveUsername,
   adminSendTestPush,
+  adminRefreshMxMarks,
   adminTagReviewSourceChange,
   adminToggleAdmin,
   adminToggleKol,
@@ -8979,6 +9210,14 @@ const INLINE_HANDLERS = {
   closeTagVoteModal,
   submitTagVote,
   refreshTagVoteChips,
+  // ---- hmf：大V消息操作标注（时间线卡片角标 + 标注弹窗）----
+  openActionMarkModal,
+  closeActionMarkModal,
+  actionMarkPick,
+  actionMarkFillTarget,
+  submitActionMark,
+  deleteActionMark,
+  refreshActionMarkChips,
   avatarImgError,
   mxvPickDay,
   mxvCalToggle,

@@ -46,6 +46,17 @@
 /* 标签来源徽章：操作来自消息标签（观点研判未覆盖），弱化为描边小标 */
 .mxc-src{font-size:10px;color:var(--hd-muted);border:1px dashed var(--hd-btn-line);
   border-radius:4px;padding:0 5px;white-space:nowrap;justify-self:start;}
+/* 人工标注来源徽章：实心强调（该操作经人工确认，可信度高于自动解析） */
+.mxc-src-manual{border-style:solid;color:var(--hd-accent,#3352b8);
+  border-color:var(--hd-accent,#3352b8);font-weight:600;}
+/* 时间线行内「标注」按钮：授权用户就地对证据消息标注（预填该行标的） */
+.mxc-mark-btn{font-size:10px;color:var(--hd-muted);border:1px solid var(--hd-btn-line);
+  border-radius:4px;padding:0 5px;background:transparent;cursor:pointer;
+  white-space:nowrap;justify-self:start;}
+.mxc-mark-btn:hover{color:var(--hd-text);border-color:var(--hd-muted);}
+/* 盈亏行内操作徽章上的「人工」角标：与 .mxc-src-manual 同语义的迷你版 */
+.mxc-manual-badge{font-style:normal;font-size:10px;line-height:12px;margin-left:4px;
+  padding:0 3px;border-radius:3px;background:rgba(64,98,213,.14);color:#3352b8;}
 
 /* 时间线行自定列模板（时间/操作徽章/方向/标的/标签?/摘要），不再借用 .mxv-feed-item
    为观点流行定宽的六列：那边第 2/3 列只有 46/38px，「持仓 · 观望」「↑看多」会溢出
