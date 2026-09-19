@@ -329,6 +329,7 @@ def docker_status() -> dict[str, Any]:
 
 def timer_status(unit: str | None = None) -> dict[str, Any]:
     name = unit or timer_unit()
+    known = {"active", "inactive", "failed", "activating", "deactivating"}
     try:
         proc = subprocess.run(
             ["systemctl", "is-active", name],
@@ -339,8 +340,11 @@ def timer_status(unit: str | None = None) -> dict[str, Any]:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"unit": name, "active": "unknown", "detail": type(exc).__name__}
-    active = (proc.stdout or proc.stderr or "").strip() or "unknown"
-    return {"unit": name, "active": redact(active), "detail": None}
+    active = (proc.stdout or "").strip()
+    if active in known:
+        return {"unit": name, "active": active, "detail": None}
+    err = redact((proc.stderr or active or "unavailable").splitlines()[0])
+    return {"unit": name, "active": "unavailable", "detail": err[:80]}
 
 
 def log_tails(root: Path, limit: int = LOG_TAIL_LINES) -> list[dict[str, Any]]:

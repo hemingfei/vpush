@@ -55,6 +55,10 @@ a { color: var(--accent); }
   border: 1px solid var(--line);
   border-radius: var(--radius);
 }
+.shell {
+  max-width: 920px;
+  margin: 0 auto;
+}
 .topbar {
   display: flex;
   justify-content: space-between;
@@ -65,9 +69,12 @@ a { color: var(--accent); }
 }
 .board {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: 1fr;
   gap: var(--s4);
   padding: var(--s5);
+}
+@media (min-width: 760px) {
+  .board { grid-template-columns: 1fr 1fr; }
 }
 .card {
   background: var(--surface);
