@@ -150,6 +150,8 @@ def test_auth_required_for_status_and_qr(client):
     assert client.post("/api/sync/ima/dry-run", json={"limit": 1}).status_code == 401
     assert client.post("/api/sync/ima/apply", json={"confirm": True, "limit": 1}).status_code == 401
     assert client.post("/api/sync/cicc/apply", json={"confirm": True, "limit": 1}).status_code == 401
+    assert client.get("/api/settings").status_code == 401
+    assert client.post("/api/settings", json={"confirm": True}).status_code == 401
     home = client.get("/", follow_redirects=False)
     assert home.status_code in {303, 307}
     assert home.headers["location"].endswith("/login")
@@ -367,3 +369,5 @@ def test_dashboard_phase2_has_confirmed_apply(client):
     assert "/api/115/qr/ima" not in html
     assert "本面板不做 IMA 扫码" in html
     assert 'id="ima-qr"' not in html
+    assert 'id="settings-card"' in html
+    assert 'id="settings-confirm"' in html

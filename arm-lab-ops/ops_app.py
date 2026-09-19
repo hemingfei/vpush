@@ -18,6 +18,7 @@ from ops_auth import (
     session_ok,
     verify_password,
 )
+from ops_lab_knobs import get_settings, save_settings
 from ops_qr115 import QRError, QRManager
 from ops_settings import (
     BIND_ALL_WARNING,
@@ -227,6 +228,22 @@ def create_app() -> FastAPI:
         body = await read_json_body(request)
         try:
             return cicc_sync(body, dry_run=False)
+        except ActionError as exc:
+            return action_error(exc)
+
+    @app.get("/api/settings")
+    def api_settings_get(request: Request):
+        if not logged_in(request):
+            return unauthorized()
+        return get_settings()
+
+    @app.post("/api/settings")
+    async def api_settings_save(request: Request):
+        if not logged_in(request):
+            return unauthorized()
+        body = await read_json_body(request)
+        try:
+            return save_settings(body)
         except ActionError as exc:
             return action_error(exc)
 

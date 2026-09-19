@@ -1,6 +1,8 @@
 """ARM host puller_loop / lab_common / manifest: retry wiring, fakes, no network."""
 from __future__ import annotations
 
+import json
+import stat
 import sys
 from pathlib import Path
 
@@ -125,6 +127,7 @@ def test_upload_one_retries_multipart_then_records(tmp_path, monkeypatch):
     assert not src.exists()
     hot = worker.hot / rel
     assert hot.read_bytes() == b"%PDF-ok"
+    assert stat.S_IMODE(hot.stat().st_mode) == 0o664
     row = manifest.get_by_rel(rel.as_posix())
     assert row is not None
     assert row["status"] == "hot"
@@ -229,6 +232,56 @@ def test_manifest_is_done_and_counts(tmp_path):
     assert manifest.is_done("local/a.pdf", sha1="bbb") is False
     counts = manifest.counts_by_status()
     assert counts["hot"] == 1
+
+
+def test_to_hot_chmods_file_0664_and_parents_at_least_0775(tmp_path):
+    staging = lab_common.cache_root() / "staging"
+    src = _write_pdf(staging, "local/ima/legacy/2026/09/19/locked.pdf", b"%PDF-ima")
+    src.chmod(0o600)
+    worker = _puller_with_client(FakeClient([]))
+    worker.hot.chmod(0o755)
+    rel = lab_common.rel_under(src, worker.staging)
+    worker.to_hot(src, rel)
+    dest = worker.hot / rel
+    assert dest.is_file()
+    assert dest.read_bytes() == b"%PDF-ima"
+    assert stat.S_IMODE(dest.stat().st_mode) == puller.HOT_FILE_MODE
+    parent = dest.parent
+    while True:
+        mode = stat.S_IMODE(parent.stat().st_mode)
+        assert mode & puller.HOT_DIR_MODE == puller.HOT_DIR_MODE
+        if parent == worker.hot:
+            break
+        parent = parent.parent
+
+
+def test_ensure_hot_modes_is_umask_friendly(tmp_path):
+    dest = tmp_path / "hot" / "local" / "a.pdf"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"%PDF")
+    dest.chmod(0o600)
+    dest.parent.chmod(0o700)
+    (tmp_path / "hot").chmod(0o755)
+    puller.ensure_hot_modes(dest, stop_at=tmp_path / "hot")
+    assert stat.S_IMODE(dest.stat().st_mode) == 0o664
+    assert stat.S_IMODE(dest.parent.stat().st_mode) & 0o775 == 0o775
+    assert stat.S_IMODE((tmp_path / "hot").stat().st_mode) & 0o775 == 0o775
+
+
+def test_resolve_batch_size_prefers_settings_json(tmp_path, monkeypatch):
+    cache = lab_common.cache_root()
+    monkeypatch.setenv("PULLER_BATCH_SIZE", "20")
+    assert puller.resolve_batch_size() == 20
+    (cache / puller.OPS_LAB_SETTINGS_NAME).write_text(
+        json.dumps({"puller_batch_size": 40}),
+        encoding="utf-8",
+    )
+    assert puller.resolve_batch_size() == 40
+    (cache / puller.OPS_LAB_SETTINGS_NAME).write_text(
+        json.dumps({"puller_batch_size": 999}),
+        encoding="utf-8",
+    )
+    assert puller.resolve_batch_size() == puller.PULLER_BATCH_MAX
 
 
 def test_compose_still_default_off():

@@ -97,6 +97,15 @@ a { color: var(--accent); }
   gap: var(--s3);
   margin-top: var(--s3);
 }
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s3);
+  margin-top: var(--s3);
+}
+@media (max-width: 640px) {
+  .settings-grid { grid-template-columns: 1fr; }
+}
 .confirm {
   display: flex;
   align-items: center;

@@ -1,6 +1,6 @@
-# ARM lab ops panel（phase 2）
+# ARM lab ops panel（phase 3）
 
-Oracle-SJ-ARM 中间层的薄运维面板：**看缓存 / puller / 同步摘要 / 失败队列**，给 **115 扫码写 Cookie**，以及 **确认后的限量 IMA/CICC 触发** 与 **failed → staging 重入**。
+Oracle-SJ-ARM 中间层的薄运维面板：**看缓存 / puller / 同步摘要 / 失败队列**，给 **115 扫码写 Cookie**，**确认后的限量 IMA/CICC 触发** 与 **failed → staging 重入**，以及 **实验室同步时钟 / 并发旋钮**。
 
 不是阅读台，不是生产 vpush 后台。**没有** IMA 扫码（IMA 仍走 Mac `ima_phone_sync`）。**不要**在生产 compose 里启用本服务或打开 `VPUSH_ARM_MIDDLEWARE`。
 
@@ -118,7 +118,7 @@ Puller 健康信息按顺序尝试：`PULLER_HEALTH_URL` → `PULLER_HEALTH_FILE
 
 ## 宿主机日跑 timer（实验室，不是生产 compose）
 
-IMA 已在 ARM 上：`vpush-ima-lab-sync.timer` **10:30 Asia/Shanghai** → 宿主机 `bin/ima-lab-sync-all.sh`。CICC 按同样风格安装，**11:00 Asia/Shanghai**。样本 unit / wrapper 在 [`systemd/`](systemd/) 与 [`bin/cicc-lab-sync.sh`](bin/cicc-lab-sync.sh)。
+IMA 已在 ARM 上：`vpush-ima-lab-sync.timer` **10:30 Asia/Shanghai** → 宿主机 `bin/ima-lab-sync-all.sh`。CICC 按同样风格安装，**11:00 Asia/Shanghai**。样本 unit / wrapper 在 [`systemd/`](systemd/) 与 [`bin/cicc-lab-sync.sh`](bin/cicc-lab-sync.sh)。看板上保存时钟后，`apply-lab-sync-timers.sh` 会用 drop-in 把两个 timer 改成同一时刻（默认旋钮 03:00）。wrapper 在 `$CACHE_ROOT/ops-lab-settings.json` 存在时读 LIMIT / 并行。
 
 | 单元 | 时刻 | 包装脚本 | 行为 |
 |---|---|---|---|
@@ -144,8 +144,10 @@ systemctl enable --now vpush-cicc-lab-sync.timer
 | 路径 | 说明 |
 |---|---|
 | `GET /login` `POST /login` | 口令；Session Cookie `arm_ops`（HttpOnly, SameSite=Lax） |
-| `GET /` | 看板（状态 + 确认后的动作） |
-| `GET /api/status` | 同一份 JSON（须登录）；含 sync 摘要、failed 列表、水位、上次任务 |
+| `GET /` | 看板（状态 + 确认后的动作 + 实验室旋钮） |
+| `GET /api/status` | 同一份 JSON（须登录）；含 sync 摘要、failed 列表、水位、上次任务、IMA/CICC timer next |
+| `GET /api/settings` | 实验室旋钮 + 只读下次 timer fire（须登录） |
+| `POST /api/settings` | `{confirm:true, daily_sync_clock, ima_limit_per_group, cicc_limit, ima_groups_parallel, puller_batch_size}` |
 | `POST /api/115/qr/start` | `device_type` 默认 `harmony`，与 p115client apps 一致 |
 | `GET /api/115/qr/status?session_id=` | 轮询；成功只回 `{ok:true, cookie_len}` |
 | `POST /api/failed/requeue` | `{confirm:true, paths:[rel…] 或 all:true}`；移回 staging，去掉 `.retry.json` |
@@ -163,7 +165,41 @@ IMA group 白名单：`legacy`、`7479082602225992`、`7476629605476515`、`7437
 - 日志 / health / job 输出会抹 `UID=` / `refresh_token=` 等形态
 - 审计 `$CACHE_ROOT/logs/ops-audit.jsonl` 只记 action / count / ts，不含 secrets
 
-扫码开始有轻量限流（每分钟 5 次）。Apply / requeue 须 `confirm: true`。脚本超时默认 120s（`ARM_OPS_SYNC_TIMEOUT`）。
+扫码开始有轻量限流（每分钟 5 次）。Apply / requeue / **保存旋钮** 须 `confirm: true`。脚本超时默认 120s（`ARM_OPS_SYNC_TIMEOUT`）。
+
+## 实验室旋钮（phase 3）
+
+看板「实验室旋钮」写入 **`$CACHE_ROOT/ops-lab-settings.json`**（不是 secrets；默认 `0664`）。缺省与现网一致：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `daily_sync_clock` | `03:00` | Asia/Shanghai；IMA + CICC 两个 timer 同一时刻 |
+| `ima_limit_per_group` | `10` | CLI 上限 20 |
+| `cicc_limit` | `10` | CLI 上限 20 |
+| `ima_groups_parallel` | `true` | 宿主机 wrapper 用后台 job 跑各组 |
+| `puller_batch_size` | `40` | 同时写 `$CACHE_ROOT/ops-puller.env` 的 `PULLER_BATCH_SIZE=` |
+
+`scripts/puller_loop.py` 每个 tick 读 settings JSON（有则覆盖环境变量）。宿主机 puller unit 也可：
+
+```ini
+EnvironmentFile=-/data/vpush-ima-cache/ops-puller.env
+```
+
+把 [`bin/ima-lab-sync-all.sh`](bin/ima-lab-sync-all.sh)、[`bin/cicc-lab-sync.sh`](bin/cicc-lab-sync.sh)、[`bin/apply-lab-sync-timers.sh`](bin/apply-lab-sync-timers.sh) 装到 `/opt/vpush-ima-lab/bin/`。timer / 日同步 wrapper 应读这份 JSON 的 LIMIT，而不是写死 10。
+
+保存时钟时，面板会尽量自动改写两个 systemd timer（与 status 一样先探测 `systemctl`）：
+
+1. 若 `ARM_OPS_TIMER_HELPER`（或 `/opt/vpush-ima-lab/bin/apply-lab-sync-timers.sh`）可执行，则调用它（drop-in + `daemon-reload` + restart）。
+2. 否则尝试写 `/etc/systemd/system/<unit>.d/ops-schedule.conf`（先清空再设 `OnCalendar=*-*-* HH:MM:00 Asia/Shanghai`）。
+3. Docker / 无 systemd 时只存 JSON，并在 UI 显示 **宿主机 apply** 命令：
+
+```bash
+sudo /opt/vpush-ima-lab/bin/apply-lab-sync-timers.sh 03:00 Asia/Shanghai
+```
+
+Timer 名默认 `vpush-ima-lab-sync.timer` / `vpush-cicc-lab-sync.timer`（`ARM_OPS_TIMER_UNIT` / `ARM_OPS_CICC_TIMER_UNIT`）。看板上的 next fire 只读，来自 `systemctl show`。
+
+**不要**把口令 / Cookie / refresh_token 写进 settings JSON 或审计。审计仍是 `$CACHE_ROOT/logs/ops-audit.jsonl` 一行 `settings-save`。
 
 缓存水位对照 `CACHE_WARN_GB`（默认 30）/ `CACHE_FORCE_GB`（默认 35），与 `lab_common` GC 旋钮一致。
 
