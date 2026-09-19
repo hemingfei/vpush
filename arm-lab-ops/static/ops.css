@@ -147,6 +147,10 @@ input, select {
 }
 .btn-primary { background: var(--accent); color: #f7f5ef; border-color: var(--accent); }
 .btn-ghost { background: transparent; }
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .qr-row {
   display: flex;
   flex-wrap: wrap;
