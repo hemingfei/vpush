@@ -45,7 +45,7 @@ python3 scripts/ima_arm_lab_sync.py --arm-middleware --apply --group legacy --li
 - `IMA_UID` + `IMA_REFRESH_TOKEN`
 - `--secrets` 或 `IMA_PURE_SECRETS_FILE`，JSON 形状：`{"uid","refresh_token"}`
 
-secrets 文件权限必须是 **0600**（组/其他可读会拒绝）。不要把凭据提交进仓库，不要把 token 打进日志或终端。脚本出错时会 redact `refresh_token` / `token` 等字段。
+secrets 文件权限必须是 **0600**（组/其他可读会拒绝）。不要把凭据提交进仓库，不要把 token 打进日志或终端。脚本出错时会 redact `refresh_token` / `token` 等字段。ARM 实验室把文件放在宿主机 `secrets/ima-pure.json`（容器内 `/secrets/ima-pure.json`）。
 
 ```bash
 install -m 600 /dev/null /root/ima-pure-secrets.json

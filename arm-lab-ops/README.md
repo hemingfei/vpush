@@ -42,6 +42,8 @@ export P115_COOKIES_FILE=/tmp/secrets/115-cookies.txt
 export IMA_PURE_SECRETS_FILE=/tmp/secrets/ima-pure.json
 export VPUSH_CICC_COOKIE_FILE=/tmp/secrets/cicc-cookies.txt
 export VPUSH_SCRIPTS_ROOT="$(pwd)/../scripts"
+# ARM compose sets this to the host venv; local can omit (uses sys.executable).
+# export VPUSH_PYTHON=/opt/vpush-ima-lab/venv/bin/python
 export OPENLIST_PUBLIC_URL=http://127.0.0.1:5244/lab-hot
 mkdir -p "$CACHE_ROOT"/{staging,hot,failed,logs,manifest} /tmp/secrets
 chmod 700 /tmp/secrets
@@ -56,16 +58,30 @@ python ops_app.py
 
 ## ARM 部署
 
-仓库目录拷到 `/opt/vpush-ima-lab/arm-lab-ops/`，把 [`docker-compose.snippet.yml`](docker-compose.snippet.yml) 并进实验室 compose（**不要**写进生产 `docker-compose*.yml`）。
+仓库目录拷到 `/opt/vpush-ima-lab/arm-lab-ops/`（或 `src/arm-lab-ops/`，与现网一致），把 [`docker-compose.snippet.yml`](docker-compose.snippet.yml) 并进实验室 compose（**不要**写进生产 `docker-compose*.yml`）。
+
+Cookie / token / 口令文件只放宿主机 **`/opt/vpush-ima-lab/secrets/`**（容器内 `/secrets`），**永远不要提交**。建议 `0700` 目录、`0600` 文件：
+
+| 宿主机路径 | 容器路径 | 用途 |
+|---|---|---|
+| `/opt/vpush-ima-lab/secrets/arm-ops-password.txt` | `/secrets/arm-ops-password.txt` | 面板口令 |
+| `/opt/vpush-ima-lab/secrets/115-cookies.txt` | `/secrets/115-cookies.txt` | 115 QR / puller |
+| `/opt/vpush-ima-lab/secrets/cicc-cookies.txt` | `/secrets/cicc-cookies.txt` | CICC lab sync |
+| `/opt/vpush-ima-lab/secrets/ima-pure.json` | `/secrets/ima-pure.json` | IMA lab sync `{"uid","refresh_token"}` |
 
 ```bash
 # 在 ARM 上，一次
-install -d -m 700 /secrets
-install -m 600 /dev/null /secrets/arm-ops-password.txt
+install -d -m 700 /opt/vpush-ima-lab/secrets
+install -m 600 /dev/null /opt/vpush-ima-lab/secrets/arm-ops-password.txt
 # 手工写入口令，保持 0600
-# 115 Cookie / IMA JSON 已有则复用：
-#   /secrets/115-cookies.txt
-#   /secrets/ima-pure.json
+# Cookie / IMA JSON 已有则复用到 secrets/，不要拷进 git：
+#   /opt/vpush-ima-lab/secrets/115-cookies.txt
+#   /opt/vpush-ima-lab/secrets/cicc-cookies.txt
+#   /opt/vpush-ima-lab/secrets/ima-pure.json
+
+# 实验室 .env（不要提交）可钉 Tailscale IPv4：
+#   ARM_OPS_BIND=<tailscale-ipv4>
+#   OPENLIST_PUBLIC_URL=http://<tailscale-ipv4>:5244/lab-hot
 
 cd /opt/vpush-ima-lab
 # 将 snippet 的 arm-lab-ops service 合入现有 compose 后：
@@ -73,23 +89,55 @@ docker compose build arm-lab-ops
 docker compose up -d arm-lab-ops
 ```
 
+`git pull` 后再 recreate 一次，避免丢掉 live 的 rw cache / src+venv / `VPUSH_PYTHON`：
+
+```bash
+cd /opt/vpush-ima-lab
+git pull
+docker compose build arm-lab-ops
+docker compose up -d arm-lab-ops
+```
+
 Phase 2 要 **重入 failed** 以及写 `logs/ops-audit.jsonl`，所以 **`CACHE_ROOT` 需要 rw**（phase 1 常见 ro 不够）。也可以只把 `failed/` + `staging/` + `logs/` 以 rw 挂进去；推荐整棵 cache rw。
 
-触发 IMA/CICC 脚本时，host-network 容器通过 bind-mount `/opt/vpush-ima-lab/src` 执行宿主机脚本。`VPUSH_SCRIPTS_ROOT` 默认 `/opt/vpush-ima-lab/src/scripts`（找不到再试仓库 `../scripts`）。容器自带 Python 若缺 `app.*` 依赖，设 `VPUSH_PYTHON` 指向宿主机 venv。
+触发 IMA/CICC 脚本时，host-network 容器通过 bind-mount `/opt/vpush-ima-lab/src` 执行宿主机脚本。`VPUSH_SCRIPTS_ROOT` 默认 `/opt/vpush-ima-lab/src/scripts`（找不到再试仓库 `../scripts`）。**必须**设 `VPUSH_PYTHON=/opt/vpush-ima-lab/venv/bin/python` 并 **ro 挂上宿主机 `venv/`**——镜像自带 Python 缺 `app.*` 依赖，宿主机 venv 才有。
 
-卷：
+卷（与 live `docker-compose.ops.yml` 对齐）：
 
 | 挂载 | 权限 | 用途 |
 |---|---|---|
 | `/data/vpush-ima-cache` | **rw（phase 2）** | staging / hot / failed / logs；requeue 要写 staging+failed+audit |
 | `/opt/vpush-ima-lab/src` | ro | `scripts/ima_arm_lab_sync.py` / `cicc_arm_lab_sync.py` |
-| `/secrets` | rw | 仅 QR 成功时改写 `115-cookies.txt`（0600） |
-| `/root/cicc` | 可选 ro | CICC Cookie；缺则 CICC 触发返回明确 400 |
-| `/var/run/docker.sock` | 可选 ro | 看 puller 容器；没有则走 health JSON / 日志 / systemd timer |
+| `/opt/vpush-ima-lab/venv` | ro | `VPUSH_PYTHON`；镜像 Python 不够跑 lab sync |
+| `/opt/vpush-ima-lab/secrets` → `/secrets` | rw | QR 改写 `115-cookies.txt`（0600）；CICC / IMA 凭据只读使用 |
+| `/var/run/docker.sock` | ro | 看 puller 容器（`PULLER_CONTAINER_NAME`，默认 `vpush-ima-lab-puller-1`） |
 
 Puller 健康信息按顺序尝试：`PULLER_HEALTH_URL` → `PULLER_HEALTH_FILE`（默认 `$CACHE_ROOT/logs/health.json`）→ docker.sock / `docker ps` → `$CACHE_ROOT/logs/` 尾部 + `systemctl show vpush-ima-lab-sync.timer`（active / next run，best-effort）。
 
-同步摘要读最新 `$CACHE_ROOT/logs/ima-lab-sync-*.log`，并尝试 `journalctl -u vpush-ima-lab-sync.service` 一小段（失败则忽略）。
+同步摘要读最新 `$CACHE_ROOT/logs/ima-lab-sync-*.log`，并尝试 `journalctl -u vpush-ima-lab-sync.service` 一小段（失败则忽略）。CICC 日跑日志在 `$CACHE_ROOT/logs/cicc-lab-sync-*.log`。
+
+## 宿主机日跑 timer（实验室，不是生产 compose）
+
+IMA 已在 ARM 上：`vpush-ima-lab-sync.timer` **10:30 Asia/Shanghai** → 宿主机 `bin/ima-lab-sync-all.sh`。CICC 按同样风格安装，**11:00 Asia/Shanghai**。样本 unit / wrapper 在 [`systemd/`](systemd/) 与 [`bin/cicc-lab-sync.sh`](bin/cicc-lab-sync.sh)。
+
+| 单元 | 时刻 | 包装脚本 | 行为 |
+|---|---|---|---|
+| `vpush-ima-lab-sync.{service,timer}` | 10:30 Asia/Shanghai | `bin/ima-lab-sync-all.sh`（宿主机已有） | 现网 IMA 日跑；日志 `$CACHE_ROOT/logs/ima-lab-sync-*.log` |
+| `vpush-cicc-lab-sync.{service,timer}` | 11:00 Asia/Shanghai | `bin/cicc-lab-sync.sh` | 调 `scripts/cicc_arm_lab_sync.py --enable --apply --limit 3`；**默认 `DRY_RUN=1`（走 `--dry-run`）**；Cookie `VPUSH_CICC_COOKIE_FILE`（宿主机 `secrets/cicc-cookies.txt`）；日志 `$CACHE_ROOT/logs/cicc-lab-sync-*.log` |
+
+安装 CICC 样本（路径按现网 `/opt/vpush-ima-lab`）：
+
+```bash
+install -d -m 755 /opt/vpush-ima-lab/bin
+install -m 755 arm-lab-ops/bin/cicc-lab-sync.sh /opt/vpush-ima-lab/bin/cicc-lab-sync.sh
+install -m 644 arm-lab-ops/systemd/vpush-cicc-lab-sync.service \
+  arm-lab-ops/systemd/vpush-cicc-lab-sync.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now vpush-cicc-lab-sync.timer
+# 确认默认 DRY_RUN=1 后再把 unit 里 DRY_RUN 改成 0
+```
+
+不要把 Cookie 写进 unit 或仓库。`DRY_RUN=1` 时 wrapper 用 `--dry-run`；只有把 `DRY_RUN=0` 写进 unit 才真正 `--apply`。
 
 ## 页面与 API
 

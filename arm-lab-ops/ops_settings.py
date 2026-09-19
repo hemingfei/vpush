@@ -12,10 +12,14 @@ DEFAULT_PORT = 8055
 DEFAULT_CACHE_ROOT = "/data/vpush-ima-cache"
 DEFAULT_IMA_SECRETS = "/secrets/ima-pure.json"
 DEFAULT_COOKIES = "/secrets/115-cookies.txt"
-DEFAULT_CICC_COOKIES = "/root/cicc/cookies.txt"
+DEFAULT_CICC_COOKIES = "/secrets/cicc-cookies.txt"
 DEFAULT_PASSWORD_FILE = "/secrets/arm-ops-password.txt"
 DEFAULT_TIMER_UNIT = "vpush-ima-lab-sync.timer"
 DEFAULT_SCRIPTS_ROOT = "/opt/vpush-ima-lab/src/scripts"
+# Host venv on Oracle-SJ-ARM. Image Python lacks app.* deps.
+# python_bin() only uses this when VPUSH_PYTHON is unset *and* the file exists
+# (lab compose always sets VPUSH_PYTHON). Tests / local stay on sys.executable.
+DEFAULT_PYTHON = "/opt/vpush-ima-lab/venv/bin/python"
 SESSION_COOKIE = "arm_ops"
 SESSION_TTL_SECONDS = 12 * 3600
 QR_START_LIMIT = 5
@@ -146,7 +150,19 @@ def src_root() -> Path:
 
 
 def python_bin() -> str:
-    return env_str("VPUSH_PYTHON") or sys.executable
+    """Interpreter for ima/cicc lab scripts.
+
+    Prefer ``VPUSH_PYTHON`` (lab compose sets the host venv). If unset,
+    use ``DEFAULT_PYTHON`` only when that path exists so a forgotten env
+    still works on ARM. Otherwise ``sys.executable`` (tests / local).
+    """
+    raw = env_str("VPUSH_PYTHON")
+    if raw:
+        return raw
+    host_venv = Path(DEFAULT_PYTHON)
+    if host_venv.is_file():
+        return str(host_venv)
+    return sys.executable
 
 
 def cache_warn_gb() -> float:

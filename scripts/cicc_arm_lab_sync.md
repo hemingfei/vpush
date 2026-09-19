@@ -42,7 +42,8 @@ python3 scripts/cicc_arm_lab_sync.py --arm-middleware --apply --limit 3 --days 7
 与采集器同一套约定（不要把 Cookie 写进仓库，不要打进日志）：
 
 - `--cookie-file` 或 `VPUSH_CICC_COOKIE_FILE`
-- 默认 `/root/cicc/cookies.txt`（一行原始 Cookie 头）
+- 脚本默认 `/root/cicc/cookies.txt`（存储机采集器约定，一行原始 Cookie 头）
+- **ARM 实验室 ops / timer** 用宿主机 `secrets/cicc-cookies.txt`（容器内 `/secrets/cicc-cookies.txt`）。口令与 Cookie 只放 `secrets/`，永远不要提交。
 
 出错文案会 redact `Cookie:` 行。脚本从不 print Cookie 值。
 

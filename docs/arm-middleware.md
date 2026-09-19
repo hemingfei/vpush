@@ -209,7 +209,8 @@ ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**（脚本在�
 - **failed 重入：** `POST /api/failed/requeue`（须登录 + `confirm:true`）。把 `$CACHE_ROOT/failed/` 下相对路径移回 `staging/`，去掉 `.retry.json`。审计写 `$CACHE_ROOT/logs/ops-audit.jsonl`（无 secrets）。
 - **限量触发：** wrap `scripts/ima_arm_lab_sync.py` / `scripts/cicc_arm_lab_sync.py`。凭据走环境变量文件路径，**不把 secrets 放到命令行**。apply 须 `confirm:true`，`limit<=5`（默认 3）。IMA group 白名单：`legacy`、`7479082602225992`、`7476629605476515`、`7437050366161003`。CICC 缺 Cookie 文件返回明确 400；不绕过采集器配额/熔断。
 - **水位：** 对照 `CACHE_WARN_GB=30` / `CACHE_FORCE_GB=35`（与 `lab_common` GC 旋钮一致）。
-- **挂载：** phase 2 需要 `CACHE_ROOT` **rw**（requeue / audit）。host-network 容器 bind-mount `/opt/vpush-ima-lab/src` 才能 exec 宿主机脚本（`VPUSH_SCRIPTS_ROOT`）。
-- **OpenList：** 看板上的 `/lab-hot` 链接来自 `OPENLIST_PUBLIC_URL`（只读浏览热缓存，不暴露 115）。
+- **挂载：** phase 2 需要 `CACHE_ROOT` **rw**（requeue / audit）。host-network 容器 bind-mount `/opt/vpush-ima-lab/src`（ro）才能 exec 宿主机脚本（`VPUSH_SCRIPTS_ROOT=/opt/vpush-ima-lab/src/scripts`），并 bind-mount `/opt/vpush-ima-lab/venv`（ro）+ `VPUSH_PYTHON=/opt/vpush-ima-lab/venv/bin/python`（镜像 Python 缺 `app.*`）。凭据文件只在宿主机 `secrets/`，容器内 `/secrets`：`115-cookies.txt`、`cicc-cookies.txt`、`ima-pure.json`、`arm-ops-password.txt`（**不要提交**）。CICC Cookie 路径 `VPUSH_CICC_COOKIE_FILE=/secrets/cicc-cookies.txt`。
+- **OpenList：** 看板上的 `/lab-hot` 链接来自 `OPENLIST_PUBLIC_URL`（只读浏览热缓存，不暴露 115）。实验室可钉 Tailscale IPv4（不要写进仓库）。
+- **日跑 timer（宿主机 systemd，不是生产 compose）：** IMA `vpush-ima-lab-sync.timer` 10:30 Asia/Shanghai → `bin/ima-lab-sync-all.sh`。CICC `vpush-cicc-lab-sync.{service,timer}` 11:00 Asia/Shanghai → `bin/cicc-lab-sync.sh`（`--enable --apply --limit 3`，默认 `DRY_RUN=1`，日志 `$CACHE_ROOT/logs/cicc-lab-sync-*.log`）。样本见 `arm-lab-ops/systemd/`。
 
-本地跑法与 ARM 合入步骤见 [arm-lab-ops/README.md](../arm-lab-ops/README.md)。
+本地跑法、合入 compose 与 recreate 步骤见 [arm-lab-ops/README.md](../arm-lab-ops/README.md)。 snippet 见 [arm-lab-ops/docker-compose.snippet.yml](../arm-lab-ops/docker-compose.snippet.yml)。
