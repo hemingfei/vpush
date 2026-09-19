@@ -1,7 +1,13 @@
 [tool.ruff]
 target-version = "py311"
 # work/：未跟踪的本地草稿区，不参与检查
-exclude = ["work/"]
+exclude = [
+    "work/",
+    # Oracle-SJ-ARM /opt/vpush-ima-lab/scripts/ 权威副本，保持与宿主机一致
+    "scripts/lab_common.py",
+    "scripts/manifest.py",
+    "scripts/puller_loop.py",
+]
 
 [tool.ruff.lint]
 # B008: FastAPI Depends() 作为默认值（框架惯用法）
