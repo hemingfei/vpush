@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-"""IMA 归档 → ARM staging 日期分片（草稿，默认关）。
+"""IMA 归档 → ARM staging 日期分片（remap only，默认关）。
 
-ima_phone_sync 只换 Refresh Token，不落 PDF。凭据生效后 puller 仍写：
+本脚本只把已有归档树拷到 staging，不从 IMA 下载。
+live 采集写 staging 走 ``app/ima_documents.py``（``VPUSH_ARM_MIDDLEWARE=1``
+或 ``python3 -m app.arm_middleware --arm-middleware --print-dest``）。
+
+ima_phone_sync 只换 Refresh Token，不落 PDF。旧 puller / 文档中心仍写：
   /srv/vpush-ima/<group>/<MMDD|unknown>/<title>__<token>.pdf
-中间层需要 remap 到：
+remap 到：
   $VPUSH_ARM_STAGING_ROOT/local/ima/<group>/YYYY/MM/DD/<filename>
 
-默认什么都不做。须 --enable 或 VPUSH_ARM_MIDDLEWARE=1 才规划路径。
+默认什么都不做。须 --enable / --arm-middleware 或 VPUSH_ARM_MIDDLEWARE=1 才规划路径。
 启用后默认 --dry-run，只打印将要复制的 src → dest，不写盘。
 不读取 IMA Cookie / Refresh Token / ima_phone_sync.env。
 
 用法：
   python3 ima_to_arm_staging.py
   python3 ima_to_arm_staging.py --enable --dry-run --source /path/to/ima-archive
+  python3 ima_to_arm_staging.py --arm-middleware --dry-run --source /path/to/ima-archive
 """
 
 from __future__ import annotations
@@ -113,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--enable", action="store_true",
                     help="启用 remap（或设 VPUSH_ARM_MIDDLEWARE=1）；默认关")
+    ap.add_argument("--arm-middleware", dest="enable", action="store_true",
+                    help="同 --enable（与中金 / IMA live 开关名对齐）；仍只 remap，不下载")
     ap.add_argument("--dry-run", action="store_true", default=None,
                     help="只列路径不复制（启用后的默认）")
     ap.add_argument("--apply", action="store_true",

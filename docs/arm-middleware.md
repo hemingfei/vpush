@@ -75,16 +75,18 @@ IMA 现网落盘是 `<group_id>__<hash>/<MMDD>/`（无年份）。中间层负�
 | puller 容器 | staging→115；清单；失败重试 | ARM 侧已上线 |
 | OpenList | 只读浏览 hot | `/lab-hot` 日期入口；115 disabled |
 | cicc 适配 | 写 staging 日期分片，默认关 | `scripts/cicc_report_collector.py` |
-| ima 适配 | 同步输出 remap 进 staging，默认关 | `scripts/ima_to_arm_staging.py`（草稿） |
+| ima live write | 新 PDF 直接写 staging 日期分片，默认关 | `app/ima_documents.py`（`VPUSH_ARM_MIDDLEWARE=1`） |
+| ima remap | 旧归档树拷进 staging，默认关 | `scripts/ima_to_arm_staging.py`（不下载） |
 | nfs-sync（规划） | hot/权威 → 旧 NFS 布局 | 存储恢复后 |
 
 ## 6. 开关
 
 - `VPUSH_ARM_MIDDLEWARE=0`（默认，或不设）：采集器保持原存储机行为
-- `VPUSH_ARM_MIDDLEWARE=1` 或 `--arm-middleware`：输出改写到 ARM staging 日期布局；**不直接写 NFS/115**
+- `VPUSH_ARM_MIDDLEWARE=1` 或 `--arm-middleware`：中金与 IMA **新下载**改写到 ARM staging 日期布局；**不直接写 NFS/115**
 - `VPUSH_ARM_STAGING_ROOT`：staging 根，默认 `/data/vpush-ima-cache/staging`
 - `VPUSH_CICC_COOKIE_FILE`：覆盖中金 Cookie 文件路径（不要把 Cookie 写进仓库）
 - 上传仅由 puller 负责；禁止采集器直写 OpenList/FUSE
+- IMA 打开中间层后不走 `IMA_PULL_URL`（存储机 NFS puller）；旧归档 remap 仍用 `scripts/ima_to_arm_staging.py`
 
 CLI 兼容：不传新 flag、不设新环境变量时，`--root` 仍默认 `/srv/vpush-ima/local`，布局仍是 `<品类>/<MMDD>/`，属主 99:100 仅在该经典根且以 root 跑时执行。
 
@@ -111,19 +113,37 @@ $VPUSH_ARM_STAGING_ROOT/local/cicc-research/YYYY/MM/DD/<sanitized>_<id>.json
 
 手册见 [cicc-report-collector.md](cicc-report-collector.md)。
 
-## 8. IMA 适配草稿（默认关）
+## 8. IMA 适配（默认关）
 
-`ima_phone_sync` 只换 Refresh Token，不落 PDF。凭据生效后 puller/采集写入的仍是存储机 `<group>/<MMDD>/`，进 ARM 前要 remap 到 `YYYY/MM/DD` 分片。
+两条路径，都默认关，都不读 IMA Cookie / Refresh Token：
+
+1. **Live write** — 新下载直接写 staging。开关与中金相同：`VPUSH_ARM_MIDDLEWARE=1` 或 `--arm-middleware`。
+2. **Remap** — `scripts/ima_to_arm_staging.py` 只拷已有归档树，不从 IMA 下载。
+
+未开中间层时，puller / 文档中心仍写存储机 `<group>/<MMDD>/`。
 
 ```bash
-# 默认：什么都不做
+# live：离线打印落盘路径（不下载、不读凭据）
+python3 -m app.arm_middleware --arm-middleware --print-dest --group legacy --day 0918 --name demo.pdf
+
+# live：实验室限量同步（现有 IMA 文档中心；勿写进生产 compose）
+VPUSH_ARM_MIDDLEWARE=1
+# 可选：VPUSH_ARM_STAGING_ROOT=/data/vpush-ima-cache/staging
+
+# remap：默认什么都不做
 python3 scripts/ima_to_arm_staging.py
 
-# 只列将要复制的路径（不写盘、不读 IMA 凭据）
+# remap：只列将要复制的路径（不写盘、不读 IMA 凭据）
 python3 scripts/ima_to_arm_staging.py --enable --dry-run --source /path/to/ima-archive
 ```
 
-说明见 [scripts/ima_arm_staging_adapter.md](../scripts/ima_arm_staging_adapter.md)。
+Live 落盘：
+
+```
+$VPUSH_ARM_STAGING_ROOT/local/ima/<group_id>/YYYY/MM/DD/<safe_filename>.pdf
+```
+
+日期优先 IMA 日目录 MMDD；否则北京时间 mtime/now。说明见 [scripts/ima_arm_staging_adapter.md](../scripts/ima_arm_staging_adapter.md)。
 
 ## 9. 成功标准（启用采集后才验收）
 
@@ -136,6 +156,6 @@ python3 scripts/ima_to_arm_staging.py --enable --dry-run --source /path/to/ima-a
 
 1. 本文档 + 仓库适配（本 PR；默认关）
 2. 中金 → staging 适配（默认关）
-3. IMA 输出适配草稿（默认关）
+3. IMA live write + 旧树 remap（默认关）
 4. 存储恢复后：NFS 兼容同步器
 5. 评估生产是否改挂 ARM 导出的 NFS，或继续挂原存储
