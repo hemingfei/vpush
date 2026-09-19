@@ -12,7 +12,7 @@ import httpx
 import app.scheduler as app_scheduler
 from app.config import FeishuConfig, NotifiersConfig, TelegramConfig
 from app.db import DB
-from app.fetchers.base import Post, is_notify_stale
+from app.fetchers.base import Post, already_chinese, is_collapsed_translation, is_notify_stale
 from app.scheduler import (
     PlatformState,
     PushRetryQueue,
@@ -3282,6 +3282,26 @@ def test_translate_text_skips_chinese_author_with_english_quote():
     )
     assert translate_text(src, client=client, tweet_id="1", twitter_cookie="auth_token=a; ct0=b") == src
     assert calls == []
+
+
+def test_already_chinese_ignores_links_and_tickers():
+    """口罩哥这类中文博主：中文夹英文股名/链接/短句，不该被当英文帖送翻译。"""
+    assert already_chinese("布鲁 我危险了")
+    assert already_chinese("听说开始做Biotech…了？ https://t.co/8toKpUvr6w")
+    assert already_chinese("北京好啊，  北京得去 https://t.co/b0yuwhsnBF")
+    assert already_chinese("现在消息来了 openai买了几万个mac... 端侧ai的风来 https://t.co/Pv9o3cMEEd")
+    assert not already_chinese("Tariffs are coming for chip makers")
+    assert not already_chinese("Nvidia CEO says 中国 is key")
+    # 有假名就是日文，不能因汉字够多就当中文跳过
+    assert not already_chinese("GPT-6 Astraならできるやろと思ったらできた。")
+
+
+def test_is_collapsed_translation_rejects_cosmetic_only_diff():
+    """只差空格/标点、或把中文译残的「译文」不能盖掉原文（否则前端会标成「翻译自英语」）。"""
+    assert is_collapsed_translation("苹果苟赢了,  端侧ai的风来", "苹果苟赢了, 端侧ai的风来")
+    assert is_collapsed_translation("了", "布鲁 我危险了")
+    assert is_collapsed_translation("北京好啊，北京得去", "北京好啊，  北京得去 https://t.co/b0yuwhsnBF")
+    assert not is_collapsed_translation("关税突发新闻", "Tariffs are breaking news today")
 
 
 def test_translate_text_mymemory_429_keeps_original_and_cools_down():
