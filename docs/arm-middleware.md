@@ -72,7 +72,7 @@ IMA 现网落盘是 `<group_id>__<hash>/<MMDD>/`（无年份）。中间层负�
 
 | 组件 | 职责 | 现状 |
 |---|---|---|
-| puller_loop | staging→115；清单；失败重试 | **已入库** `scripts/puller_loop.py`（拷到 `/opt/vpush-ima-lab/scripts/`；宿主机 systemd，不是生产 compose）。`call_with_retry` 处理 Multipart/空 filesha1，耗尽后进 `failed/` |
+| puller_loop | staging→115；清单；失败重试 | **已入库（宿主机权威副本）** `scripts/puller_loop.py` + `lab_common.py` + `manifest.py`（拷到 `/opt/vpush-ima-lab/scripts/`；systemd，不是生产 compose）。`upload_ok` 为假则 raise，`call_with_retry` 处理 Multipart/空 filesha1，耗尽后进 `failed/` |
 | OpenList | 只读浏览 hot | `/lab-hot` 日期入口；115 disabled |
 | cicc 适配 | 写 staging 日期分片，默认关 | `scripts/cicc_report_collector.py` |
 | cicc lab sync | ARM 限量 list+download → staging，默认关 | `scripts/cicc_arm_lab_sync.py` |
@@ -87,10 +87,12 @@ IMA 现网落盘是 `<group_id>__<hash>/<MMDD>/`（无年份）。中间层负�
 - `VPUSH_ARM_MIDDLEWARE=1` 或 `--arm-middleware`：中金与 IMA **新下载**改写到 ARM staging 日期布局；**不直接写 NFS/115**
 - `VPUSH_ARM_STAGING_ROOT`：staging 根，默认 `/data/vpush-ima-cache/staging`
 - `VPUSH_CICC_COOKIE_FILE`：覆盖中金 Cookie 文件路径（不要把 Cookie 写进仓库）
+- `CACHE_ROOT`（puller，默认 `/cache`）：宿主机 staging/hot/failed/manifest/logs。须与采集 `VPUSH_ARM_STAGING_ROOT` 指向同一棵 staging 树
+- `P115_LAB_ROOT`（默认 `/vpush`）、`P115_COOKIES_FILE`（默认 `/secrets/115-cookies.txt`，**只是路径**）、`P115_DEVICE_TYPE`（默认 `harmony`）
 - `VPUSH_ARM_NFS_SYNC=1` 或 `--enable`（`arm_nfs_sync.py`）：存储恢复后映射 hot → 旧 NFS；**独立于**中间层开关；默认 dry-run，须 `--dest` / `VPUSH_NFS_SYNC_DEST`
 - 上传仅由 puller 负责；禁止采集器直写 OpenList/FUSE
 - IMA 打开中间层后不走 `IMA_PULL_URL`（存储机 NFS puller）；旧归档 remap 仍用 `scripts/ima_to_arm_staging.py`
-- **上传只走 `scripts/puller_loop.py`**（ARM 宿主机 systemd 调用；拷到 `/opt/vpush-ima-lab/scripts/`）；`ima_arm_lab_sync` / `cicc_arm_lab_sync` / `arm_nfs_sync` 都不上传 115
+- **上传只走宿主机权威 `scripts/puller_loop.py`**（拷到 `/opt/vpush-ima-lab/scripts/`，`--once` 或循环）；`ima_arm_lab_sync` / `cicc_arm_lab_sync` / `arm_nfs_sync` 都不上传 115
 - **不要把 `VPUSH_ARM_MIDDLEWARE=1` 写进生产 compose**（也不要写 `VPUSH_ARM_NFS_SYNC=1`）
 
 CLI 兼容：不传新 flag、不设新环境变量时，`--root` 仍默认 `/srv/vpush-ima/local`，布局仍是 `<品类>/<MMDD>/`，属主 99:100 仅在该经典根且以 root 跑时执行。
@@ -177,7 +179,7 @@ $VPUSH_ARM_STAGING_ROOT/local/ima/<group_id>/YYYY/MM/DD/<safe_filename>.pdf
 3. IMA live write + 旧树 remap + ARM lab sync（已落地；默认关）
 4. 存储恢复后：NFS 兼容同步器 — **已落地（默认关）** `scripts/arm_nfs_sync.py`（见 [arm_nfs_sync.md](../scripts/arm_nfs_sync.md)）
 5. 阅读台切流 — 运维决策，见下方决策记录（本仓库不改 live UI、不改生产 compose）
-6. 实验室 puller 入库 — **已落地** `scripts/puller_loop.py`（见 [puller_loop.md](../scripts/puller_loop.md)）；拷到 `/opt/vpush-ima-lab/scripts/`
+6. 实验室 puller 入库 — **已落地（宿主机原件）** `scripts/puller_loop.py` + `lab_common.py` + `manifest.py`（见 [puller_loop.md](../scripts/puller_loop.md)）；拷到 `/opt/vpush-ima-lab/scripts/`
 7. 中金 ARM 限量同步 — **已落地（默认关）** `scripts/cicc_arm_lab_sync.py`
 
 ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**（脚本在仓库，timer 由 ops 另做），不是生产 compose 服务。**不要把 `VPUSH_ARM_MIDDLEWARE=1` 写进生产 compose。**

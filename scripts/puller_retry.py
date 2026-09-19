@@ -1,9 +1,10 @@
 """Retry helper for ARM lab puller_loop 115 uploads (no network).
 
-``scripts/puller_loop.py`` 是仓库内的 ARM 实验室上传器（拷到
-``/opt/vpush-ima-lab/scripts/``，宿主机 systemd timer 调用；**不是**
-生产 compose）。本模块给 upload 路径复用：遇到 ``MultipartUploadAbort``
-或空 ``filesha1`` 类失败时，带退避重试 2–3 次，再交给调用方移入 ``failed/``。
+``scripts/puller_loop.py``（连同 ``lab_common.py`` / ``manifest.py``）是
+Oracle-SJ-ARM ``/opt/vpush-ima-lab/scripts/`` 的权威副本；宿主机 systemd
+调用，**不是**生产 compose。``puller_loop.upload_one`` 在
+``upload_ok(result)`` 为假时 raise，再走本模块：``MultipartUploadAbort``
+/ 空 ``filesha1`` 退避重试 2–3 次，然后 ``on_fail`` 移入 ``failed/``。
 
 不读 IMA / 115 Cookie，不发起上传。
 """
