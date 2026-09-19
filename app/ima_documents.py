@@ -31,11 +31,9 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .arm_middleware import (
-    ima_staging_relpath,
-    middleware_enabled as arm_middleware_enabled,
-    resolve_staging_root as resolve_arm_staging_root,
-)
+from .arm_middleware import ima_staging_relpath
+from .arm_middleware import middleware_enabled as arm_middleware_enabled
+from .arm_middleware import resolve_staging_root as resolve_arm_staging_root
 from .fetchers.base import CN_TZ
 from .fetchers.ima_inspect import item_cover, item_text
 from .ima_search import ImaSearchIndex
