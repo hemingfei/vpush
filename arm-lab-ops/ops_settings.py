@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import re
+import subprocess
 from pathlib import Path
 
 DEFAULT_HOST = "127.0.0.1"
@@ -20,10 +22,19 @@ WALK_FILE_CAP = 12_000
 WALK_SECONDS_CAP = 1.5
 LOG_TAIL_LINES = 20
 LOG_FILE_CAP = 6
+TAILSCALE_BIND_TOKENS = frozenset({"tailscale", "tailscale0", "tailnet"})
+_IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
 BIND_ALL_WARNING = (
-    "WARNING: ARM_OPS_HOST is 0.0.0.0 / :: — the ops panel will listen on every "
-    "interface. Lab default is 127.0.0.1:8055. Prefer SSH tunnel "
-    "(ssh -L 8055:127.0.0.1:8055) and do not publish this port on a public NIC."
+    "WARNING: ARM_OPS_BIND/ARM_OPS_HOST is 0.0.0.0 / :: — the process listens on "
+    "every NIC, including the public internet. Do not publish 0.0.0.0:8055 on the "
+    "public NIC. Preferred: ARM_OPS_BIND=tailscale (or the IPv4 from "
+    "`tailscale ip -4`) on host network. Fallback: 127.0.0.1:8055 + "
+    "ssh -L 8055:127.0.0.1:8055. Or `tailscale serve` in front of loopback."
+)
+TAILSCALE_MISSING_WARNING = (
+    "WARNING: ARM_OPS_BIND requested Tailscale but no IPv4 was found "
+    "(`tailscale ip -4` / tailscale0). Falling back to 127.0.0.1:8055. "
+    "Use an SSH tunnel or set ARM_OPS_BIND to the address from `tailscale ip -4`."
 )
 
 # p115client AVAILABLE_APPS plus the short aliases used in lab scripts.
@@ -110,8 +121,59 @@ def timer_unit() -> str:
     return env_str("ARM_OPS_TIMER_UNIT", DEFAULT_TIMER_UNIT)
 
 
-def bind_host() -> str:
-    return env_str("ARM_OPS_HOST", DEFAULT_HOST) or DEFAULT_HOST
+def _first_ipv4_line(text: str) -> str | None:
+    for line in text.splitlines():
+        token = line.strip().split()[0] if line.strip() else ""
+        if _IPV4_RE.fullmatch(token):
+            return token
+    match = re.search(r"\binet\s+(\d{1,3}(?:\.\d{1,3}){3})\b", text)
+    return match.group(1) if match else None
+
+
+def tailscale_ipv4(
+    runner=subprocess.run,
+) -> str | None:
+    """Resolve Tailscale IPv4. uvicorn binds an IP, not iface tailscale0."""
+    try:
+        proc = runner(
+            ["tailscale", "ip", "-4"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        proc = None
+    if proc is not None and proc.returncode == 0:
+        found = _first_ipv4_line(proc.stdout or "")
+        if found:
+            return found
+    try:
+        proc = runner(
+            ["ip", "-4", "-o", "addr", "show", "dev", "tailscale0"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return _first_ipv4_line(proc.stdout or "")
+
+
+def bind_spec() -> str:
+    """Raw ARM_OPS_BIND, else ARM_OPS_HOST, else loopback."""
+    return env_str("ARM_OPS_BIND") or env_str("ARM_OPS_HOST") or DEFAULT_HOST
+
+
+def bind_host(runner=subprocess.run) -> str:
+    spec = bind_spec()
+    if spec.lower() in TAILSCALE_BIND_TOKENS:
+        ip = tailscale_ipv4(runner=runner)
+        return ip or DEFAULT_HOST
+    return spec
 
 
 def bind_port() -> int:

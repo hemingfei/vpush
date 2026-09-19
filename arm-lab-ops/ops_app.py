@@ -15,10 +15,14 @@ from ops_auth import COOKIE_KWARGS, issue_session, password_configured, session_
 from ops_qr115 import QRError, QRManager
 from ops_settings import (
     BIND_ALL_WARNING,
+    DEFAULT_HOST,
     P115_DEVICE_TYPES,
     SESSION_COOKIE,
+    TAILSCALE_BIND_TOKENS,
+    TAILSCALE_MISSING_WARNING,
     bind_host,
     bind_port,
+    bind_spec,
     binds_all_interfaces,
     default_device_type,
 )
@@ -154,10 +158,14 @@ app = create_app()
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    spec = bind_spec()
     host = bind_host()
     port = bind_port()
-    if binds_all_interfaces(host):
+    if binds_all_interfaces(spec) or binds_all_interfaces(host):
         print(BIND_ALL_WARNING, file=sys.stderr)
+    if spec.lower() in TAILSCALE_BIND_TOKENS and host == DEFAULT_HOST:
+        print(TAILSCALE_MISSING_WARNING, file=sys.stderr)
+    print(f"ARM lab ops bind {host}:{port} (ARM_OPS_BIND={spec!r})", file=sys.stderr)
     if not password_configured():
         print(
             "ARM lab ops: set ARM_OPS_PASSWORD or write /secrets/arm-ops-password.txt",

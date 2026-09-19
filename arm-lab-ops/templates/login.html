@@ -21,7 +21,7 @@
       </label>
       <button type="submit" class="btn btn-primary">进入面板</button>
     </form>
-    <p class="hint">默认只绑 <code>127.0.0.1:8055</code>。用 <code>ssh -L 8055:127.0.0.1:8055</code> 进来。</p>
+    <p class="hint">优先 Tailscale 本机 IPv4:8055（仍须口令）。备选 <code>ssh -L 8055:127.0.0.1:8055</code>。不要在公网 NIC 上挂 <code>0.0.0.0:8055</code>。</p>
   </main>
 </body>
 </html>

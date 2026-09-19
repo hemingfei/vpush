@@ -80,7 +80,7 @@ IMA 现网落盘是 `<group_id>__<hash>/<MMDD>/`（无年份）。中间层负�
 | ima lab sync | ARM 限量 list+download → staging，默认关 | `scripts/ima_arm_lab_sync.py` |
 | ima remap | 旧归档树拷进 staging，默认关 | `scripts/ima_to_arm_staging.py`（不下载） |
 | nfs-sync | hot/staging → 旧 NFS 布局 | **已落地（默认关）** `scripts/arm_nfs_sync.py`（`--enable` / `VPUSH_ARM_NFS_SYNC=1`；独立于中间层开关） |
-| arm-lab-ops | 实验室只读看板 + 115 QR | **phase 1** `arm-lab-ops/`（`127.0.0.1:8055`，SSH tunnel；不是生产后台） |
+| arm-lab-ops | 实验室只读看板 + 115 QR | **phase 1** `arm-lab-ops/`（优先 Tailscale `:8055`；备选 loopback + SSH；不是生产后台） |
 
 ## 6. 开关
 
@@ -201,7 +201,7 @@ ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**（脚本在�
 
 `arm-lab-ops/` 是给 Oracle-SJ-ARM 中间层用的薄运维 UI：看缓存水位、puller / timer、凭据是否在场，以及 **115 QR 写 Cookie**。它不是阅读台，也不是生产 vpush 后台。Phase 1 **没有**破坏性 apply / dry-run 按钮。
 
-- **访问：** 进程默认只绑 `127.0.0.1:8055`。从笔记本：`ssh -L 8055:127.0.0.1:8055 oracle-sj-arm`，再开 `http://127.0.0.1:8055`。compose 示例见 `arm-lab-ops/docker-compose.snippet.yml`（host 网络 + loopback）。**不要**把默认改成 `0.0.0.0`。
+- **访问（口令仍要）：** Oracle-SJ-ARM 走 Tailscale。① 优先绑 Tailscale IPv4（`ARM_OPS_BIND=tailscale` 或 `tailscale ip -4` 的地址）`:8055`，同 tailnet 打开该 URL。② 备选 `127.0.0.1:8055` + `ssh -L 8055:127.0.0.1:8055`。③ **不要**在公网 NIC 发布 `0.0.0.0:8055`。uvicorn 绑 IP 不绑网卡名；compose 用 host 网络，见 `arm-lab-ops/docker-compose.snippet.yml`。也可用 `tailscale serve` 挂在 loopback 前面。
 - **口令：** `ARM_OPS_PASSWORD` 或 `/secrets/arm-ops-password.txt`。Session Cookie `arm_ops`（HttpOnly, SameSite=Lax）。
 - **115 QR：** 本面板拥有扫码写 `/secrets/115-cookies.txt`（0600）的路径；JSON **只回** `{ok, cookie_len}`，不回 Cookie 正文。设备默认 `harmony`，与 p115client apps 一致。缺 `p115client` 则扫码失败并保持关闭。
 - **IMA：** 只显示 `{present, mtime, uid_len}`。**不做 IMA 扫码**——换票仍在 Mac 上走 `ima_phone_sync`，再把 `ima-pure.json` 放到 secrets。

@@ -4,14 +4,26 @@ Oracle-SJ-ARM 中间层的薄运维面板：**看缓存 / puller / 凭据是否�
 
 不是阅读台，不是生产 vpush 后台。Phase 1 **没有**破坏性 apply 按钮，也 **没有** IMA 扫码（IMA 仍走 Mac `ima_phone_sync`）。
 
-默认只绑 **`127.0.0.1:8055`**。从笔记本进去：
+Oracle-SJ-ARM 在 Tailscale 上。访问顺序：
+
+1. **优先：** 绑 Tailscale IPv4（`tailscale0` / `tailscale ip -4`）端口 **8055**。口令仍要。同 tailnet 打开 `http://<tailscale-ipv4>:8055`。
+2. **备选：** `127.0.0.1:8055` + `ssh -L 8055:127.0.0.1:8055 oracle-sj-arm`。
+3. **不要**在公网 NIC 上发布 `0.0.0.0:8055`。
+
+uvicorn 只能绑 IP，不能绑网卡名。设 `ARM_OPS_BIND=tailscale`（或 `tailscale0`）时，启动会跑 `tailscale ip -4`，不行再读 `tailscale0`。解析失败则退回 `127.0.0.1` 并打警告。也可把 `ARM_OPS_BIND` 写成已经查到的 IPv4。
 
 ```bash
+# ARM 上查地址后绑它（host 网络 / 直接跑进程）
+export ARM_OPS_BIND="$(tailscale ip -4)"   # 或 ARM_OPS_BIND=tailscale
+python ops_app.py
+
+# 备选：loopback + 隧道
+export ARM_OPS_BIND=127.0.0.1
+python ops_app.py
 ssh -L 8055:127.0.0.1:8055 oracle-sj-arm
-# 浏览器打开 http://127.0.0.1:8055
 ```
 
-**不要**把服务默认改成 `0.0.0.0`。compose 示例用 host 网络 + loopback；若改端口映射，host 侧仍须 `127.0.0.1:8055`。
+没有 tailscale CLI、又想从 tailnet 进来时，可 loopback + `tailscale serve --bg 8055`。
 
 ## 本地跑
 
@@ -92,4 +104,4 @@ Puller 健康信息按顺序尝试：`PULLER_HEALTH_URL` → `PULLER_HEALTH_FILE
 - 不要把 Cookie / token 打进日志
 - 实验室信任同站 Session，不做额外 CSRF token
 - 口令文件与 Cookie 文件不要进 git
-- 绑定保持 loopback；公网暴露本面板等于把实验室口令挂到网上
+- 优先只绑 Tailscale IP；公网 NIC 上的 `0.0.0.0:8055` 等于把实验室口令挂到网上

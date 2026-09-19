@@ -15,6 +15,7 @@ sys.path.insert(0, str(OPS_DIR))
 
 from ops_app import create_app  # noqa: E402
 from ops_qr115 import QRError, QRManager, write_cookies  # noqa: E402
+from ops_settings import bind_host, bind_spec, binds_all_interfaces, tailscale_ipv4  # noqa: E402
 from ops_status import (  # noqa: E402
     collect_status,
     cookie_meta,
@@ -130,6 +131,9 @@ def test_redact_and_sanitize_health():
 
 
 def test_auth_required_for_status_and_qr(client):
+    login_html = client.get("/login").text
+    assert "Tailscale" in login_html
+    assert "0.0.0.0:8055" in login_html
     assert client.get("/api/status").status_code == 401
     assert client.post("/api/115/qr/start", json={"device_type": "harmony"}).status_code == 401
     assert client.get("/api/115/qr/status", params={"session_id": "x"}).status_code == 401
@@ -247,6 +251,67 @@ def test_qr_start_rate_limit(monkeypatch, lab_env):
         mgr.start("web")
     with pytest.raises(QRError, match="rate limit"):
         mgr.start("web")
+
+
+def test_bind_defaults_to_loopback(monkeypatch):
+    monkeypatch.delenv("ARM_OPS_BIND", raising=False)
+    monkeypatch.delenv("ARM_OPS_HOST", raising=False)
+    assert bind_spec() == "127.0.0.1"
+    assert bind_host() == "127.0.0.1"
+    assert binds_all_interfaces("0.0.0.0") is True
+    assert binds_all_interfaces("127.0.0.1") is False
+
+
+def test_bind_prefers_arm_ops_bind_over_host(monkeypatch):
+    monkeypatch.setenv("ARM_OPS_HOST", "127.0.0.1")
+    monkeypatch.setenv("ARM_OPS_BIND", "100.64.1.20")
+    assert bind_spec() == "100.64.1.20"
+    assert bind_host() == "100.64.1.20"
+
+
+def test_bind_tailscale_token_uses_cli_then_iface(monkeypatch):
+    monkeypatch.setenv("ARM_OPS_BIND", "tailscale")
+
+    def cli_only(cmd, **_kwargs):
+        class Proc:
+            returncode = 0
+            stdout = "100.64.8.8\n"
+            stderr = ""
+
+        if cmd[:3] == ["tailscale", "ip", "-4"]:
+            return Proc()
+        raise AssertionError(cmd)
+
+    assert tailscale_ipv4(runner=cli_only) == "100.64.8.8"
+    assert bind_host(runner=cli_only) == "100.64.8.8"
+
+    def iface_only(cmd, **_kwargs):
+        class Proc:
+            returncode = 1
+            stdout = ""
+            stderr = "missing"
+
+        if cmd[:3] == ["tailscale", "ip", "-4"]:
+            return Proc()
+
+        class Iface:
+            returncode = 0
+            stdout = "4: tailscale0    inet 100.64.9.9/32 scope global\n"
+            stderr = ""
+
+        return Iface()
+
+    monkeypatch.setenv("ARM_OPS_BIND", "tailscale0")
+    assert bind_host(runner=iface_only) == "100.64.9.9"
+
+
+def test_bind_tailscale_missing_falls_back_to_loopback(monkeypatch):
+    monkeypatch.setenv("ARM_OPS_BIND", "tailscale")
+
+    def boom(cmd, **_kwargs):
+        raise FileNotFoundError(cmd[0])
+
+    assert bind_host(runner=boom) == "127.0.0.1"
 
 
 def test_dashboard_has_no_apply_button(client):
