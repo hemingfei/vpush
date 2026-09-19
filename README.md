@@ -214,7 +214,7 @@ docker compose up -d --build
 
 ## ARM 中间层
 
-ARM（Oracle-SJ-ARM）可作为采集与对象存储之间的中间层：采集只写 staging，由 puller 上传 115，存储恢复后再做 NFS 兼容同步。OpenList 只读 `/lab-hot`，不暴露 115。**默认关闭**，生产 compose 与存储机采集行为不变。说明见 [docs/arm-middleware.md](docs/arm-middleware.md)。
+ARM（Oracle-SJ-ARM）可作为采集与对象存储之间的中间层：采集只写 staging，由 puller 上传 115，存储恢复后再做 NFS 兼容同步。OpenList 只读 `/lab-hot`，不暴露 115。**默认关闭**（`VPUSH_ARM_MIDDLEWARE=1` / `--arm-middleware` 才打开），生产 compose 与存储机采集行为不变。中金与 IMA 新下载均可直接写 `$VPUSH_ARM_STAGING_ROOT/local/.../YYYY/MM/DD/`；旧 IMA 归档树另用 remap 脚本。说明见 [docs/arm-middleware.md](docs/arm-middleware.md)。
 
 ## 推送渠道配置
 
