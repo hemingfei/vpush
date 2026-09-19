@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """ARM hot/staging → classic NFS layout (default-off, dry-run).
 
-存储恢复后，把 ARM 日期分片映射回生产挂载用的旧 POSIX/NFS 布局：
+v2 目标态（docs/ARM中间层架构.md）中为**存量合并/补采工具**：把 lab 时代
+经 staging/hot 采集的文件一次性合入 ARM 本地权威树（/srv/vpush-ima）。
+稳态写路径由生产驱动的 ima_puller 与 cicc collector 直写权威树，不经本脚本。
 
   CICC: dest/local/cicc-research/<品类>/<MMDD>/...
         以及 .vpush-local-library.json / .vpush-local-meta.jsonl（若源侧有）
