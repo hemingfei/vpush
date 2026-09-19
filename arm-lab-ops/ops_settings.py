@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 DEFAULT_HOST = "127.0.0.1"
@@ -11,8 +12,10 @@ DEFAULT_PORT = 8055
 DEFAULT_CACHE_ROOT = "/data/vpush-ima-cache"
 DEFAULT_IMA_SECRETS = "/secrets/ima-pure.json"
 DEFAULT_COOKIES = "/secrets/115-cookies.txt"
+DEFAULT_CICC_COOKIES = "/root/cicc/cookies.txt"
 DEFAULT_PASSWORD_FILE = "/secrets/arm-ops-password.txt"
 DEFAULT_TIMER_UNIT = "vpush-ima-lab-sync.timer"
+DEFAULT_SCRIPTS_ROOT = "/opt/vpush-ima-lab/src/scripts"
 SESSION_COOKIE = "arm_ops"
 SESSION_TTL_SECONDS = 12 * 3600
 QR_START_LIMIT = 5
@@ -22,6 +25,26 @@ WALK_FILE_CAP = 12_000
 WALK_SECONDS_CAP = 1.5
 LOG_TAIL_LINES = 20
 LOG_FILE_CAP = 6
+FAILED_LIST_CAP = 100
+REQUEUE_CAP = 100
+SYNC_LIMIT_DEFAULT = 3
+SYNC_LIMIT_MAX = 5
+SYNC_TIMEOUT_SECONDS = 120
+SYNC_OUTPUT_CHARS = 4000
+JOURNAL_LINES = 40
+CACHE_WARN_GB_DEFAULT = 30.0
+CACHE_FORCE_GB_DEFAULT = 35.0
+IMA_SYNC_LOG_GLOB = "ima-lab-sync-*.log"
+RETRY_SUFFIX = ".retry.json"
+SKIP_SUFFIXES = (".retry.json", ".tmp", ".part", ".partial", ".lock", ".swp")
+AUDIT_LOG_NAME = "ops-audit.jsonl"
+LAST_JOB_NAME = "ops-last-job.json"
+IMA_GROUP_ALLOWLIST = (
+    "legacy",
+    "7479082602225992",
+    "7476629605476515",
+    "7437050366161003",
+)
 TAILSCALE_BIND_TOKENS = frozenset({"tailscale", "tailscale0", "tailnet"})
 _IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
 BIND_ALL_WARNING = (
@@ -89,8 +112,61 @@ def cookies_path() -> Path:
     return Path(env_str("P115_COOKIES_FILE", DEFAULT_COOKIES))
 
 
+def cicc_cookie_path() -> Path:
+    return Path(env_str("VPUSH_CICC_COOKIE_FILE", DEFAULT_CICC_COOKIES))
+
+
 def password_file() -> Path:
     return Path(env_str("ARM_OPS_PASSWORD_FILE", DEFAULT_PASSWORD_FILE))
+
+
+def scripts_root() -> Path:
+    """Lab sync scripts. Prefer VPUSH_SCRIPTS_ROOT, then known ARM / repo paths."""
+    raw = env_str("VPUSH_SCRIPTS_ROOT", "")
+    if raw:
+        return Path(raw)
+    here = Path(__file__).resolve().parent
+    candidates = (
+        Path(DEFAULT_SCRIPTS_ROOT),
+        Path("/opt/vpush-ima-lab/scripts"),
+        here.parent / "scripts",
+        here.parent.parent / "scripts",
+    )
+    for candidate in candidates:
+        if (candidate / "ima_arm_lab_sync.py").is_file():
+            return candidate
+    return Path(DEFAULT_SCRIPTS_ROOT)
+
+
+def src_root() -> Path:
+    raw = env_str("VPUSH_SRC_ROOT", "")
+    if raw:
+        return Path(raw)
+    return scripts_root().parent
+
+
+def python_bin() -> str:
+    return env_str("VPUSH_PYTHON") or sys.executable
+
+
+def cache_warn_gb() -> float:
+    return float(env_str("CACHE_WARN_GB", str(CACHE_WARN_GB_DEFAULT)) or CACHE_WARN_GB_DEFAULT)
+
+
+def cache_force_gb() -> float:
+    return float(env_str("CACHE_FORCE_GB", str(CACHE_FORCE_GB_DEFAULT)) or CACHE_FORCE_GB_DEFAULT)
+
+
+def cache_warn_bytes() -> int:
+    return int(cache_warn_gb() * (1024**3))
+
+
+def cache_force_bytes() -> int:
+    return int(cache_force_gb() * (1024**3))
+
+
+def sync_timeout_seconds() -> int:
+    return env_int("ARM_OPS_SYNC_TIMEOUT", SYNC_TIMEOUT_SECONDS)
 
 
 def openlist_public_url() -> str:

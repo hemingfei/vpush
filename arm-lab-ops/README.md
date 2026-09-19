@@ -1,8 +1,8 @@
-# ARM lab ops panel（phase 1）
+# ARM lab ops panel（phase 2）
 
-Oracle-SJ-ARM 中间层的薄运维面板：**看缓存 / puller / 凭据是否在场，给 115 扫码写 Cookie**。
+Oracle-SJ-ARM 中间层的薄运维面板：**看缓存 / puller / 同步摘要 / 失败队列**，给 **115 扫码写 Cookie**，以及 **确认后的限量 IMA/CICC 触发** 与 **failed → staging 重入**。
 
-不是阅读台，不是生产 vpush 后台。Phase 1 **没有**破坏性 apply 按钮，也 **没有** IMA 扫码（IMA 仍走 Mac `ima_phone_sync`）。
+不是阅读台，不是生产 vpush 后台。**没有** IMA 扫码（IMA 仍走 Mac `ima_phone_sync`）。**不要**在生产 compose 里启用本服务或打开 `VPUSH_ARM_MIDDLEWARE`。
 
 Oracle-SJ-ARM 在 Tailscale 上。访问顺序：
 
@@ -40,8 +40,10 @@ export ARM_OPS_PASSWORD='lab-only'
 export CACHE_ROOT=/tmp/vpush-ima-cache
 export P115_COOKIES_FILE=/tmp/secrets/115-cookies.txt
 export IMA_PURE_SECRETS_FILE=/tmp/secrets/ima-pure.json
+export VPUSH_CICC_COOKIE_FILE=/tmp/secrets/cicc-cookies.txt
+export VPUSH_SCRIPTS_ROOT="$(pwd)/../scripts"
 export OPENLIST_PUBLIC_URL=http://127.0.0.1:5244/lab-hot
-mkdir -p "$CACHE_ROOT"/{staging,hot,failed,logs} /tmp/secrets
+mkdir -p "$CACHE_ROOT"/{staging,hot,failed,logs,manifest} /tmp/secrets
 chmod 700 /tmp/secrets
 
 python ops_app.py
@@ -71,37 +73,56 @@ docker compose build arm-lab-ops
 docker compose up -d arm-lab-ops
 ```
 
+Phase 2 要 **重入 failed** 以及写 `logs/ops-audit.jsonl`，所以 **`CACHE_ROOT` 需要 rw**（phase 1 常见 ro 不够）。也可以只把 `failed/` + `staging/` + `logs/` 以 rw 挂进去；推荐整棵 cache rw。
+
+触发 IMA/CICC 脚本时，host-network 容器通过 bind-mount `/opt/vpush-ima-lab/src` 执行宿主机脚本。`VPUSH_SCRIPTS_ROOT` 默认 `/opt/vpush-ima-lab/src/scripts`（找不到再试仓库 `../scripts`）。容器自带 Python 若缺 `app.*` 依赖，设 `VPUSH_PYTHON` 指向宿主机 venv。
+
 卷：
 
 | 挂载 | 权限 | 用途 |
 |---|---|---|
-| `/data/vpush-ima-cache` | ro | staging / hot / failed / logs |
+| `/data/vpush-ima-cache` | **rw（phase 2）** | staging / hot / failed / logs；requeue 要写 staging+failed+audit |
+| `/opt/vpush-ima-lab/src` | ro | `scripts/ima_arm_lab_sync.py` / `cicc_arm_lab_sync.py` |
 | `/secrets` | rw | 仅 QR 成功时改写 `115-cookies.txt`（0600） |
+| `/root/cicc` | 可选 ro | CICC Cookie；缺则 CICC 触发返回明确 400 |
 | `/var/run/docker.sock` | 可选 ro | 看 puller 容器；没有则走 health JSON / 日志 / systemd timer |
 
-Puller 健康信息按顺序尝试：`PULLER_HEALTH_URL` → `PULLER_HEALTH_FILE`（默认 `$CACHE_ROOT/logs/health.json`，可接现有 `healthcheck.py` 输出）→ docker.sock / `docker ps` → `$CACHE_ROOT/logs/` 尾部 + `systemctl is-active vpush-ima-lab-sync.timer`。
+Puller 健康信息按顺序尝试：`PULLER_HEALTH_URL` → `PULLER_HEALTH_FILE`（默认 `$CACHE_ROOT/logs/health.json`）→ docker.sock / `docker ps` → `$CACHE_ROOT/logs/` 尾部 + `systemctl show vpush-ima-lab-sync.timer`（active / next run，best-effort）。
+
+同步摘要读最新 `$CACHE_ROOT/logs/ima-lab-sync-*.log`，并尝试 `journalctl -u vpush-ima-lab-sync.service` 一小段（失败则忽略）。
 
 ## 页面与 API
 
 | 路径 | 说明 |
 |---|---|
 | `GET /login` `POST /login` | 口令；Session Cookie `arm_ops`（HttpOnly, SameSite=Lax） |
-| `GET /` | 只读看板 |
-| `GET /api/status` | 同一份 JSON（须登录） |
+| `GET /` | 看板（状态 + 确认后的动作） |
+| `GET /api/status` | 同一份 JSON（须登录）；含 sync 摘要、failed 列表、水位、上次任务 |
 | `POST /api/115/qr/start` | `device_type` 默认 `harmony`，与 p115client apps 一致 |
 | `GET /api/115/qr/status?session_id=` | 轮询；成功只回 `{ok:true, cookie_len}` |
+| `POST /api/failed/requeue` | `{confirm:true, paths:[rel…] 或 all:true}`；移回 staging，去掉 `.retry.json` |
+| `POST /api/sync/ima/dry-run` | `--enable --dry-run --limit N --group G`（凭据走 `IMA_PURE_SECRETS_FILE`） |
+| `POST /api/sync/ima/apply` | 须 `confirm:true`；`limit<=5`（默认 3）；group 白名单 |
+| `POST /api/sync/cicc/dry-run` | 同上；缺 Cookie 文件明确 400；不绕过采集器配额/熔断 |
+| `POST /api/sync/cicc/apply` | 须 `confirm:true`；`limit<=5` |
+
+IMA group 白名单：`legacy`、`7479082602225992`、`7476629605476515`、`7437050366161003`。
 
 状态里的敏感字段：
 
 - IMA：`{present, mtime, uid_len}`，**从不**回 `refresh_token`
-- 115：`{present, mtime, length}`，**从不**回 Cookie 正文
-- 日志 / health JSON 会抹 `UID=` / `refresh_token=` 等形态
+- 115 / CICC：`{present, mtime, length}`，**从不**回 Cookie 正文
+- 日志 / health / job 输出会抹 `UID=` / `refresh_token=` 等形态
+- 审计 `$CACHE_ROOT/logs/ops-audit.jsonl` 只记 action / count / ts，不含 secrets
 
-扫码开始有轻量限流（每分钟 5 次）。Phase 1 没有 dry-run / apply。
+扫码开始有轻量限流（每分钟 5 次）。Apply / requeue 须 `confirm: true`。脚本超时默认 120s（`ARM_OPS_SYNC_TIMEOUT`）。
+
+缓存水位对照 `CACHE_WARN_GB`（默认 30）/ `CACHE_FORCE_GB`（默认 35），与 `lab_common` GC 旋钮一致。
 
 ## 安全
 
-- 不要把 Cookie / token 打进日志
+- 不要把 Cookie / token 打进日志或 JSON
+- 不要把 secrets 放到脚本命令行；用已有环境变量 / 文件路径
 - 实验室信任同站 Session，不做额外 CSRF token
 - 口令文件与 Cookie 文件不要进 git
 - 优先只绑 Tailscale IP；公网 NIC 上的 `0.0.0.0:8055` 等于把实验室口令挂到网上

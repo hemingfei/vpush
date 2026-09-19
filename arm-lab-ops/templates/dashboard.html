@@ -10,7 +10,7 @@
   <div class="shell">
   <header class="topbar">
     <div>
-      <p class="eyebrow">Oracle-SJ-ARM · phase 1</p>
+      <p class="eyebrow">Oracle-SJ-ARM · phase 2</p>
       <h1>实验室运维</h1>
     </div>
     <form method="post" action="/logout">
@@ -22,6 +22,10 @@
     <section class="card" id="cache-card">
       <h2>缓存盘</h2>
       <p class="meta" id="cache-root">{{ status.cache.root if status.cache is defined else "" }}</p>
+      <div class="waterline" id="waterline" hidden>
+        <div class="waterline-fill" id="waterline-fill"></div>
+      </div>
+      <p class="meta" id="waterline-label">—</p>
       <dl class="metrics" id="cache-metrics">
         <div><dt>盘已用</dt><dd id="disk-used">—</dd></div>
         <div><dt>staging</dt><dd id="st-used">—</dd></div>
@@ -34,8 +38,78 @@
       <h2>Puller</h2>
       <p class="meta" id="puller-source">—</p>
       <p id="puller-timer">—</p>
+      <p id="puller-uploads">—</p>
       <p id="puller-docker">—</p>
       <pre class="log" id="puller-log" hidden></pre>
+    </section>
+
+    <section class="card" id="sync-card">
+      <h2>IMA 同步摘要</h2>
+      <p class="meta" id="sync-meta">—</p>
+      <dl class="metrics" id="sync-metrics">
+        <div><dt>downloaded</dt><dd id="sync-down">—</dd></div>
+        <div><dt>skipped</dt><dd id="sync-skip">—</dd></div>
+        <div><dt>failed</dt><dd id="sync-fail">—</dd></div>
+        <div><dt>timer next</dt><dd id="sync-next">—</dd></div>
+      </dl>
+      <p id="sync-groups">—</p>
+      <p class="note" id="sync-error" hidden></p>
+      <pre class="log" id="sync-journal" hidden></pre>
+    </section>
+
+    <section class="card" id="trigger-card">
+      <h2>限量触发</h2>
+      <p class="note">IMA 仍不做扫码。dry-run 只列；apply 须勾选确认，limit ≤ {{ sync_limit_max }}。不传 secrets 到命令行。</p>
+      <p class="meta" id="cicc-meta">—</p>
+      <div class="trigger-grid">
+        <label class="field compact">
+          <span>IMA group</span>
+          <select id="ima-group">
+            {% for gid in ima_groups %}
+            <option value="{{ gid }}">{{ gid }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="field compact">
+          <span>limit</span>
+          <input type="number" id="sync-limit" min="1" max="{{ sync_limit_max }}" value="{{ sync_limit_default }}">
+        </label>
+      </div>
+      <div class="qr-row">
+        <button type="button" class="btn" id="ima-dry">IMA dry-run</button>
+        <button type="button" class="btn btn-primary" id="ima-apply" disabled>IMA apply</button>
+        <button type="button" class="btn" id="cicc-dry">CICC dry-run</button>
+        <button type="button" class="btn btn-primary" id="cicc-apply" disabled>CICC apply</button>
+      </div>
+      <label class="confirm">
+        <input type="checkbox" id="apply-confirm">
+        <span>确认 apply（会下载到 staging；115 仍由 puller）</span>
+      </label>
+      <p class="hint" id="job-hint">上次任务输出见下方。接口不回 Cookie / token。</p>
+      <p class="banner" id="job-status" hidden></p>
+      <pre class="log" id="job-log" hidden></pre>
+    </section>
+
+    <section class="card card-wide" id="failed-card">
+      <h2>失败队列</h2>
+      <p class="meta" id="failed-meta">—</p>
+      <div class="table-wrap">
+        <table class="files" id="failed-table">
+          <thead>
+            <tr><th></th><th>path</th><th>size</th><th>mtime</th></tr>
+          </thead>
+          <tbody id="failed-body"></tbody>
+        </table>
+      </div>
+      <div class="qr-row">
+        <button type="button" class="btn" id="requeue-selected" disabled>重入选中</button>
+        <button type="button" class="btn" id="requeue-all" disabled>重入全部（上限）</button>
+      </div>
+      <label class="confirm">
+        <input type="checkbox" id="requeue-confirm">
+        <span>确认移回 staging（保留相对路径，去掉 .retry.json）</span>
+      </label>
+      <p class="banner" id="requeue-status" hidden></p>
     </section>
 
     <section class="card" id="ima-card">
@@ -101,11 +175,30 @@
       document.getElementById("hot-used").textContent = bucket(cache.hot);
       document.getElementById("fail-used").textContent = bucket(cache.failed);
 
+      const water = cache.waterline || {};
+      const bar = document.getElementById("waterline");
+      const fill = document.getElementById("waterline-fill");
+      if (water.force_bytes) {
+        bar.hidden = false;
+        bar.dataset.level = water.level || "ok";
+        fill.style.width = Math.min(100, Number(water.used_pct_of_force) || 0) + "%";
+        document.getElementById("waterline-label").textContent =
+          "水位 " + fmtBytes(water.used_bytes) + " · 告警 " + (water.warn_gb || 30) + "G · 强清 " + (water.force_gb || 35) + "G · " + (water.level || "ok");
+      } else {
+        bar.hidden = true;
+        document.getElementById("waterline-label").textContent = "—";
+      }
+
       const puller = s.puller || {};
       document.getElementById("puller-source").textContent = "来源 " + (puller.source || "none");
       const timer = puller.timer || {};
-      document.getElementById("puller-timer").textContent =
-        (timer.unit || "timer") + " · " + (timer.active || "unknown");
+      let timerText = (timer.unit || "timer") + " · " + (timer.active || "unknown");
+      if (timer.next) timerText += " · next " + timer.next;
+      document.getElementById("puller-timer").textContent = timerText;
+      const uploads = puller.uploads || {};
+      document.getElementById("puller-uploads").textContent =
+        "上传 ok " + (uploads.ok || 0) + " / fail " + (uploads.fail || 0) +
+        (uploads.source && uploads.source !== "none" ? " · " + uploads.source : "");
       const boxes = (puller.docker && puller.docker.containers) || [];
       document.getElementById("puller-docker").textContent = boxes.length
         ? boxes.map((c) => (c.name || "") + " " + (c.state || c.status || "")).join(" · ")
@@ -128,6 +221,59 @@
       document.getElementById("p115-meta").textContent = p115.present
         ? "在场 · mtime " + (p115.mtime || "—") + " · length " + (p115.length || 0)
         : "未找到 115-cookies.txt";
+
+      const cicc = s.cicc || {};
+      document.getElementById("cicc-meta").textContent = cicc.present
+        ? "CICC Cookie 在场 · mtime " + (cicc.mtime || "—") + " · length " + (cicc.length || 0)
+        : "CICC Cookie 未找到（dry-run/apply 会 400）";
+
+      const sync = s.sync || {};
+      const totals = sync.totals || {};
+      document.getElementById("sync-meta").textContent = sync.log
+        ? (sync.log + " · last " + (sync.last_run || sync.mtime || "—"))
+        : "没有 ima-lab-sync-*.log";
+      document.getElementById("sync-down").textContent = totals.downloaded == null ? "—" : String(totals.downloaded);
+      document.getElementById("sync-skip").textContent = totals.skipped == null ? "—" : String(totals.skipped);
+      document.getElementById("sync-fail").textContent = totals.failed == null ? "—" : String(totals.failed);
+      document.getElementById("sync-next").textContent = (timer.next || "—");
+      const groups = sync.groups || {};
+      const groupKeys = Object.keys(groups);
+      document.getElementById("sync-groups").textContent = groupKeys.length
+        ? groupKeys.map((g) => {
+            const row = groups[g] || {};
+            return g + " d=" + (row.downloaded || 0) + " s=" + (row.skipped || 0) + " f=" + (row.failed || 0);
+          }).join(" · ")
+        : "无分组计数";
+      const err = document.getElementById("sync-error");
+      if (sync.last_error) {
+        err.hidden = false;
+        err.textContent = "last error: " + sync.last_error;
+      } else {
+        err.hidden = true;
+        err.textContent = "";
+      }
+      const journal = (sync.journal && sync.journal.tail) || [];
+      const jpre = document.getElementById("sync-journal");
+      if (journal.length) {
+        jpre.hidden = false;
+        jpre.textContent = journal.join("\n");
+      } else {
+        jpre.hidden = true;
+      }
+
+      const lastJob = s.last_job;
+      const jobPre = document.getElementById("job-log");
+      if (lastJob && (lastJob.stdout || lastJob.stderr || lastJob.error)) {
+        jobPre.hidden = false;
+        jobPre.textContent = [
+          "# " + (lastJob.action || "job") + " rc=" + (lastJob.returncode == null ? "—" : lastJob.returncode),
+          lastJob.stdout || "",
+          lastJob.stderr || "",
+          lastJob.error || "",
+        ].filter(Boolean).join("\n");
+      }
+
+      renderFailed(s.failed_queue || {});
 
       const url = (s.openlist && s.openlist.url) || "";
       const slot = document.getElementById("openlist-link");
@@ -207,6 +353,131 @@
       showQr("用 115 App 扫码（设备 " + data.device_type + "）", "");
       qrTimer = setInterval(() => pollQr(data.session_id), 1500);
     });
+
+    function renderFailed(queue) {
+      const body = document.getElementById("failed-body");
+      body.textContent = "";
+      const items = queue.items || [];
+      document.getElementById("failed-meta").textContent = queue.exists
+        ? (items.length + " / " + (queue.count || items.length) + (queue.truncated ? " · 已截断" : ""))
+        : "无 failed 目录";
+      items.forEach((item) => {
+        const tr = document.createElement("tr");
+        const checkTd = document.createElement("td");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = item.path || "";
+        cb.className = "failed-pick";
+        checkTd.appendChild(cb);
+        const pathTd = document.createElement("td");
+        pathTd.textContent = item.path || "";
+        const sizeTd = document.createElement("td");
+        sizeTd.textContent = fmtBytes(item.size);
+        const mtimeTd = document.createElement("td");
+        mtimeTd.textContent = item.mtime || "—";
+        tr.appendChild(checkTd);
+        tr.appendChild(pathTd);
+        tr.appendChild(sizeTd);
+        tr.appendChild(mtimeTd);
+        body.appendChild(tr);
+      });
+    }
+
+    function showBanner(el, msg, kind) {
+      el.hidden = false;
+      el.className = "banner " + (kind || "");
+      el.textContent = msg;
+    }
+
+    async function postJson(url, body) {
+      const r = await fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      if (r.status === 401) {
+        location.href = "/login";
+        throw new Error("auth");
+      }
+      const data = await r.json();
+      data._http = r.status;
+      return data;
+    }
+
+    function syncLimit() {
+      const n = Number(document.getElementById("sync-limit").value || 3);
+      return n;
+    }
+
+    function wireConfirm(box, buttons) {
+      const sync = () => buttons.forEach((btn) => { btn.disabled = !box.checked; });
+      box.addEventListener("change", sync);
+      sync();
+    }
+
+    const applyBox = document.getElementById("apply-confirm");
+    const imaApply = document.getElementById("ima-apply");
+    const ciccApply = document.getElementById("cicc-apply");
+    wireConfirm(applyBox, [imaApply, ciccApply]);
+    const requeueBox = document.getElementById("requeue-confirm");
+    wireConfirm(requeueBox, [
+      document.getElementById("requeue-selected"),
+      document.getElementById("requeue-all"),
+    ]);
+
+    async function runSync(kind, apply) {
+      const jobStatus = document.getElementById("job-status");
+      const jobLog = document.getElementById("job-log");
+      showBanner(jobStatus, apply ? "正在 apply…" : "正在 dry-run…", "");
+      const body = { limit: syncLimit() };
+      if (kind === "ima") body.group = document.getElementById("ima-group").value;
+      if (apply) body.confirm = true;
+      const url = apply ? "/api/sync/" + kind + "/apply" : "/api/sync/" + kind + "/dry-run";
+      const data = await postJson(url, body);
+      const snippet = [data.stdout, data.stderr, data.error].filter(Boolean).join("\n");
+      jobLog.hidden = !snippet;
+      jobLog.textContent = snippet || "";
+      showBanner(
+        jobStatus,
+        data.ok ? (data.action || kind) + " 完成" : (data.error || "失败"),
+        data.ok ? "banner-ok" : "banner-warn",
+      );
+      refresh();
+    }
+
+    document.getElementById("ima-dry").addEventListener("click", () => runSync("ima", false));
+    document.getElementById("ima-apply").addEventListener("click", () => runSync("ima", true));
+    document.getElementById("cicc-dry").addEventListener("click", () => runSync("cicc", false));
+    document.getElementById("cicc-apply").addEventListener("click", () => runSync("cicc", true));
+
+    async function runRequeue(all) {
+      const status = document.getElementById("requeue-status");
+      if (!document.getElementById("requeue-confirm").checked) {
+        showBanner(status, "请先确认", "banner-warn");
+        return;
+      }
+      const body = { confirm: true };
+      if (all) {
+        body.all = true;
+      } else {
+        body.paths = Array.from(document.querySelectorAll(".failed-pick:checked")).map((el) => el.value);
+        if (!body.paths.length) {
+          showBanner(status, "未选择文件", "banner-warn");
+          return;
+        }
+      }
+      const data = await postJson("/api/failed/requeue", body);
+      showBanner(
+        status,
+        data.ok ? ("已重入 " + (data.count || 0) + " 个") : (data.error || "重入失败"),
+        data.ok ? "banner-ok" : "banner-warn",
+      );
+      refresh();
+    }
+
+    document.getElementById("requeue-selected").addEventListener("click", () => runRequeue(false));
+    document.getElementById("requeue-all").addEventListener("click", () => runRequeue(true));
 
     render(statusBoot);
     setInterval(refresh, 8000);

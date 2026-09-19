@@ -35,15 +35,26 @@ services:
       # ARM_OPS_PASSWORD: ""
       P115_DEVICE_TYPE: harmony
       OPENLIST_PUBLIC_URL: http://127.0.0.1:5244/lab-hot
+      VPUSH_SCRIPTS_ROOT: /opt/vpush-ima-lab/src/scripts
+      VPUSH_CICC_COOKIE_FILE: /root/cicc/cookies.txt
+      # Optional: host venv if image Python lacks app.* deps for lab scripts
+      # VPUSH_PYTHON: /opt/vpush-ima-lab/.venv/bin/python
       # Optional: HTTP or file JSON from healthcheck.py
       # PULLER_HEALTH_URL: http://127.0.0.1:8099/health
       # PULLER_HEALTH_FILE: /data/vpush-ima-cache/logs/health.json
       # PULLER_CONTAINER_NAME: vpush-ima-lab-puller
     volumes:
-      - /data/vpush-ima-cache:/data/vpush-ima-cache:ro
+      # Phase 2: rw so requeue can move failed/ → staging/ and append
+      # logs/ops-audit.jsonl. Phase 1 often used :ro — that is not enough
+      # for requeue. Alternative: mount failed+staging+logs rw separately.
+      - /data/vpush-ima-cache:/data/vpush-ima-cache
+      # Host scripts (ima/cicc lab sync). Container is host-network.
+      - /opt/vpush-ima-lab/src:/opt/vpush-ima-lab/src:ro
       # rw only so QR login can replace 115-cookies.txt (0600). Do not
       # mount this into any public service.
       - /secrets:/secrets
+      # Optional: CICC cookie for confirmed lab triggers (400 if missing).
+      # - /root/cicc:/root/cicc:ro
       # Optional: puller container status when docker.sock is present.
       # - /var/run/docker.sock:/var/run/docker.sock:ro
     # Fallback if Tailscale is down: ARM_OPS_BIND=127.0.0.1 and SSH tunnel.

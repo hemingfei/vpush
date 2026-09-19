@@ -80,7 +80,7 @@ IMA 现网落盘是 `<group_id>__<hash>/<MMDD>/`（无年份）。中间层负�
 | ima lab sync | ARM 限量 list+download → staging，默认关 | `scripts/ima_arm_lab_sync.py` |
 | ima remap | 旧归档树拷进 staging，默认关 | `scripts/ima_to_arm_staging.py`（不下载） |
 | nfs-sync | hot/staging → 旧 NFS 布局 | **已落地（默认关）** `scripts/arm_nfs_sync.py`（`--enable` / `VPUSH_ARM_NFS_SYNC=1`；独立于中间层开关） |
-| arm-lab-ops | 实验室只读看板 + 115 QR | **phase 1** `arm-lab-ops/`（优先 Tailscale `:8055`；备选 loopback + SSH；不是生产后台） |
+| arm-lab-ops | 实验室看板 + 115 QR + 确认后的限量动作 | **phase 2** `arm-lab-ops/`（优先 Tailscale `:8055`；备选 loopback + SSH；不是生产后台；**不要**写进生产 compose） |
 
 ## 6. 开关
 
@@ -182,7 +182,7 @@ $VPUSH_ARM_STAGING_ROOT/local/ima/<group_id>/YYYY/MM/DD/<safe_filename>.pdf
 5. 阅读台切流 — 运维决策，见下方决策记录（本仓库不改 live UI、不改生产 compose）
 6. 实验室 puller 入库 — **已落地（宿主机原件）** `scripts/puller_loop.py` + `lab_common.py` + `manifest.py`（见 [puller_loop.md](../scripts/puller_loop.md)）；拷到 `/opt/vpush-ima-lab/scripts/`
 7. 中金 ARM 限量同步 — **已落地（默认关）** `scripts/cicc_arm_lab_sync.py`
-8. ARM 实验室运维面板 — **phase 1 已入库** `arm-lab-ops/`（只读状态 + 115 QR；不是阅读台 / 生产后台）
+8. ARM 实验室运维面板 — **phase 2 已入库** `arm-lab-ops/`（状态 + 115 QR + 确认后的 IMA/CICC 限量触发与 failed 重入；不是阅读台 / 生产后台）
 
 ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**（脚本在仓库，timer 由 ops 另做），不是生产 compose 服务。**不要把 `VPUSH_ARM_MIDDLEWARE=1` 写进生产 compose。**
 
@@ -197,14 +197,19 @@ ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**（脚本在�
 
 `arm_nfs_sync` 只生成兼容树，供以后挂载；**不**把生产 compose 指向 ARM，也**不**打开中间层采集。阅读台切流保持为后续 ops 决策。
 
-## 11. ARM 实验室运维面板（phase 1）
+## 11. ARM 实验室运维面板（phase 2）
 
-`arm-lab-ops/` 是给 Oracle-SJ-ARM 中间层用的薄运维 UI：看缓存水位、puller / timer、凭据是否在场，以及 **115 QR 写 Cookie**。它不是阅读台，也不是生产 vpush 后台。Phase 1 **没有**破坏性 apply / dry-run 按钮。
+`arm-lab-ops/` 是给 Oracle-SJ-ARM 中间层用的薄运维 UI：看缓存水位、puller / timer、凭据是否在场，以及 **115 QR 写 Cookie**。Phase 2 增加 **IMA 同步摘要**、**failed 重入 staging**、以及 **确认后的限量 IMA/CICC dry-run/apply**。它不是阅读台，也不是生产 vpush 后台。**不要把本服务或 `VPUSH_ARM_MIDDLEWARE=1` 写进生产 compose。**
 
 - **访问（口令仍要）：** Oracle-SJ-ARM 走 Tailscale。① 优先绑 Tailscale IPv4（`ARM_OPS_BIND=tailscale` 或 `tailscale ip -4` 的地址）`:8055`，同 tailnet 打开该 URL。② 备选 `127.0.0.1:8055` + `ssh -L 8055:127.0.0.1:8055`。③ **不要**在公网 NIC 发布 `0.0.0.0:8055`。uvicorn 绑 IP 不绑网卡名；compose 用 host 网络，见 `arm-lab-ops/docker-compose.snippet.yml`。也可用 `tailscale serve` 挂在 loopback 前面。
 - **口令：** `ARM_OPS_PASSWORD` 或 `/secrets/arm-ops-password.txt`。Session Cookie `arm_ops`（HttpOnly, SameSite=Lax）。
 - **115 QR：** 本面板拥有扫码写 `/secrets/115-cookies.txt`（0600）的路径；JSON **只回** `{ok, cookie_len}`，不回 Cookie 正文。设备默认 `harmony`，与 p115client apps 一致。缺 `p115client` 则扫码失败并保持关闭。
 - **IMA：** 只显示 `{present, mtime, uid_len}`。**不做 IMA 扫码**——换票仍在 Mac 上走 `ima_phone_sync`，再把 `ima-pure.json` 放到 secrets。
+- **同步摘要：** 解析最新 `$CACHE_ROOT/logs/ima-lab-sync-*.log`（每组 downloaded/skipped/failed、最后错误行已脱敏）；timer 用 `systemctl show vpush-ima-lab-sync.timer` 看 active / next（best-effort）。可选 journal 片段。
+- **failed 重入：** `POST /api/failed/requeue`（须登录 + `confirm:true`）。把 `$CACHE_ROOT/failed/` 下相对路径移回 `staging/`，去掉 `.retry.json`。审计写 `$CACHE_ROOT/logs/ops-audit.jsonl`（无 secrets）。
+- **限量触发：** wrap `scripts/ima_arm_lab_sync.py` / `scripts/cicc_arm_lab_sync.py`。凭据走环境变量文件路径，**不把 secrets 放到命令行**。apply 须 `confirm:true`，`limit<=5`（默认 3）。IMA group 白名单：`legacy`、`7479082602225992`、`7476629605476515`、`7437050366161003`。CICC 缺 Cookie 文件返回明确 400；不绕过采集器配额/熔断。
+- **水位：** 对照 `CACHE_WARN_GB=30` / `CACHE_FORCE_GB=35`（与 `lab_common` GC 旋钮一致）。
+- **挂载：** phase 2 需要 `CACHE_ROOT` **rw**（requeue / audit）。host-network 容器 bind-mount `/opt/vpush-ima-lab/src` 才能 exec 宿主机脚本（`VPUSH_SCRIPTS_ROOT`）。
 - **OpenList：** 看板上的 `/lab-hot` 链接来自 `OPENLIST_PUBLIC_URL`（只读浏览热缓存，不暴露 115）。
 
 本地跑法与 ARM 合入步骤见 [arm-lab-ops/README.md](../arm-lab-ops/README.md)。
