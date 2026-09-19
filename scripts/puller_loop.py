@@ -453,7 +453,10 @@ def main(
     wait = sleeper or time.sleep
 
     def one_pass() -> int:
-        manifest = LabManifest(manifest_path)
+        manifest = None
+        # Dry-run must not mkdir host cache paths (e.g. /data/vpush-ima-cache).
+        if (not dry_run) or manifest_path.is_file():
+            manifest = LabManifest(manifest_path)
         try:
             planned = plan_uploads(
                 staging_root,
@@ -500,7 +503,8 @@ def main(
             )
             return 1 if stats["failed"] else 0
         finally:
-            manifest.close()
+            if manifest is not None:
+                manifest.close()
 
     if args.loop and not args.once:
         while True:

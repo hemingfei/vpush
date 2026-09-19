@@ -103,6 +103,15 @@ def test_plan_skips_manifest_hits(tmp_path):
     manifest.close()
 
 
+def test_dry_run_does_not_create_missing_manifest(tmp_path, capsys):
+    staging = tmp_path / "no-such-staging"
+    manifest = tmp_path / "does-not-exist" / "lab.sqlite"
+    code = puller.main(["--staging-root", str(staging), "--manifest", str(manifest)])
+    assert code == 0
+    assert "无待上传" in capsys.readouterr().out
+    assert not manifest.parent.exists()
+
+
 def test_dry_run_lists_and_does_not_upload(tmp_path, capsys):
     staging = tmp_path / "cache" / "staging"
     _write_pdf(staging, "local/cicc-research/2026/08/01/a_1.pdf")
