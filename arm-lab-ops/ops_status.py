@@ -12,11 +12,21 @@ from pathlib import Path
 from typing import Any
 
 from ops_settings import (
+    FAILED_LIST_CAP,
+    IMA_SYNC_LOG_GLOB,
+    JOURNAL_LINES,
+    LAST_JOB_NAME,
     LOG_FILE_CAP,
     LOG_TAIL_LINES,
+    SKIP_SUFFIXES,
     WALK_FILE_CAP,
     WALK_SECONDS_CAP,
+    cache_force_bytes,
+    cache_force_gb,
     cache_root,
+    cache_warn_bytes,
+    cache_warn_gb,
+    cicc_cookie_path,
     cookies_path,
     docker_sock,
     ima_secrets_path,
@@ -57,6 +67,20 @@ _SAFE_HEALTH_KEYS = {
     "last_ok",
     "last_error",
     "pid",
+    "uploaded_count",
+    "failed_count",
+    "skipped_count",
+    "tick_ok",
+    "tick_fail",
+    "tick_skip",
+    "action",
+    "argv",
+    "returncode",
+    "timeout",
+    "stdout",
+    "stderr",
+    "limit",
+    "group",
 }
 
 
@@ -327,8 +351,61 @@ def docker_status() -> dict[str, Any]:
     return {"available": sock.exists(), "source": None, "containers": []}
 
 
+def _parse_systemctl_show(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for line in (text or "").splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        out[key.strip()] = value.strip()
+    return out
+
+
+def _systemctl_show_timer(name: str) -> dict[str, Any] | None:
+    try:
+        proc = subprocess.run(
+            [
+                "systemctl",
+                "show",
+                name,
+                "--property=ActiveState,UnitFileState,NextElapseUSecRealtime,LastTriggerUSec",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    props = _parse_systemctl_show(proc.stdout)
+    if not props:
+        return None
+
+    def _clean(raw: str | None) -> str | None:
+        value = (raw or "").strip()
+        if not value or value.lower() in {"n/a", "0", "none"}:
+            return None
+        return value
+
+    known = {"active", "inactive", "failed", "activating", "deactivating"}
+    active = (props.get("ActiveState") or "").strip()
+    return {
+        "unit": name,
+        "active": active if active in known else (active or "unknown"),
+        "detail": None,
+        "enabled": _clean(props.get("UnitFileState")),
+        "next": _clean(props.get("NextElapseUSecRealtime")),
+        "last_trigger": _clean(props.get("LastTriggerUSec")),
+    }
+
+
 def timer_status(unit: str | None = None) -> dict[str, Any]:
     name = unit or timer_unit()
+    shown = _systemctl_show_timer(name)
+    if shown is not None:
+        return shown
     known = {"active", "inactive", "failed", "activating", "deactivating"}
     try:
         proc = subprocess.run(
@@ -339,12 +416,24 @@ def timer_status(unit: str | None = None) -> dict[str, Any]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"unit": name, "active": "unknown", "detail": type(exc).__name__}
+        return {
+            "unit": name,
+            "active": "unknown",
+            "detail": type(exc).__name__,
+            "next": None,
+            "last_trigger": None,
+        }
     active = (proc.stdout or "").strip()
     if active in known:
-        return {"unit": name, "active": active, "detail": None}
+        return {"unit": name, "active": active, "detail": None, "next": None, "last_trigger": None}
     err = redact((proc.stderr or active or "unavailable").splitlines()[0])
-    return {"unit": name, "active": "unavailable", "detail": err[:80]}
+    return {
+        "unit": name,
+        "active": "unavailable",
+        "detail": err[:80],
+        "next": None,
+        "last_trigger": None,
+    }
 
 
 def log_tails(root: Path, limit: int = LOG_TAIL_LINES) -> list[dict[str, Any]]:
@@ -365,6 +454,328 @@ def log_tails(root: Path, limit: int = LOG_TAIL_LINES) -> list[dict[str, Any]]:
         tail = [redact(line) for line in lines[-limit:]]
         out.append({"name": path.name, "mtime": iso_mtime(path), "tail": tail})
     return out
+
+
+_SYNC_GROUP_RE = re.compile(r"\bgroup=([A-Za-z0-9:_-]+)")
+_SYNC_COUNTS_RE = re.compile(
+    r"downloaded=(\d+)\s+skipped=(\d+)\s+failed=(\d+)",
+    re.IGNORECASE,
+)
+_SYNC_ERROR_RE = re.compile(r"\b(FAIL|ERROR|失败|Traceback)\b", re.IGNORECASE)
+
+
+def skip_cache_file(path: Path) -> bool:
+    name = path.name
+    if name.startswith((".", "#")):
+        return True
+    lowered = name.lower()
+    return any(lowered.endswith(suf) for suf in SKIP_SUFFIXES)
+
+
+def latest_ima_sync_log(root: Path | None = None) -> Path | None:
+    log_dir = (root or cache_root()) / "logs"
+    if not log_dir.is_dir():
+        return None
+    matches = [p for p in log_dir.glob(IMA_SYNC_LOG_GLOB) if p.is_file()]
+    if not matches:
+        return None
+    matches.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    return matches[0]
+
+
+def parse_ima_sync_log(path: Path) -> dict[str, Any]:
+    """Redacted summary of an ima-lab-sync-*.log (last run + per-group counts)."""
+    empty = {
+        "log": path.name if path else None,
+        "mtime": iso_mtime(path) if path and path.is_file() else None,
+        "last_run": None,
+        "groups": {},
+        "totals": {"downloaded": 0, "skipped": 0, "failed": 0},
+        "last_error": None,
+    }
+    if not path.is_file():
+        return empty
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return empty
+    if len(text) > 400_000:
+        text = text[-400_000:]
+    lines = text.splitlines()
+    groups: dict[str, dict[str, int]] = {}
+    group_has_summary: set[str] = set()
+    current = "unknown"
+    last_error = None
+    last_run = iso_mtime(path)
+
+    def bucket(name: str) -> dict[str, int]:
+        if name not in groups:
+            groups[name] = {"downloaded": 0, "skipped": 0, "failed": 0}
+        return groups[name]
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        gmatch = _SYNC_GROUP_RE.search(line)
+        if gmatch:
+            current = gmatch.group(1)
+        cmatch = _SYNC_COUNTS_RE.search(line)
+        if cmatch:
+            row = bucket(current)
+            row["downloaded"] = int(cmatch.group(1))
+            row["skipped"] = int(cmatch.group(2))
+            row["failed"] = int(cmatch.group(3))
+            group_has_summary.add(current)
+            continue
+        kind = line.split(None, 1)[0].upper() if line.split() else ""
+        if current not in group_has_summary:
+            if kind in {"SYNC", "DOWNLOADED"}:
+                bucket(current)["downloaded"] += 1
+            elif kind in {"SKIP", "SKIPPED"}:
+                bucket(current)["skipped"] += 1
+            elif kind == "FAIL":
+                bucket(current)["failed"] += 1
+        if _SYNC_ERROR_RE.search(line):
+            last_error = redact(line)
+
+    totals = {"downloaded": 0, "skipped": 0, "failed": 0}
+    for row in groups.values():
+        for key in totals:
+            totals[key] += row[key]
+    return {
+        "log": path.name,
+        "mtime": iso_mtime(path),
+        "last_run": last_run,
+        "groups": groups,
+        "totals": totals,
+        "last_error": last_error,
+    }
+
+
+def journal_snippet(unit: str | None = None) -> dict[str, Any]:
+    """Best-effort redacted journal tail for the lab sync service."""
+    timer = unit or timer_unit()
+    service = timer[:-6] + ".service" if timer.endswith(".timer") else timer
+    try:
+        proc = subprocess.run(
+            ["journalctl", "-u", service, "-n", str(JOURNAL_LINES), "--no-pager", "-o", "cat"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"available": False, "unit": service, "tail": [], "detail": type(exc).__name__}
+    if proc.returncode != 0:
+        err = redact((proc.stderr or "unavailable").splitlines()[0]) if proc.stderr else "unavailable"
+        return {"available": False, "unit": service, "tail": [], "detail": err[:80]}
+    tail = [redact(line) for line in (proc.stdout or "").splitlines() if line.strip()]
+    return {"available": True, "unit": service, "tail": tail[-20:], "detail": None}
+
+
+def sync_summary(root: Path | None = None) -> dict[str, Any]:
+    target = latest_ima_sync_log(root)
+    if target is None:
+        summary: dict[str, Any] = {
+            "log": None,
+            "mtime": None,
+            "last_run": None,
+            "groups": {},
+            "totals": {"downloaded": 0, "skipped": 0, "failed": 0},
+            "last_error": None,
+        }
+    else:
+        summary = parse_ima_sync_log(target)
+    journal = journal_snippet()
+    summary["journal"] = journal
+    return summary
+
+
+def list_failed_files(root: Path | None = None, cap: int = FAILED_LIST_CAP) -> dict[str, Any]:
+    failed = (root or cache_root()) / "failed"
+    if not failed.exists():
+        return {"exists": False, "items": [], "count": 0, "truncated": False, "cap": cap}
+    items: list[dict[str, Any]] = []
+    truncated = False
+    seen = 0
+    stack = [failed]
+    deadline = time.monotonic() + WALK_SECONDS_CAP
+    while stack:
+        if time.monotonic() >= deadline:
+            truncated = True
+            break
+        current = stack.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_symlink():
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(Path(entry.path))
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                path = Path(entry.path)
+                if skip_cache_file(path):
+                    continue
+                seen += 1
+                try:
+                    rel = path.resolve().relative_to(failed.resolve()).as_posix()
+                except ValueError:
+                    continue
+                if ".." in Path(rel).parts:
+                    continue
+                stat = entry.stat(follow_symlinks=False)
+                items.append(
+                    {
+                        "path": rel,
+                        "size": int(stat.st_size),
+                        "mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        ),
+                    }
+                )
+            except OSError:
+                continue
+    items.sort(key=lambda row: row.get("mtime") or "", reverse=True)
+    if len(items) > cap:
+        truncated = True
+        items = items[:cap]
+    return {
+        "exists": True,
+        "items": items,
+        "count": seen,
+        "truncated": truncated,
+        "cap": cap,
+    }
+
+
+def cache_waterline(root: Path | None = None) -> dict[str, Any]:
+    target = root or cache_root()
+    staging = walk_usage(target / "staging")
+    hot = walk_usage(target / "hot")
+    failed = walk_usage(target / "failed")
+    used = int(staging.get("bytes") or 0) + int(hot.get("bytes") or 0) + int(failed.get("bytes") or 0)
+    warn = cache_warn_bytes()
+    force = cache_force_bytes()
+    level = "ok"
+    if used >= force:
+        level = "force"
+    elif used >= warn:
+        level = "warn"
+    pct = round((used / force) * 100, 1) if force else 0.0
+    return {
+        "used_bytes": used,
+        "warn_bytes": warn,
+        "force_bytes": force,
+        "warn_gb": cache_warn_gb(),
+        "force_gb": cache_force_gb(),
+        "used_pct_of_force": pct,
+        "level": level,
+        "truncated": bool(
+            staging.get("truncated") or hot.get("truncated") or failed.get("truncated")
+        ),
+    }
+
+
+def _count_uploads_jsonl(path: Path, line_cap: int = 200) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    ok = fail = 0
+    for line in lines[-line_cap:]:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        if row.get("ok") is True:
+            ok += 1
+        elif row.get("ok") is False:
+            fail += 1
+    return {"ok": ok, "fail": fail, "source": "uploads.jsonl", "window": f"last_{min(len(lines), line_cap)}"}
+
+
+def _count_uploads_sqlite(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1.0)
+        try:
+            row = conn.execute(
+                "SELECT "
+                "SUM(CASE WHEN status IN ('uploaded','hot') THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) "
+                "FROM files"
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    if not row:
+        return None
+    return {
+        "ok": int(row[0] or 0),
+        "fail": int(row[1] or 0),
+        "source": "lab.sqlite",
+        "window": "all",
+    }
+
+
+def puller_upload_counts(root: Path | None = None) -> dict[str, Any]:
+    target = root or cache_root()
+    jsonl = _count_uploads_jsonl(target / "manifest" / "uploads.jsonl")
+    if jsonl is not None:
+        return jsonl
+    heartbeat = target / "manifest" / "puller-heartbeat.json"
+    payload = _json_from_path(heartbeat)
+    if isinstance(payload, dict):
+        tick_ok = payload.get("tick_ok")
+        tick_fail = payload.get("tick_fail")
+        if isinstance(tick_ok, int) or isinstance(tick_fail, int):
+            return {
+                "ok": int(tick_ok or 0),
+                "fail": int(tick_fail or 0),
+                "source": "heartbeat",
+                "window": "last_tick",
+            }
+        uploaded = payload.get("uploaded_count")
+        failed = payload.get("failed_count")
+        if isinstance(uploaded, int) or isinstance(failed, int):
+            return {
+                "ok": int(uploaded or 0),
+                "fail": int(failed or 0),
+                "source": "heartbeat",
+                "window": "lifetime",
+            }
+    sqlite = _count_uploads_sqlite(target / "manifest" / "lab.sqlite")
+    if sqlite is not None:
+        return sqlite
+    return {"ok": 0, "fail": 0, "source": "none", "window": None}
+
+
+def read_last_job(root: Path | None = None) -> dict[str, Any] | None:
+    path = (root or cache_root()) / "logs" / LAST_JOB_NAME
+    payload = _json_from_path(path)
+    if not isinstance(payload, dict):
+        return None
+    cleaned = sanitize_health(payload)
+    if not isinstance(cleaned, dict):
+        return None
+    for key in ("stdout", "stderr", "error"):
+        if isinstance(cleaned.get(key), str):
+            cleaned[key] = redact(cleaned[key])
+    return cleaned
 
 
 def collect_status() -> dict[str, Any]:
@@ -393,15 +804,20 @@ def collect_status() -> dict[str, Any]:
             "root": str(root),
             "exists": root.exists(),
             "disk": disk_usage(root) if root.exists() or root.parent.exists() else None,
+            "waterline": cache_waterline(root),
             "staging": walk_usage(root / "staging"),
             "hot": walk_usage(root / "hot"),
             "failed": walk_usage(root / "failed"),
         },
+        "failed_queue": list_failed_files(root),
+        "sync": sync_summary(root),
+        "last_job": read_last_job(root),
         "puller": {
             "source": source,
             "docker": docker,
             "health": url_health or file_health,
             "timer": timer,
+            "uploads": puller_upload_counts(root),
             "logs": log_tails(root),
         },
         "ima": {
@@ -409,5 +825,6 @@ def collect_status() -> dict[str, Any]:
             "note": "IMA QR is not on this panel. Use Mac ima_phone_sync.",
         },
         "p115": cookie_meta(),
+        "cicc": cookie_meta(cicc_cookie_path()),
         "openlist": {"url": openlist_public_url()},
     }

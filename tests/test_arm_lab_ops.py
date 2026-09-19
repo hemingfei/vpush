@@ -137,6 +137,10 @@ def test_auth_required_for_status_and_qr(client):
     assert client.get("/api/status").status_code == 401
     assert client.post("/api/115/qr/start", json={"device_type": "harmony"}).status_code == 401
     assert client.get("/api/115/qr/status", params={"session_id": "x"}).status_code == 401
+    assert client.post("/api/failed/requeue", json={"confirm": True, "all": True}).status_code == 401
+    assert client.post("/api/sync/ima/dry-run", json={"limit": 1}).status_code == 401
+    assert client.post("/api/sync/ima/apply", json={"confirm": True, "limit": 1}).status_code == 401
+    assert client.post("/api/sync/cicc/apply", json={"confirm": True, "limit": 1}).status_code == 401
     home = client.get("/", follow_redirects=False)
     assert home.status_code in {303, 307}
     assert home.headers["location"].endswith("/login")
@@ -314,12 +318,15 @@ def test_bind_tailscale_missing_falls_back_to_loopback(monkeypatch):
     assert bind_host(runner=boom) == "127.0.0.1"
 
 
-def test_dashboard_has_no_apply_button(client):
+def test_dashboard_phase2_has_confirmed_apply(client):
     assert _login(client).status_code == 303
     html = client.get("/").text
-    lower = html.lower()
-    assert "dry-run" not in lower
-    assert 'id="apply"' not in lower
-    assert "破坏" not in html
     assert "ima_phone_sync" in html
     assert "开始扫码" in html
+    assert "IMA apply" in html
+    assert "CICC apply" in html
+    assert 'id="apply-confirm"' in html
+    assert 'id="requeue-confirm"' in html
+    assert "/api/115/qr/ima" not in html
+    assert "本面板不做 IMA 扫码" in html
+    assert 'id="ima-qr"' not in html

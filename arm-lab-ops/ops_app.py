@@ -10,14 +10,23 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-
-from ops_auth import COOKIE_KWARGS, issue_session, password_configured, session_ok, verify_password
+from ops_actions import ActionError, cicc_sync, ima_sync, requeue_failed
+from ops_auth import (
+    COOKIE_KWARGS,
+    issue_session,
+    password_configured,
+    session_ok,
+    verify_password,
+)
 from ops_qr115 import QRError, QRManager
 from ops_settings import (
     BIND_ALL_WARNING,
     DEFAULT_HOST,
+    IMA_GROUP_ALLOWLIST,
     P115_DEVICE_TYPES,
     SESSION_COOKIE,
+    SYNC_LIMIT_DEFAULT,
+    SYNC_LIMIT_MAX,
     TAILSCALE_BIND_TOKENS,
     TAILSCALE_MISSING_WARNING,
     bind_host,
@@ -46,6 +55,24 @@ def create_app() -> FastAPI:
 
     def unauthorized() -> JSONResponse:
         return JSONResponse({"ok": False, "error": "auth required"}, status_code=401)
+
+    async def read_json_body(request: Request) -> dict:
+        ctype = request.headers.get("content-type", "")
+        if "application/json" in ctype:
+            try:
+                body = await request.json()
+            except Exception:
+                return {}
+            return body if isinstance(body, dict) else {}
+        try:
+            form = await request.form()
+        except Exception:
+            return {}
+        return {str(key): form.get(key) for key in form}
+
+    def action_error(exc: ActionError) -> JSONResponse:
+        log.warning("action failed: %s", redact(str(exc)))
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=exc.status_code)
 
     @app.get("/healthz")
     def healthz() -> dict:
@@ -109,6 +136,9 @@ def create_app() -> FastAPI:
                 "status_json": json.dumps(status, ensure_ascii=False).replace("<", "\\u003c"),
                 "device_types": P115_DEVICE_TYPES,
                 "default_device": default_device_type(),
+                "ima_groups": IMA_GROUP_ALLOWLIST,
+                "sync_limit_default": SYNC_LIMIT_DEFAULT,
+                "sync_limit_max": SYNC_LIMIT_MAX,
             },
         )
 
@@ -149,6 +179,56 @@ def create_app() -> FastAPI:
         except QRError as exc:
             log.warning("qr poll failed: %s", exc)
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.post("/api/failed/requeue")
+    async def failed_requeue(request: Request):
+        if not logged_in(request):
+            return unauthorized()
+        body = await read_json_body(request)
+        try:
+            return requeue_failed(body)
+        except ActionError as exc:
+            return action_error(exc)
+
+    @app.post("/api/sync/ima/dry-run")
+    async def sync_ima_dry_run(request: Request):
+        if not logged_in(request):
+            return unauthorized()
+        body = await read_json_body(request)
+        try:
+            return ima_sync(body, dry_run=True)
+        except ActionError as exc:
+            return action_error(exc)
+
+    @app.post("/api/sync/ima/apply")
+    async def sync_ima_apply(request: Request):
+        if not logged_in(request):
+            return unauthorized()
+        body = await read_json_body(request)
+        try:
+            return ima_sync(body, dry_run=False)
+        except ActionError as exc:
+            return action_error(exc)
+
+    @app.post("/api/sync/cicc/dry-run")
+    async def sync_cicc_dry_run(request: Request):
+        if not logged_in(request):
+            return unauthorized()
+        body = await read_json_body(request)
+        try:
+            return cicc_sync(body, dry_run=True)
+        except ActionError as exc:
+            return action_error(exc)
+
+    @app.post("/api/sync/cicc/apply")
+    async def sync_cicc_apply(request: Request):
+        if not logged_in(request):
+            return unauthorized()
+        body = await read_json_body(request)
+        try:
+            return cicc_sync(body, dry_run=False)
+        except ActionError as exc:
+            return action_error(exc)
 
     return app
 
