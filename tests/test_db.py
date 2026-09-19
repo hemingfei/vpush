@@ -2058,6 +2058,31 @@ def test_news_source_archive_preserves_user_relation(tmp_path):
     assert source_id in db.list_user_news_source_ids(uid)
 
 
+def test_news_source_hard_delete_cascades_related_rows(tmp_path):
+    db = DB(str(tmp_path / "delete.db"))
+    uid = db.add_user("reader", "hash")
+    source_id = db.add_news_source("待删媒体")
+    feed_id = db.add_news_feed(
+        source_id, "主源", "https://feed.example/rss", "https://feed.example/rss"
+    )
+    db.set_user_news_sources(uid, [source_id])
+    db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "guid-1",
+        "title": "First", "url": "https://example.com/1", "author": "A",
+        "summary": "S", "content_html": "<p>One</p>", "images": [],
+        "published_at": "2026-09-01T00:00:00+00:00",
+        "fetched_at": "2026-09-01T00:01:00+00:00", "content_hash": "h1",
+    })
+    db.set_news_source_archived(source_id, True)
+    assert db.delete_news_source(source_id)["id"] == source_id
+    assert db.delete_news_source(source_id) is None
+    assert db.get_news_source(source_id) is None
+    assert db.list_news_feeds(source_id, include_archived=True) == []
+    assert db.list_user_news_source_ids(uid) == []
+    assert db.count_news_articles_for_source(source_id) == 0
+    db.close()
+
+
 def test_news_article_upsert_updates_without_duplicate(tmp_path):
     db = DB(str(tmp_path / "article.db"))
     source_id = db.add_news_source("测试媒体")

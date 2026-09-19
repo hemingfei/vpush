@@ -2659,6 +2659,15 @@ def create_api_router(
         _audit(admin, "news_source_restore", str(source_id))
         return {"ok": True}
 
+    @router.delete("/admin/news/sources/{source_id}")
+    def delete_admin_news_source(source_id: int, admin: dict = Depends(require_admin)):
+        source = _admin_news_source(source_id)
+        if not source["archived_at"]:
+            raise HTTPException(status_code=400, detail="请先归档媒体，再彻底删除")
+        db.delete_news_source(source_id)
+        _audit(admin, "news_source_delete", str(source_id), source["name"])
+        return {"ok": True}
+
     @router.post("/admin/news/sources/{source_id}/refresh")
     def refresh_admin_news_source(
         source_id: int, response: Response, admin: dict = Depends(require_admin)

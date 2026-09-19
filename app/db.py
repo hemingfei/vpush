@@ -3232,6 +3232,35 @@ class DB:
             (datetime.now(UTC).isoformat() if archived else None, source_id),
         )
 
+    def delete_news_source(self, source_id: int) -> dict | None:
+        """硬删除媒体并级联清除其文章、用户订阅与全部 Feed；调用方须先归档。"""
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                rows = self._conn.execute(
+                    "SELECT * FROM news_sources WHERE id = ?", (source_id,)
+                ).fetchall()
+                if not rows:
+                    self._conn.rollback()
+                    return None
+                self._conn.execute(
+                    "DELETE FROM news_articles WHERE source_id = ?", (source_id,)
+                )
+                self._conn.execute(
+                    "DELETE FROM user_news_sources WHERE source_id = ?", (source_id,)
+                )
+                self._conn.execute(
+                    "DELETE FROM news_feeds WHERE source_id = ?", (source_id,)
+                )
+                self._conn.execute(
+                    "DELETE FROM news_sources WHERE id = ?", (source_id,)
+                )
+                self._conn.commit()
+                return rows[0]
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def list_news_feeds(
         self, source_id: int | None = None, include_archived: bool = False
     ) -> list[dict]:

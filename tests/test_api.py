@@ -116,6 +116,28 @@ def test_news_source_selection_and_invalid_selection_are_authenticated():
     assert client.get("/api/news/sources").status_code == 401
 
 
+def test_admin_news_source_hard_delete_requires_archive():
+    client = make_client("news-delete-api.db")
+    headers = auth_headers(client)
+    db = client.app.state.db
+    source_id = db.add_news_source("硬删媒体")
+    assert client.delete("/api/admin/news/sources/x", headers=headers).status_code == 422
+    assert client.delete(
+        f"/api/admin/news/sources/{source_id}", headers={"Authorization": "Bearer nope"}
+    ).status_code == 401
+    assert client.delete(
+        f"/api/admin/news/sources/{source_id}", headers=headers
+    ).status_code == 400
+    db.set_news_source_archived(source_id, True)
+    assert client.delete(
+        f"/api/admin/news/sources/{source_id}", headers=headers
+    ).status_code == 200
+    assert db.get_news_source(source_id) is None
+    assert client.delete(
+        f"/api/admin/news/sources/{source_id}", headers=headers
+    ).status_code == 404
+
+
 def test_news_seen_rejects_naive_timestamp_and_moves_forward_only():
     client = make_client("news-seen-api.db")
     headers = user_headers(client, "news_seen_user")
