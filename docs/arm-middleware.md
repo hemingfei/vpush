@@ -3,7 +3,7 @@
 日期：2026-09-19 · 状态：仓库已落地适配（**默认关**，含 nfs-sync）· 现网仍只读浏览、不采集  
 主机：Oracle-SJ-ARM（约 45G）· OpenList 实验根 `/lab-hot`（**不暴露 115**）
 
-采集默认仍写存储机 POSIX/NFS 布局。打开中间层后，采集器只写 ARM staging；上传只走宿主机 puller；存储恢复后再用 `arm_nfs_sync`（默认关）生成旧 NFS 布局。生产 compose 不打开中间层或 nfs-sync 开关。
+采集默认仍写存储机 POSIX/NFS 布局。打开中间层后，采集器只写 ARM staging；上传只走仓库内的 `scripts/puller_loop.py`（部署到 `/opt/vpush-ima-lab/scripts/`，宿主机 systemd）；存储恢复后再用 `arm_nfs_sync`（默认关）生成旧 NFS 布局。生产 compose 不打开中间层或 nfs-sync 开关，也不跑 puller。
 
 ## 1. 目标
 
@@ -72,9 +72,10 @@ IMA 现网落盘是 `<group_id>__<hash>/<MMDD>/`（无年份）。中间层负�
 
 | 组件 | 职责 | 现状 |
 |---|---|---|
-| puller 容器 | staging→115；清单；失败重试 | ARM **宿主机 systemd**（不在本仓库；不是生产 compose）。`scripts/puller_retry.py` 给 Multipart/空 filesha1 flake 重试后再进 `failed/` |
+| puller_loop | staging→115；清单；失败重试 | **已入库** `scripts/puller_loop.py`（拷到 `/opt/vpush-ima-lab/scripts/`；宿主机 systemd，不是生产 compose）。`call_with_retry` 处理 Multipart/空 filesha1，耗尽后进 `failed/` |
 | OpenList | 只读浏览 hot | `/lab-hot` 日期入口；115 disabled |
 | cicc 适配 | 写 staging 日期分片，默认关 | `scripts/cicc_report_collector.py` |
+| cicc lab sync | ARM 限量 list+download → staging，默认关 | `scripts/cicc_arm_lab_sync.py` |
 | ima live write | 新 PDF 直接写 staging 日期分片，默认关 | `app/ima_documents.py`（`VPUSH_ARM_MIDDLEWARE=1`） |
 | ima lab sync | ARM 限量 list+download → staging，默认关 | `scripts/ima_arm_lab_sync.py` |
 | ima remap | 旧归档树拷进 staging，默认关 | `scripts/ima_to_arm_staging.py`（不下载） |
@@ -89,7 +90,7 @@ IMA 现网落盘是 `<group_id>__<hash>/<MMDD>/`（无年份）。中间层负�
 - `VPUSH_ARM_NFS_SYNC=1` 或 `--enable`（`arm_nfs_sync.py`）：存储恢复后映射 hot → 旧 NFS；**独立于**中间层开关；默认 dry-run，须 `--dest` / `VPUSH_NFS_SYNC_DEST`
 - 上传仅由 puller 负责；禁止采集器直写 OpenList/FUSE
 - IMA 打开中间层后不走 `IMA_PULL_URL`（存储机 NFS puller）；旧归档 remap 仍用 `scripts/ima_to_arm_staging.py`
-- **上传只走 ARM 宿主机 `puller_loop`（systemd，不在本仓库）**；`ima_arm_lab_sync` / `arm_nfs_sync` 都不上传 115
+- **上传只走 `scripts/puller_loop.py`**（ARM 宿主机 systemd 调用；拷到 `/opt/vpush-ima-lab/scripts/`）；`ima_arm_lab_sync` / `cicc_arm_lab_sync` / `arm_nfs_sync` 都不上传 115
 - **不要把 `VPUSH_ARM_MIDDLEWARE=1` 写进生产 compose**（也不要写 `VPUSH_ARM_NFS_SYNC=1`）
 
 CLI 兼容：不传新 flag、不设新环境变量时，`--root` 仍默认 `/srv/vpush-ima/local`，布局仍是 `<品类>/<MMDD>/`，属主 99:100 仅在该经典根且以 root 跑时执行。
@@ -113,6 +114,16 @@ $VPUSH_ARM_STAGING_ROOT/local/cicc-research/YYYY/MM/DD/<sanitized>_<id>.pdf
 $VPUSH_ARM_STAGING_ROOT/local/cicc-research/YYYY/MM/DD/<sanitized>_<id>.json
 ```
 
+ARM 实验室限量同步（默认关；启用后默认 dry-run；`--apply` 才下载；不上传 115）：
+
+```bash
+python3 scripts/cicc_arm_lab_sync.py
+python3 scripts/cicc_arm_lab_sync.py --enable --dry-run --limit 3 --days 7
+python3 scripts/cicc_arm_lab_sync.py --arm-middleware --apply --limit 3 --days 7
+```
+
+Cookie 走 `VPUSH_CICC_COOKIE_FILE` / `--cookie-file`（与采集器相同，不打日志）。配额/熔断不绕过。说明见 [cicc_arm_lab_sync.md](../scripts/cicc_arm_lab_sync.md)。
+
 离线自检（不访问中金）：`python3 cicc_report_collector.py --self-test`
 
 手册见 [cicc-report-collector.md](cicc-report-collector.md)。
@@ -125,7 +136,7 @@ $VPUSH_ARM_STAGING_ROOT/local/cicc-research/YYYY/MM/DD/<sanitized>_<id>.json
 2. **Remap** — `scripts/ima_to_arm_staging.py` 只拷已有归档树，不从 IMA 下载。
 3. **Lab sync** — `scripts/ima_arm_lab_sync.py` 在 ARM 上 list + 限量 download → staging。默认关；启用后默认 dry-run。
 
-未开中间层时，puller / 文档中心仍写存储机 `<group>/<MMDD>/`。**115 仍由 puller_loop 上传**，采集脚本不直写对象仓。
+未开中间层时，puller / 文档中心仍写存储机 `<group>/<MMDD>/`。**115 仍由 `scripts/puller_loop.py` 上传**，采集脚本不直写对象仓。
 
 ```bash
 # live：离线打印落盘路径（不下载、不读凭据）
@@ -166,8 +177,10 @@ $VPUSH_ARM_STAGING_ROOT/local/ima/<group_id>/YYYY/MM/DD/<safe_filename>.pdf
 3. IMA live write + 旧树 remap + ARM lab sync（已落地；默认关）
 4. 存储恢复后：NFS 兼容同步器 — **已落地（默认关）** `scripts/arm_nfs_sync.py`（见 [arm_nfs_sync.md](../scripts/arm_nfs_sync.md)）
 5. 阅读台切流 — 运维决策，见下方决策记录（本仓库不改 live UI、不改生产 compose）
+6. 实验室 puller 入库 — **已落地** `scripts/puller_loop.py`（见 [puller_loop.md](../scripts/puller_loop.md)）；拷到 `/opt/vpush-ima-lab/scripts/`
+7. 中金 ARM 限量同步 — **已落地（默认关）** `scripts/cicc_arm_lab_sync.py`
 
-ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**，不是生产 compose 服务。部署与 timer 由 ops 另做；**不要把 `VPUSH_ARM_MIDDLEWARE=1` 写进生产 compose。**
+ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**（脚本在仓库，timer 由 ops 另做），不是生产 compose 服务。**不要把 `VPUSH_ARM_MIDDLEWARE=1` 写进生产 compose。**
 
 ### 10.1 阅读台切流决策记录（item 5）
 
