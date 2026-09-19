@@ -2,6 +2,8 @@
 
 日期：2026-08-29 · 脚本：`scripts/cicc_report_collector.py` · 部署位置：存储 VPS `/root/cicc/`
 
+ARM 中间层（默认关，写 staging 日期分片、不改本手册默认路径）见 [arm-middleware.md](arm-middleware.md)。
+
 ## 链路
 
 ```

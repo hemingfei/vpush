@@ -203,6 +203,49 @@ def test_collector_filtered_pagination_and_completion(tmp_path, monkeypatch,
     assert downloads == ([1, 3] if first_matches else [3])
 
 
+def test_collector_middleware_writes_date_shard_and_json(tmp_path, monkeypatch):
+    import sys
+
+    m = cicc_report_collector
+    cookie = tmp_path / "fixture-cookie.txt"
+    cookie.write_text("offline-fixture")
+    staging = tmp_path / "staging"
+    monkeypatch.delenv("VPUSH_ARM_MIDDLEWARE", raising=False)
+    monkeypatch.setattr(sys, "argv", [
+        "collector", "--arm-middleware", "--cookie-file", str(cookie),
+        "--root", str(staging), "--keywords", "match",
+    ])
+    monkeypatch.setattr(m, "Session", lambda _: object())
+    monkeypatch.setattr(m, "PAUSED_FILE", str(tmp_path / "paused.json"))
+    monkeypatch.setattr(m, "fetch_param", lambda _: {"treeData": [{"id": 1, "name": "宏观经济"}]})
+    monkeypatch.setattr(m, "PAGE_SIZE", 2)
+    monkeypatch.setattr(m.time, "sleep", lambda _: None)
+    monkeypatch.setattr(m, "strip_watermark", lambda value: value)
+    chowns = []
+    monkeypatch.setattr(m.os, "chown", lambda *a, **k: chowns.append(a))
+
+    def list_page(_sess, _cat, page, *_dates):
+        return {"content": [{"id": 42, "title": "match 标题",
+                             "publishTime": "2026-08-01T00:00:00Z",
+                             "summary": "摘要"}]} if page == 1 else {"content": []}
+
+    monkeypatch.setattr(m, "list_page", list_page)
+    monkeypatch.setattr(m, "viewer_pdf", lambda *_: b"%PDF-arm")
+    m.main()
+
+    pdf = staging / "local" / "cicc-research" / "2026" / "08" / "01" / "match 标题_42.pdf"
+    sidecar = pdf.with_suffix(".json")
+    assert pdf.read_bytes() == b"%PDF-arm"
+    data = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert data["id"] == "42"
+    assert data["relpath"] == "local/cicc-research/2026/08/01/match 标题_42.pdf"
+    assert data["category"] == "宏观经济"
+    assert not (staging / "cicc-research" / ".vpush-local-library.json").exists()
+    assert chowns == []
+    classic = staging / "cicc-research" / "宏观经济" / "0801" / "match 标题_42.pdf"
+    assert not classic.exists()
+
+
 
 def test_admin_cicc_api(tmp_path, monkeypatch):
     monkeypatch.delenv("IMA_PULL_URL", raising=False)
