@@ -44,8 +44,11 @@ python3 scripts/cicc_arm_lab_sync.py --arm-middleware --apply --limit 3 --days 7
 - `--cookie-file` 或 `VPUSH_CICC_COOKIE_FILE`
 - 脚本默认 `/root/cicc/cookies.txt`（存储机采集器约定，一行原始 Cookie 头）
 - **ARM 实验室 ops / timer** 用宿主机 `secrets/cicc-cookies.txt`（容器内 `/secrets/cicc-cookies.txt`）。口令与 Cookie 只放 `secrets/`，永远不要提交。
+- Cookie 文件权限必须是 **0600**（组/其他可读会拒绝，与 IMA `load_secrets` 同一条）。
 
 出错文案会 redact `Cookie:` 行。脚本从不 print Cookie 值。
+
+中间层打开时，采集器熔断标记写在 `$CACHE_ROOT/.cicc/paused.json`（或 `$VPUSH_ARM_STAGING_ROOT/.cicc/paused.json`），**不会**在 ARM 上 mkdir `/srv/vpush-ima`。经典存储机路径仍是 `/srv/vpush-ima/local/.cicc/paused.json`。
 
 ## 配额 / 熔断
 

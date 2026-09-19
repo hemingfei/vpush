@@ -100,6 +100,16 @@ def _safe_error(exc: BaseException) -> str:
     return _COOKIE_LINE_RE.sub(r"\1\2<redacted>", text)
 
 
+def require_cookie_mode(path: Path) -> None:
+    """Reject group/other-readable cookie files (same bar as IMA load_secrets)."""
+    try:
+        mode = path.stat().st_mode & 0o777
+    except OSError as exc:
+        raise LabSyncError("Cookie 文件无法读取") from exc
+    if mode & 0o077:
+        raise LabSyncError("Cookie 文件权限必须为 0600")
+
+
 def clamp_limit(value: int) -> int:
     return max(0, min(int(value), MAX_LIMIT))
 
@@ -316,6 +326,7 @@ def main(
                 if not cookie_path.exists():
                     print(f"Cookie 文件不存在: {cookie_path}")
                     return 2
+                require_cookie_mode(cookie_path)
                 sess = cicc.Session(cookie_path.read_text(encoding="utf-8"))
             else:
                 sess = session_factory()

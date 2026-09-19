@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Host wrapper: /opt/vpush-ima-lab/bin/ima-lab-sync-all.sh
+# Lab-only IMA → ARM staging. Not production.
 # Reads LIMIT + ima_groups_parallel from $CACHE_ROOT/ops-lab-settings.json
 # when present (ARM lab ops panel). Does not put secrets on argv.
+#
+# Default DRY_RUN=1 → --dry-run (same as cicc-lab-sync.sh).
+# Set DRY_RUN=0 in the systemd unit for a real daily apply.
 set -euo pipefail
 
 CACHE_ROOT="${CACHE_ROOT:-/data/vpush-ima-cache}"
@@ -43,9 +47,15 @@ if [[ ! -f "$SCRIPT" ]]; then
   exit 2
 fi
 
+if [[ "${DRY_RUN:-1}" == "0" ]]; then
+  MODE="--apply"
+else
+  MODE="--dry-run"
+fi
+
 run_group() {
   local group="$1"
-  "$PYTHON" "$SCRIPT" --enable --apply --limit "$LIMIT" --group "$group"
+  "$PYTHON" "$SCRIPT" --enable "$MODE" --limit "$LIMIT" --group "$group"
 }
 
 if [[ "$PARALLEL" == "1" ]]; then

@@ -84,7 +84,13 @@ def _patch_retry_sleeper(monkeypatch, sleeps: list[float]) -> None:
     ({"state": True, "file_id": 1}, True),
     ({"state": True}, True),
     ({"pickcode": "x", "state": False}, True),
+    ({"errno": 0, "state": True}, True),
     ({"errno": 99, "state": False}, False),
+    ({"errno": 99}, False),
+    ({"errno": 99, "file_id": 1}, False),
+    ({"state": True, "errno": 99}, False),
+    ({}, False),
+    ({"pickcode": "x"}, False),
     ({"errno": 1, "state": False, "error": "empty filesha1"}, False),
     ("not-a-dict", False),
     (None, False),
@@ -207,6 +213,21 @@ def test_redact_and_load_cookies_never_echo_values(tmp_path, capsys):
     assert "offline-fixture-not-a-real-cookie" not in err
 
 
+@pytest.mark.parametrize("raw,needle", [
+    ("UID=fixture-not-real; CID=fixture-not-real", "fixture-not-real"),
+    ('{"refresh_token": "fixture-json-refresh"}', "fixture-json-refresh"),
+    ('{"access_token":"fixture-json-access"}', "fixture-json-access"),
+    ("refresh_token: fixture-colon-refresh", "fixture-colon-refresh"),
+    ("access_token: fixture-colon-access", "fixture-colon-access"),
+    ("cookie: fixture-cookie-header", "fixture-cookie-header"),
+    ("refresh_token=fixture-eq-refresh", "fixture-eq-refresh"),
+])
+def test_redact_covers_json_and_colon_forms(raw, needle):
+    out = lab_common.redact(raw)
+    assert needle not in out
+    assert "<redacted>" in out
+
+
 def test_cookies_loaded_from_secrets_path_only():
     text = (SCRIPTS / "lab_common.py").read_text(encoding="utf-8")
     assert 'env_str("P115_COOKIES_FILE", "/secrets/115-cookies.txt")' in text
@@ -293,3 +314,104 @@ def test_compose_still_default_off():
         assert "puller_loop" not in text
         assert "P115_COOKIES_FILE" not in text
         assert "CACHE_ROOT=/cache" not in text
+
+
+def test_upload_one_reject_message_has_no_body(tmp_path, monkeypatch, caplog):
+    _patch_retry_sleeper(monkeypatch, [])
+    staging = lab_common.cache_root() / "staging"
+    src = _write_pdf(staging, "local/ima/legacy/2026/09/19/no-body.pdf")
+    reject = {
+        "state": False,
+        "errno": 1,
+        "error": "empty filesha1",
+        "refresh_token": "fixture-must-not-log",
+    }
+    client = FakeClient([reject, reject, reject])
+    worker = _puller_with_client(client)
+    rel = lab_common.rel_under(src, worker.staging)
+    assert worker.upload_one(src, rel, attempts=1, source="staging") is False
+    dumped = " ".join(record.getMessage() for record in caplog.records)
+    assert "fixture-must-not-log" not in dumped
+    assert "body=" not in dumped
+    assert worker.last_error is not None
+    assert "fixture-must-not-log" not in str(worker.last_error)
+    src_text = (SCRIPTS / "puller_loop.py").read_text(encoding="utf-8")
+    assert "body={result!r}" not in src_text
+
+
+def _write_retry_sidecar(src: Path, relpath: str, *, attempts: int = 1) -> Path:
+    path = src.with_name(src.name + lab_common.RETRY_SUFFIX)
+    path.write_text(
+        json.dumps({"relpath": relpath, "next_retry_ts": 0, "attempts": attempts}),
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.mark.parametrize("evil", ["/etc/passwd", "../x", "../../etc/passwd"])
+def test_process_retries_rejects_escape_relpath(tmp_path, monkeypatch, caplog, evil):
+    _patch_retry_sleeper(monkeypatch, [])
+    cache = lab_common.cache_root()
+    failed = cache / "failed"
+    src = _write_pdf(failed, "local/ima/legacy/2026/09/19/retry.pdf", b"%PDF-retry")
+    _write_retry_sidecar(src, evil)
+    sentinel = tmp_path / "outside-cache.bin"
+    if evil == "/etc/passwd":
+        outside = Path("/etc/passwd")
+        before = outside.read_bytes() if outside.is_file() else None
+    else:
+        outside = cache.parent / "x"
+        before = outside.read_bytes() if outside.is_file() else None
+    client = FakeClient([{"state": True, "file_id": 1}])
+    worker = _puller_with_client(client)
+    assert worker.process_retries() == 0
+    assert client.uploads == []
+    assert src.is_file()
+    assert src.read_bytes() == b"%PDF-retry"
+    assert not sentinel.exists()
+    if before is None:
+        assert not outside.exists()
+    else:
+        assert outside.read_bytes() == before
+    for root in (worker.hot, worker.staging, worker.failed):
+        resolved = (root / Path(evil)).resolve() if not Path(evil).is_absolute() else Path(evil)
+        if resolved != src.resolve() and resolved.is_file() and resolved != Path("/etc/passwd"):
+            raise AssertionError(f"wrote escaped dest {resolved}")
+    dumped = " ".join(record.getMessage() for record in caplog.records)
+    assert "error_kind=other" in dumped
+    assert worker.last_error is not None
+    assert worker.last_error.get("error_kind") == "other"
+    assert worker.skipped == 1
+
+
+def test_process_retries_uploads_honest_relpath(tmp_path, monkeypatch):
+    _patch_retry_sleeper(monkeypatch, [])
+    cache = lab_common.cache_root()
+    failed = cache / "failed"
+    src = _write_pdf(failed, "local/ima/legacy/2026/09/19/ok.pdf", b"%PDF-ok")
+    _write_retry_sidecar(src, "local/ima/legacy/2026/09/19/ok.pdf")
+    client = FakeClient([{"state": True, "file_id": 11, "pickcode": "pc"}])
+    worker = _puller_with_client(client)
+    assert worker.process_retries() == 1
+    assert client.uploads
+    hot = worker.hot / "local/ima/legacy/2026/09/19/ok.pdf"
+    assert hot.is_file()
+    assert hot.read_bytes() == b"%PDF-ok"
+    assert not src.exists()
+
+
+def test_safe_relpath_matches_ops_whitelist():
+    assert lab_common.safe_relpath("local/ima/a.pdf").as_posix() == "local/ima/a.pdf"
+    assert lab_common.safe_relpath("./local/foo.pdf").as_posix() == "local/foo.pdf"
+    with pytest.raises(ValueError):
+        lab_common.safe_relpath("/etc/passwd")
+    with pytest.raises(ValueError):
+        lab_common.safe_relpath("../staging/x.pdf")
+    with pytest.raises(ValueError):
+        lab_common.safe_relpath("foo/../../etc/passwd")
+    with pytest.raises(ValueError):
+        lab_common.safe_relpath("~/secrets")
+    with pytest.raises(ValueError):
+        lab_common.safe_relpath("foo\x00bar")
+    with pytest.raises(ValueError):
+        lab_common.safe_relpath("   ")

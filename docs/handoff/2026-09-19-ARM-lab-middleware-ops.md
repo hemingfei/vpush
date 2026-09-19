@@ -85,7 +85,7 @@ gh pr diff 18 --repo icekale/vpush
 - `app/ima_documents.py` — middleware on 时写 staging、跳过 puller URL
 - `scripts/cicc_report_collector.py` — `--arm-middleware` / 环境变量、日期分片、sidecar
 - `scripts/ima_to_arm_staging.py` — 离线适配
-- `scripts/ima_arm_lab_sync.py` — Lab 限量 IMA sync（`--enable --apply --limit`，上限 20）
+- `scripts/ima_arm_lab_sync.py` — Lab 限量 IMA sync（`--enable`；wrapper 默认 `DRY_RUN=1` → `--dry-run`，`DRY_RUN=0` 才 `--apply`；上限 20）
 - `scripts/cicc_arm_lab_sync.py` — Lab 限量中金 sync（viewer 默认、不绕配额熔断）
 - `scripts/arm_nfs_sync.py` — NFS 兼容（default-off）
 - `docs/arm-middleware.md` /（历史）`docs/ARM中间层架构.md`

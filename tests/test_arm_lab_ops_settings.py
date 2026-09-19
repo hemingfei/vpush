@@ -269,8 +269,13 @@ def test_wrappers_read_settings_file():
     assert "ops-lab-settings.json" in ima
     assert "ima_limit_per_group" in ima
     assert "ima_groups_parallel" in ima
+    assert 'DRY_RUN:-1' in ima
+    assert 'MODE="--dry-run"' in ima
+    assert 'MODE="--apply"' in ima
+    assert "--enable --apply" not in ima
     assert "ops-lab-settings.json" in cicc
     assert "cicc_limit" in cicc
+    assert 'DRY_RUN:-1' in cicc
     assert "OnCalendar=" in helper
     assert "vpush-ima-lab-sync.timer" in helper
     assert "vpush-cicc-lab-sync.timer" in helper
