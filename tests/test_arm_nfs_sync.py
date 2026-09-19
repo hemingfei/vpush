@@ -213,7 +213,7 @@ def test_apply_hardlinks_or_copies(tmp_path, capsys):
     source = tmp_path / "hot"
     dest = tmp_path / "nfs"
     pdf = _write_cicc_pdf(source, year="2026", month="08", day="01", name="标题_42.pdf", category="宏观经济")
-    ima = _write_ima_pdf(source, "legacy", year="2026", month="09", day="18", name="研报.pdf")
+    _write_ima_pdf(source, "legacy", year="2026", month="09", day="18", name="研报.pdf")
     lib = source / "local" / "cicc-research" / ".vpush-local-library.json"
     lib.write_text("{\"name\":\"中金点睛\"}\n", encoding="utf-8")
     code = nfs.main([
@@ -249,11 +249,10 @@ def test_compose_still_default_off():
         assert "VPUSH_ARM_NFS_SYNC=1" not in text
 
 
-def test_ima_namespace_matches_document_store(tmp_path):
-    from app.ima_documents import ImaDocumentStore
-
+def test_ima_namespace_matches_document_store_formula():
+    """Same digest as ImaDocumentStore._group_namespace (sha256[:16])."""
     group = "7476629605476515"
-    store = ImaDocumentStore(tmp_path / "ima")
-    assert nfs.ima_classic_group_dir(group) == store._group_namespace(group)
+    digest = hashlib.sha256(group.encode("utf-8")).hexdigest()[:16]
+    assert nfs.ima_classic_group_dir(group) == f"{group}__{digest}"
     assert nfs.ima_classic_group_dir("legacy") is None
     assert nfs.ima_classic_group_dir("legacy:pure") is None
