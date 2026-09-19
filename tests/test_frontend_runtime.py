@@ -598,21 +598,27 @@ def test_mobile_bottom_navigation_d1_feedback_restarts_without_rebuilding(page: 
     original_button = button.element_handle()
     assert original_button is not None
     assert page.evaluate("() => document.querySelector('#bottom-nav .bnav-item').style.backgroundColor") == ""
-    button.click()
-    expect(button).to_have_class(re.compile(r"\bis-feedback\b"))
-    feedback = button.evaluate("""el => ({
-        highlight: getComputedStyle(el).webkitTapHighlightColor,
-        background: getComputedStyle(el).backgroundColor,
-        stroke: getComputedStyle(el.querySelector('svg')).strokeWidth,
-        circleWidth: getComputedStyle(el, '::before').width,
-        circleHeight: getComputedStyle(el, '::before').height,
-        circleRadius: getComputedStyle(el, '::before').borderRadius,
-        pointerEvents: getComputedStyle(el, '::before').pointerEvents,
-        opacity: Number.parseFloat(getComputedStyle(el, '::before').opacity),
-        animations: el.getAnimations({subtree: true})
-            .filter(animation => animation.animationName === 'bottom-nav-feedback')
-            .map(animation => ({name: animation.animationName, duration: animation.effect.getTiming().duration})),
-    })""")
+    # 220ms 反馈动画期间 animationend 会摘 is-feedback 类（app.js playBottomNavFeedback）；
+    # 点击与读值同处一次同步 evaluate，防慢 runner 往返超窗后类已摘、动画列表读空
+    feedback = page.evaluate("""() => {
+        const button = document.querySelector('.bnav-item[data-route="timeline"]');
+        button.click();
+        return {
+            hasClass: button.classList.contains('is-feedback'),
+            highlight: getComputedStyle(button).webkitTapHighlightColor,
+            background: getComputedStyle(button).backgroundColor,
+            stroke: getComputedStyle(button.querySelector('svg')).strokeWidth,
+            circleWidth: getComputedStyle(button, '::before').width,
+            circleHeight: getComputedStyle(button, '::before').height,
+            circleRadius: getComputedStyle(button, '::before').borderRadius,
+            pointerEvents: getComputedStyle(button, '::before').pointerEvents,
+            opacity: Number.parseFloat(getComputedStyle(button, '::before').opacity),
+            animations: button.getAnimations({subtree: true})
+                .filter(animation => animation.animationName === 'bottom-nav-feedback')
+                .map(animation => ({name: animation.animationName, duration: animation.effect.getTiming().duration})),
+        };
+    }""")
+    assert feedback["hasClass"] is True
     assert feedback["highlight"] == "rgba(0, 0, 0, 0)"
     assert feedback["background"] == "rgba(0, 0, 0, 0)"
     assert feedback["stroke"] == "2.4px"
@@ -622,9 +628,18 @@ def test_mobile_bottom_navigation_d1_feedback_restarts_without_rebuilding(page: 
     assert feedback["pointerEvents"] == "none"
     assert 0 <= feedback["opacity"] <= 1
     assert feedback["animations"] == [{"name": "bottom-nav-feedback", "duration": 220}]
-    button.click()
-    assert page.evaluate("original => document.querySelector('.bnav-item[data-route=timeline]') === original", original_button)
-    assert button.evaluate("el => el.getAnimations({subtree: true}).filter(a => a.animationName === 'bottom-nav-feedback').length") == 1
+    # 二次点击重启动画且不重建 DOM：点击与读动画数同样合并，理由同上
+    restart = page.evaluate("""(original) => {
+        const button = document.querySelector('.bnav-item[data-route=timeline]');
+        button.click();
+        return {
+            sameElement: button === original,
+            animations: button.getAnimations({subtree: true})
+                .filter(a => a.animationName === 'bottom-nav-feedback').length,
+        };
+    }""", original_button)
+    assert restart["sameElement"] is True
+    assert restart["animations"] == 1
     page.wait_for_function("el => !el.classList.contains('is-feedback')", arg=original_button)
     assert page.locator('.bnav-item.is-feedback').count() == 0
 
@@ -639,10 +654,16 @@ def test_mobile_bottom_navigation_d1_feedback_reduced_motion_has_no_transform(pa
     nav_items = page.locator("#bottom-nav .bnav-item")
     nav_items.first.wait_for(state="visible")
     expect(nav_items).to_have_count(7)
-    button = page.locator('.bnav-item[data-route="timeline"]')
-    button.click()
-    expect(button).to_have_class(re.compile(r"\bis-feedback\b"))
-    assert button.evaluate("el => getComputedStyle(el, '::before').animationDuration") == "0.08s"
+    # reduce 档反馈动画仅 80ms，animationend 即摘 is-feedback 类（app.js playBottomNavFeedback）；
+    # 点击与读值必须同处一次同步 evaluate——分两次往返时慢 runner（xdist 并行）可超 80ms
+    # 窗口，类已摘除后 animation-duration 回落初始值 0s（CI run 35431263784 即此 flake）
+    duration = page.evaluate("""() => {
+        const button = document.querySelector('.bnav-item[data-route="timeline"]');
+        button.click();
+        return button.classList.contains('is-feedback')
+            ? getComputedStyle(button, '::before').animationDuration : null;
+    }""")
+    assert duration == "0.08s"
     transforms = page.evaluate("""() => [...document.styleSheets].flatMap(sheet => {
         try { return [...sheet.cssRules]; } catch { return []; }
     }).filter(rule => rule.type === CSSRule.KEYFRAMES_RULE && rule.name === 'bottom-nav-feedback')
