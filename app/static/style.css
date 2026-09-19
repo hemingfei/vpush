@@ -1691,7 +1691,7 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
 .am-mark-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--text-xs); padding: 5px 0; }
 .am-mark-row + .am-mark-row { border-top: 1px dashed var(--color-border); }
 .am-mark-admin {
-  font-style: normal; font-size: 10px; line-height: 14px; padding: 0 4px;
+  font-style: normal; font-size: var(--text-xs); line-height: 14px; padding: 0 4px;
   border-radius: var(--radius-pill); background: rgba(176, 127, 44, .16); color: #96690f;
 }
 .theme-dark .am-mark-admin { background: rgba(255, 193, 94, .16); color: #ffc861; }
