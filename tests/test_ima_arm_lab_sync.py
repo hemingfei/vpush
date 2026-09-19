@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -13,6 +14,17 @@ from scripts import ima_arm_lab_sync as lab
 TZ_BJ = timezone(timedelta(hours=8))
 PLACEHOLDER_UID = "lab-uid"
 PLACEHOLDER_TOKEN = "lab-placeholder-token"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_lab_env(monkeypatch):
+    monkeypatch.setenv("VPUSH_ARM_MIDDLEWARE", "")
+    monkeypatch.delenv("VPUSH_ARM_STAGING_ROOT", raising=False)
+    monkeypatch.delenv("IMA_UID", raising=False)
+    monkeypatch.delenv("IMA_REFRESH_TOKEN", raising=False)
+    monkeypatch.delenv("IMA_PURE_SECRETS_FILE", raising=False)
+    monkeypatch.delenv("IMA_KB_ID", raising=False)
+    monkeypatch.delenv("IMA_ROOT_FOLDER_ID", raising=False)
 
 
 def _ts_ms(year: int, month: int, day: int) -> int:
@@ -376,3 +388,25 @@ def test_compose_still_default_off():
     for name in ("docker-compose.yml", "docker-compose.prod.yml", "docker-compose.unraid.yml"):
         text = (root / name).read_text(encoding="utf-8")
         assert "VPUSH_ARM_MIDDLEWARE=1" not in text
+
+
+def test_main_restores_middleware_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("VPUSH_ARM_MIDDLEWARE", raising=False)
+    monkeypatch.setenv("IMA_UID", PLACEHOLDER_UID)
+    monkeypatch.setenv("IMA_REFRESH_TOKEN", PLACEHOLDER_TOKEN)
+    monkeypatch.setenv("IMA_KB_ID", "kb")
+    monkeypatch.setenv("IMA_ROOT_FOLDER_ID", "kb")
+    lab.main(
+        [
+            "--enable",
+            "--dry-run",
+            "--group",
+            "legacy",
+            "--staging-root",
+            str(tmp_path / "s"),
+            "--index-root",
+            str(tmp_path / "i"),
+        ],
+        client_factory=lambda config, group: FakeClient({"kb": []}),
+    )
+    assert os.environ.get("VPUSH_ARM_MIDDLEWARE") in (None, "")

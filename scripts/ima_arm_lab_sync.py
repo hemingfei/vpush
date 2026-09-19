@@ -27,7 +27,8 @@ import os
 import re
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -102,6 +103,26 @@ def activate_arm_middleware(staging_root: Path | None = None) -> Path:
     if staging_root is not None:
         os.environ["VPUSH_ARM_STAGING_ROOT"] = str(Path(staging_root).expanduser())
     return resolve_staging_root()
+
+
+@contextmanager
+def arm_middleware_env(staging_root: Path | None = None) -> Iterator[Path]:
+    """Set middleware env for the call, then restore so lab runs do not leak flags."""
+    old_flag = os.environ.get("VPUSH_ARM_MIDDLEWARE")
+    old_root = os.environ.get("VPUSH_ARM_STAGING_ROOT")
+    touched_root = staging_root is not None
+    try:
+        yield activate_arm_middleware(staging_root)
+    finally:
+        if old_flag is None:
+            os.environ.pop("VPUSH_ARM_MIDDLEWARE", None)
+        else:
+            os.environ["VPUSH_ARM_MIDDLEWARE"] = old_flag
+        if touched_root:
+            if old_root is None:
+                os.environ.pop("VPUSH_ARM_STAGING_ROOT", None)
+            else:
+                os.environ["VPUSH_ARM_STAGING_ROOT"] = old_root
 
 
 def _validate_uid(value: Any) -> str:
@@ -505,43 +526,40 @@ def main(
     if args.dry_run:
         dry_run = True
 
+    staging_root = Path(args.staging_root).expanduser() if args.staging_root else None
     try:
-        staging_root = Path(args.staging_root).expanduser() if args.staging_root else None
-        activate_arm_middleware(staging_root)
-        credentials = load_secrets(args.secrets)
-        config, group = build_group_and_config(credentials, args.group)
-        index_root = (
-            Path(args.index_root).expanduser()
-            if args.index_root
-            else Path(tempfile.mkdtemp(prefix="ima-arm-lab-"))
-        )
-        store = (store_factory or ImaDocumentStore)(index_root)
-        factory = client_factory or (lambda cfg, grp: ImaPureClient(cfg, group=grp))
-        client = factory(config, group)
-        records = collect_lab_records(client, group, day=day, limit=args.limit)
-        planned = plan_items(records, store, limit=args.limit)
+        with arm_middleware_env(staging_root):
+            credentials = load_secrets(args.secrets)
+            config, group = build_group_and_config(credentials, args.group)
+            index_root = (
+                Path(args.index_root).expanduser()
+                if args.index_root
+                else Path(tempfile.mkdtemp(prefix="ima-arm-lab-"))
+            )
+            store = (store_factory or ImaDocumentStore)(index_root)
+            factory = client_factory or (lambda cfg, grp: ImaPureClient(cfg, group=grp))
+            client = factory(config, group)
+            records = collect_lab_records(client, group, day=day, limit=args.limit)
+            planned = plan_items(records, store, limit=args.limit)
+            if not planned:
+                print(f"无待同步 PDF（group={group.id} day={day or 'newest'}）")
+                return 0
+            if dry_run:
+                _print_planned(planned, dry_run=True)
+                return 0
+            _print_planned(planned, dry_run=False)
+            stats = apply_planned(client, planned)
+            print(
+                f"apply downloaded={stats['downloaded']} skipped={stats['skipped']} "
+                f"failed={stats['failed']}（115 仍由 puller_loop 上传）"
+            )
+            return 1 if stats["failed"] else 0
     except LabSyncError as exc:
         print(exc)
         return 2
     except Exception as exc:
         print(f"lab sync 失败: {_safe_error(exc)}")
         return 2
-
-    if not planned:
-        print(f"无待同步 PDF（group={group.id} day={args.day or 'newest'}）")
-        return 0
-
-    if dry_run:
-        _print_planned(planned, dry_run=True)
-        return 0
-
-    _print_planned(planned, dry_run=False)
-    stats = apply_planned(client, planned)
-    print(
-        f"apply downloaded={stats['downloaded']} skipped={stats['skipped']} "
-        f"failed={stats['failed']}（115 仍由 puller_loop 上传）"
-    )
-    return 1 if stats["failed"] else 0
 
 
 if __name__ == "__main__":
