@@ -215,3 +215,7 @@ ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**（脚本在�
 - **日跑 timer（宿主机 systemd，不是生产 compose）：** 样本 IMA `vpush-ima-lab-sync.timer` 10:30 / CICC `vpush-cicc-lab-sync.timer` 11:00 Asia/Shanghai。wrapper 读 `$CACHE_ROOT/ops-lab-settings.json` 的 LIMIT（CICC 默认 `DRY_RUN=1`，日志 `$CACHE_ROOT/logs/cicc-lab-sync-*.log`）。面板保存时钟后可用 `bin/apply-lab-sync-timers.sh` 把两个 timer 改成同一时刻。样本见 `arm-lab-ops/systemd/`。
 
 本地跑法、合入 compose 与 recreate 步骤见 [arm-lab-ops/README.md](../arm-lab-ops/README.md)。 snippet 见 [arm-lab-ops/docker-compose.snippet.yml](../arm-lab-ops/docker-compose.snippet.yml)。
+
+## 12. Handoff
+
+- [2026-09-19 交接：ARM 中间层 + 115 Lab + Ops 面板](handoff/2026-09-19-ARM-lab-middleware-ops.md)
