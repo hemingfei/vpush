@@ -3,7 +3,13 @@ from __future__ import annotations
 
 from html import escape
 
-from ..fetchers.base import PLATFORM_LABELS, Post, digest_body, has_stored_translation, truncate_text
+from ..fetchers.base import (
+    PLATFORM_LABELS,
+    Post,
+    digest_body,
+    has_stored_translation,
+    truncate_text,
+)
 from .base import why_badges
 
 ACTION_MARK = {"清仓": "🗑", "新建": "🆕", "增持": "➕", "减持": "➖"}
@@ -114,7 +120,13 @@ def _file_block(post: Post) -> str:
 
 
 def _https_images(images: list[str]) -> list[str]:
-    urls = [u for u in images if isinstance(u, str) and u.startswith(("http://", "https://"))]
+    # rich 媒体只放图片：视频混进 type=photo 会发送失败，由调用方单独 sendVideo
+    urls = [
+        u
+        for u in images
+        if isinstance(u, str) and u.startswith(("http://", "https://"))
+        and not u.lower().split("?", 1)[0].endswith((".mp4", ".webm"))
+    ]
     return urls[:RICH_IMAGE_MAX]
 
 

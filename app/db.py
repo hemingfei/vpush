@@ -48,8 +48,10 @@ SCHEMA_MIGRATIONS: list[tuple[int, str, str | tuple[str, ...]]] = [
     (
         2026090601,
         "ima_document_index downloaded_at 索引",
-        "CREATE INDEX IF NOT EXISTS idx_ima_doc_downloaded "
-        "ON ima_document_index(downloaded_at)",
+        (
+            "CREATE INDEX IF NOT EXISTS idx_ima_doc_downloaded "
+            "ON ima_document_index(downloaded_at)"
+        ),
     ),
     (
         2026091101,
@@ -3859,6 +3861,35 @@ class DB:
             (datetime.now(UTC).isoformat() if archived else None, source_id),
         )
 
+    def delete_news_source(self, source_id: int) -> dict | None:
+        """硬删除媒体并级联清除其文章、用户订阅与全部 Feed。"""
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                rows = self._conn.execute(
+                    "SELECT * FROM news_sources WHERE id = ?", (source_id,)
+                ).fetchall()
+                if not rows:
+                    self._conn.rollback()
+                    return None
+                self._conn.execute(
+                    "DELETE FROM news_articles WHERE source_id = ?", (source_id,)
+                )
+                self._conn.execute(
+                    "DELETE FROM user_news_sources WHERE source_id = ?", (source_id,)
+                )
+                self._conn.execute(
+                    "DELETE FROM news_feeds WHERE source_id = ?", (source_id,)
+                )
+                self._conn.execute(
+                    "DELETE FROM news_sources WHERE id = ?", (source_id,)
+                )
+                self._conn.commit()
+                return rows[0]
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def list_news_feeds(
         self, source_id: int | None = None, include_archived: bool = False
     ) -> list[dict]:
@@ -3956,6 +3987,27 @@ class DB:
             "UPDATE news_feeds SET archived_at = ?, updated_at = datetime('now') WHERE id = ?",
             (datetime.now(UTC).isoformat() if archived else None, feed_id),
         )
+
+    def delete_news_feed(self, feed_id: int) -> dict | None:
+        """硬删除 Feed 并级联清除它抓取的全部文章。"""
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                rows = self._conn.execute(
+                    "SELECT * FROM news_feeds WHERE id = ?", (feed_id,)
+                ).fetchall()
+                if not rows:
+                    self._conn.rollback()
+                    return None
+                self._conn.execute(
+                    "DELETE FROM news_articles WHERE feed_id = ?", (feed_id,)
+                )
+                self._conn.execute("DELETE FROM news_feeds WHERE id = ?", (feed_id,))
+                self._conn.commit()
+                return rows[0]
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def list_user_news_source_ids(
         self, user_id: int, include_archived: bool = False

@@ -11,7 +11,14 @@ import time
 
 import httpx
 
-from .base import Fetcher, Post, ThreadLocalClient, catchup_pages, format_published_at, is_stale_backfill
+from .base import (
+    Fetcher,
+    Post,
+    ThreadLocalClient,
+    catchup_pages,
+    format_published_at,
+    is_stale_backfill,
+)
 from .xueqiu import (
     XUEQIU_COOKIE_KEY,
     apply_xueqiu_cookie,

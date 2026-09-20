@@ -8,7 +8,13 @@ import time
 
 import httpx
 
-from ..fetchers.base import PLATFORM_LABELS, Post, digest_body, show_original, truncate_text
+from ..fetchers.base import (
+    PLATFORM_LABELS,
+    Post,
+    digest_body,
+    show_original,
+    truncate_text,
+)
 from ..url_safety import safe_get
 from .base import Notifier, why_badges
 
@@ -419,10 +425,16 @@ class FeishuNotifier(Notifier):
             card = build_feishu_combination_card(post)["card"]
         else:
             card = build_feishu_card(post, self.favorite, self.keyword)["card"]
-        # 帖子图片：上传后插入同一张卡片（多图混排，最多 9 张），失败不影响文本
-        if post.images and self.app_id and self.app_secret:
+        # 帖子图片：上传后插入同一张卡片（多图混排，最多 9 张），失败不影响文本；
+        # 飞书图片接口不收视频，先滤掉
+        stills = [
+            u
+            for u in (post.images or [])
+            if not str(u).lower().split("?", 1)[0].endswith((".mp4", ".webm"))
+        ]
+        if stills and self.app_id and self.app_secret:
             try:
-                keys = self._upload_images(post.images[:_FEISHU_ALBUM_MAX])
+                keys = self._upload_images(stills[:_FEISHU_ALBUM_MAX])
                 if keys:
                     card["body"]["elements"] = (
                         [card["body"]["elements"][0]]

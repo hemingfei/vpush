@@ -32,8 +32,8 @@ def _fn_body(name: str, src: str = APP_JS) -> str:
 
 
 def test_index_html_includes_holdings_assets():
-    # 版本号由 scripts/bump_assets.py 按内容摘要统一维护
-    assert re.search(r'href="/holdings\.css\?v=[0-9a-f]{12}"', INDEX)
+    # 内容哈希 URL 由 scripts/bump_assets.py 按文件哈希统一维护
+    assert re.search(r'href="/holdings\.[0-9a-f]{12}\.css"', INDEX)
     assert ".hd-root" in HOLDINGS_CSS  # 页面级样式自包含，全部 .hd- 前缀
     # --mxv-* 变量在 .hd-root 作用域注入（观点流 + 总览卡同取一套色），不复制其样式规则
     css = HOLDINGS_CSS.replace(" ", "")

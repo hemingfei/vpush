@@ -5,8 +5,8 @@ import time
 
 import pytest
 
-from app.db import DB
 from app import scheduler
+from app.db import DB
 
 
 @pytest.fixture

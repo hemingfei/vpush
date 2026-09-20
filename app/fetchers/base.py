@@ -56,6 +56,13 @@ class Post:
 
 
 _COLLAPSED_TRANSLATION_RE = re.compile(r"^[\s\W_]+$", re.UNICODE)
+_LINK_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_SQUEEZE_RE = re.compile(r"[\s\W_]+", re.UNICODE)
+
+
+def _squeeze(text: str) -> str:
+    """去空白/标点/链接后的纯文字，用来判断译文是否只是原文换了个写法。"""
+    return _SQUEEZE_RE.sub("", _LINK_RE.sub("", text or "")).lower()
 
 
 def is_collapsed_translation(translated: str, source: str) -> bool:
@@ -65,6 +72,12 @@ def is_collapsed_translation(translated: str, source: str) -> bool:
     if not original or text == original:
         return False
     if not text:
+        return True
+    if _squeeze(text) == _squeeze(original):
+        # 只差空格/标点/链接：等于没翻（中文原文最容易触发），不能当译文存起来
+        return True
+    if already_chinese(original) and len(_squeeze(text)) * 2 < len(_squeeze(original)):
+        # 中文原文被译残，如「布鲁 我危险了」→「了」
         return True
     if _COLLAPSED_TRANSLATION_RE.fullmatch(text) and len(original) > 3:
         return True
@@ -86,6 +99,7 @@ def twitter_translate_enabled(user: dict | None) -> bool:
 
 _TRANSLATE_PLATFORMS = frozenset({"twitter", "truth"})
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_KANA_RE = re.compile(r"[\u3040-\u30ff]")
 
 
 def quoted_author_text(text: str) -> str:
@@ -97,12 +111,21 @@ def quoted_author_text(text: str) -> str:
 
 
 def already_chinese(text: str) -> bool:
-    """原文已是中文就不必再译（X/MyMemory 都会空耗并刷 429）。"""
-    cjk = len(_CJK_RE.findall(text or ""))
-    if cjk < 8:
+    """原文已是中文就不必再译（X/MyMemory 都会空耗并刷 429）。
+
+    中文博主常在中文里夹英文股名/代码/链接：链接字母不算「英文内容」，中文也要占到
+    七成才算中文帖——「布鲁 我危险了」这种短中文帖本来就不该送翻译。假名算外文，
+    否则日文帖会被当成中文跳过。
+    """
+    body = text or ""
+    cjk = len(_CJK_RE.findall(body))
+    if cjk < 4:
         return False
-    latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
-    return cjk >= latin
+    stripped = _LINK_RE.sub("", body)
+    foreign = sum(1 for ch in stripped if ch.isascii() and ch.isalpha()) + len(
+        _KANA_RE.findall(stripped)
+    )
+    return cjk * 4 >= foreign * 3
 
 
 def _prefer_source(content: str, content_src: str) -> bool:

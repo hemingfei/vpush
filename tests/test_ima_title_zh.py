@@ -53,7 +53,7 @@ def test_refresh_bank_titles_zh_skips_without_llm(tmp_path):
 
 
 def test_refresh_translates_duplicate_stem_once_and_updates_all_rows(tmp_path):
-    service, group_dir = make_bank_service(
+    service, _ = make_bank_service(
         tmp_path,
         [
             ("m1", "Goldman-Foo-260801.pdf"),

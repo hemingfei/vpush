@@ -1,5 +1,4 @@
 """浏览器 Web Push：端点校验、VAPID、加密往返、通知器 MockTransport。"""
-import json
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +14,6 @@ from app.notifiers.webpush import (
     WebPushNotifier,
     b64url,
     build_webpush_payload,
-    encrypt_webpush,
     generate_vapid_keys,
     is_valid_push_endpoint,
     is_valid_subscription_keys,

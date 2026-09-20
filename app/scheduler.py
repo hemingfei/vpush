@@ -49,14 +49,12 @@ def end_ai_task_run(task_id: int) -> None:
         _ai_task_running.discard(task_id)
 
 
-from .logging_setup import redact_secrets
 from .mx_llm_tagging import mx_llm_tag_auto_loop
 from .fetchers.base import (
     CN_TZ,
     PLATFORM_LABELS,
     Fetcher,
     Post,
-    already_chinese as _already_chinese,
     is_collapsed_translation,
     is_notify_stale,
     is_stale_backfill,
@@ -64,6 +62,10 @@ from .fetchers.base import (
     twitter_translate_enabled,
     with_twitter_display,
 )
+from .fetchers.base import (
+    already_chinese as _already_chinese,
+)
+from .logging_setup import redact_secrets
 from .notifiers.base import Notifier
 from .proxy import note_fetch_proxy, tick_proxy_pools
 from .wscn_flash import build_wscn_post
@@ -257,6 +259,7 @@ def _load_poll_tuning(
     return {
         "interval": interval_seconds,
         "priority_interval": priority_interval_seconds,
+        "truth_base": _polling_setting(db, "config_truth_interval_seconds", 0),
         "combination_base": _polling_setting(
             db, "config_combination_base_seconds", COMBINATION_BASE_SECONDS, positive=True
         ),
@@ -293,15 +296,19 @@ def _effective_interval(
 ) -> int:
     """单个大V本轮的有效抓取间隔。
 
-    基础间隔（雪球组合高频档 > 优先大V > 普通大V）× 空轮拉伸（2 倍步进，
-    封顶）→ 有效间隔；平台为 X 且直抓失败时再 ×4（封顶），避免空打已挂接口。
-    各档位数值可在后台「数据源」页调参。
+    基础间隔（雪球组合高频档 / Truth 专属档 > 优先大V > 普通大V）× 空轮拉伸
+    （2 倍步进，封顶）→ 有效间隔；平台为 X 且直抓失败时再 ×4（封顶），
+    避免空打已挂接口。各档位数值可在后台「数据源」页调参。
     """
     if tuning is None and db is not None:
         tuning = _load_poll_tuning(db, interval_seconds, priority_interval_seconds)
     if kol["platform"] == "combination":
         base = (tuning or {}).get("combination_base") or COMBINATION_BASE_SECONDS
         cap = (tuning or {}).get("combination_cap") or COMBINATION_IDLE_CAP_SECONDS
+    elif kol["platform"] == "truth" and (tuning or {}).get("truth_base"):
+        # Truth 专属间隔（后台可调，0=跟随优先档）；空轮封顶沿用优先档
+        base = tuning["truth_base"]
+        cap = (tuning or {}).get("priority_cap") or PRIORITY_IDLE_CAP_SECONDS
     else:
         if kol.get("priority"):
             base = priority_interval_seconds
@@ -1922,7 +1929,12 @@ def keepalive_xueqiu_cookie(
 
 def keepalive_weibo_cookie(db: DB, notifiers: list[Notifier], weibo_config, client=None) -> None:
     """打动态 AJAX 刷新会话；失效时尝试账号密码自动登录，否则发扫码。"""
-    from .fetchers.weibo import TIMELINE_URL, WEIBO_COOKIE_KEY, WeiboFetcher, weibo_session_dead
+    from .fetchers.weibo import (
+        TIMELINE_URL,
+        WEIBO_COOKIE_KEY,
+        WeiboFetcher,
+        weibo_session_dead,
+    )
 
     cookie = db.get_setting(WEIBO_COOKIE_KEY) or weibo_config.cookie
     if not cookie:

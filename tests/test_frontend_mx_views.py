@@ -26,8 +26,8 @@ def _fn_body(name: str, src: str = APP_JS) -> str:
 
 
 def test_index_html_includes_mx_views_assets():
-    # 版本号由 scripts/bump_assets.py 按内容摘要统一维护，不再手工 pin
-    assert re.search(r'href="/mx-views\.css\?v=[0-9a-f]{12}"', INDEX)
+    # 内容哈希 URL 由 scripts/bump_assets.py 按文件哈希统一维护，不再手工 pin
+    assert re.search(r'href="/mx-views\.[0-9a-f]{12}\.css"', INDEX)
     assert 'from "./views/mx-views.js"' in APP_JS
     assert 'src="/mx-views.js' not in INDEX  # 模块化后不再有独立 script 标签
 
@@ -776,7 +776,8 @@ def test_mx_kol_pnl_panel_contract():
     assert "flex-wrap:wrap" in mxc_css
     # 离线外壳：SHELL 预缓存名单带上两个补充样式表（离线打开持仓/盈亏页不裸奔）
     sw = (STATIC / "sw.js").read_text(encoding="utf-8")
-    assert '"/holdings.css"' in sw and '"/mx-kol-holdings.css"' in sw
+    assert re.search(r'"/holdings\.[0-9a-f]{12}\.css"', sw)
+    assert re.search(r'"/mx-kol-holdings\.[0-9a-f]{12}\.css"', sw)
 
 
 def test_mx_kol_pnl_actions_contract():

@@ -59,7 +59,7 @@ const { publicHandlerA, publicHandlerB } = createXxxView({
 
 1. 新建文件，factory 模式搬代码（纯位移）。
 2. `app.js`：加 import → 解构公开函数 → `INLINE_HANDLERS` 继续引用同名绑定 → 删除原区块。
-3. `python scripts/bump_assets.py --sync`
+3. `python scripts/bump_assets.py --sync`（把 `index.html` / `sw.js` 写成 content-hash 文件名 + import map）
 4. `node --input-type=module --check` 校验 `app.js` 与新文件。
 5. 相关 pytest 绿。
 6. 按该任务冒烟清单手工验证。

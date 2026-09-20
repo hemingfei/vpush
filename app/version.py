@@ -5,7 +5,7 @@ import json
 import threading
 import time
 
-APP_VERSION = "1.12.212"
+APP_VERSION = "1.12.219"
 VERSION_CHECK_TTL = 6 * 3600  # 6 小时
 GITHUB_REPO = "icekale/vpush"
 
@@ -17,7 +17,10 @@ _refreshing = False
 
 
 def _version_key(version: str) -> list[int]:
-    return [int(x) for x in (version or "").split(".") if x.isdigit()]
+    try:
+        return [int(x) for x in (version or "").split(".") if x.isdigit()]
+    except (ValueError, TypeError):
+        return []
 
 
 def is_newer(version: str, base: str) -> bool:

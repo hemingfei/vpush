@@ -21,6 +21,9 @@ def make_tree(tmp_path: Path) -> Path:
     (static / "core" / "html.js").write_text("export const x = 1;\n")
     (static / "views" / "news.js").write_text("export const y = 2;\n")
     (static / "index.html").write_text(
+        '  <!-- asset-importmap:start -->\n'
+        '  <script type="importmap">{"imports":{}}</script>\n'
+        '  <!-- asset-importmap:end -->\n'
         '<link rel="stylesheet" href="/vendor/design-tokens.css?v=old">\n'
         '<link rel="stylesheet" href="/style.css?v=old">\n'
         '<link rel="stylesheet" href="/mx-views.css?v=old">\n'
@@ -32,8 +35,14 @@ def make_tree(tmp_path: Path) -> Path:
         'const CACHE = "dav-shell-old";\n'
         'const SHELL = [\n'
         '  "/",\n'
+        '  "/app.js",\n'
         '  // asset-modules:start\n'
         '  // asset-modules:end\n'
+        '  "/style.css",\n'
+        '  "/mx-views.css",\n'
+        '  "/holdings.css",\n'
+        '  "/mx-kol-holdings.css",\n'
+        '  "/vendor/design-tokens.css",\n'
         '];\n'
     )
     return tmp_path
@@ -44,6 +53,16 @@ def test_sync_then_check(tmp_path: Path):
     digest = bump_assets.sync_assets(root)
     assert len(digest) == 12
     assert bump_assets.check_consistency(root)
+    html = (root / "app" / "static" / "index.html").read_text()
+    style = bump_assets.hashed_url(root / "app" / "static" / "style.css", root)
+    app_js = bump_assets.hashed_url(root / "app" / "static" / "app.js", root)
+    html_js = bump_assets.hashed_url(root / "app" / "static" / "core" / "html.js", root)
+    assert f'href="{style}"' in html
+    assert f'src="{app_js}"' in html
+    assert f'"/core/html.js":"{html_js}"' in html
+    sw = (root / "app" / "static" / "sw.js").read_text()
+    assert f'"{app_js}"' in sw
+    assert f'"{html_js}"' in sw
 
 
 def test_sync_is_deterministic(tmp_path: Path):
@@ -80,6 +99,7 @@ def test_changed_asset_fails_check(tmp_path: Path, relative: str):
 @pytest.mark.parametrize(
     ("target_name", "old", "new", "message"),
     [
+        ("index.html", '  <!-- asset-importmap:start -->\n', "", "import map"),
         ("index.html", '<link rel="stylesheet" href="/vendor/design-tokens.css?v=old">\n',
          "", "design-tokens.css reference"),
         ("index.html", '<link rel="stylesheet" href="/style.css?v=old">\n', "", "style.css reference"),
@@ -88,6 +108,7 @@ def test_changed_asset_fails_check(tmp_path: Path, relative: str):
         ("sw.js", 'const CACHE = "dav-shell-old";\n', "", "service-worker cache"),
         ("sw.js", 'const CACHE = "dav-shell-old";\n',
          'const CACHE = "dav-shell-old";\n' * 2, "service-worker cache"),
+        ("sw.js", '  "/app.js",\n', "", "service-worker app.js"),
     ],
 )
 def test_invalid_reference_does_not_write(
@@ -128,5 +149,5 @@ def test_sync_populates_complete_module_shell(tmp_path: Path):
     root = make_tree(tmp_path)
     bump_assets.sync_assets(root)
     sw = (root / "app" / "static" / "sw.js").read_text()
-    assert '"/core/html.js"' in sw
-    assert '"/views/news.js"' in sw
+    assert f'"{bump_assets.hashed_url(root / "app" / "static" / "core" / "html.js", root)}"' in sw
+    assert f'"{bump_assets.hashed_url(root / "app" / "static" / "views" / "news.js", root)}"' in sw

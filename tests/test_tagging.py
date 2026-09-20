@@ -345,7 +345,7 @@ def test_run_tag_maintenance_merges_seed_and_mark_paths():
             {"name": "涂改液", "code": "SZ000858", "official": "五粮液", "is_alias": True},
         ]
 
-    import app.llm as llm
+    from app import llm
 
     orig_resolve = llm.resolve_stock_marks
     llm.resolve_stock_marks = fake_resolve
@@ -433,7 +433,7 @@ def test_run_tag_maintenance_skips_admin_excluded_stock_names():
             for n, c in marks
         ]
 
-    import app.llm as llm
+    from app import llm
 
     orig_resolve = llm.resolve_stock_marks
     llm.resolve_stock_marks = fake_resolve
@@ -474,7 +474,7 @@ def test_run_tag_maintenance_resolves_marks_in_small_batches():
             {"name": n, "code": c, "official": n, "is_alias": False} for n, c in marks
         ]
 
-    import app.llm as llm
+    from app import llm
 
     orig_resolve = llm.resolve_stock_marks
     llm.resolve_stock_marks = fake_resolve
@@ -570,7 +570,7 @@ def test_run_tag_maintenance_scans_marks_beyond_recent_500():
             {"name": "测试盐湖", "code": "SZ000792", "official": "盐湖股份", "is_alias": True},
         ]
 
-    import app.llm as llm
+    from app import llm
 
     orig_resolve = llm.resolve_stock_marks
     llm.resolve_stock_marks = fake_resolve

@@ -2,7 +2,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-import app.ima_search as ima_search
+from app import ima_search
 from app.ima_search import ImaSearchIndex
 
 

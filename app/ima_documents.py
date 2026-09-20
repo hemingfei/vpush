@@ -12,7 +12,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ALL_COMPLETED, FIRST_COMPLETED, CancelledError, ThreadPoolExecutor, wait
+from concurrent.futures import (
+    ALL_COMPLETED,
+    FIRST_COMPLETED,
+    CancelledError,
+    ThreadPoolExecutor,
+    wait,
+)
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -36,6 +42,9 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from .arm_middleware import ima_staging_relpath
+from .arm_middleware import middleware_enabled as arm_middleware_enabled
+from .arm_middleware import resolve_staging_root as resolve_arm_staging_root
 from .fetchers.base import CN_TZ
 from .fetchers.ima_inspect import item_cover, item_text
 from .ima_search import ImaSearchIndex
@@ -92,7 +101,7 @@ def shanghai_schedule_gate(now: float, hour: int = IMA_SCHEDULE_HOUR) -> float:
     return dt.replace(hour=hour, minute=0, second=0, microsecond=0).timestamp()
 
 
-def group_next_run_at(group: "ImaGroupConfig", last_started_at: float, now: float) -> float:
+def group_next_run_at(group: ImaGroupConfig, last_started_at: float, now: float) -> float:
     interval = _clamp_group_interval(group.interval_seconds)
     if interval >= 86400:
         gate = shanghai_schedule_gate(now)
@@ -1315,7 +1324,8 @@ class ImaPureClient:
             raise RuntimeError("IMA signed URL missing")
         headers = {str(k): str(v) for k, v in (info.get("headers") or {}).items()}
         pull_url = os.environ.get("IMA_PULL_URL", "").strip()
-        if pull_url:
+        # ARM staging writes locally; IMA_PULL_URL is the storage-host NFS puller.
+        if pull_url and not arm_middleware_enabled():
             archive_root_text = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
             if not archive_root_text:
                 raise RuntimeError("IMA_ARCHIVE_ROOT required when IMA_PULL_URL is set")
@@ -1385,10 +1395,15 @@ class ImaPureClient:
                 raise RuntimeError("IMA download is not a PDF")
             if expected_size and size != int(expected_size):
                 raise RuntimeError(f"IMA PDF size mismatch got={size} expected={expected_size}")
-            archive_root_text = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
-            if not archive_root_text:
-                raise RuntimeError("IMA_ARCHIVE_ROOT required")
-            with archive_lock(Path(archive_root_text)):
+            if arm_middleware_enabled():
+                lock_root = resolve_arm_staging_root()
+                lock_root.mkdir(parents=True, exist_ok=True)
+            else:
+                archive_root_text = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
+                if not archive_root_text:
+                    raise RuntimeError("IMA_ARCHIVE_ROOT required")
+                lock_root = Path(archive_root_text)
+            with archive_lock(lock_root):
                 os.replace(temp, destination)
         except Exception:
             temp.unlink(missing_ok=True)
@@ -1434,7 +1449,7 @@ def item_display_name(item: dict[str, Any], media_id: str) -> str:
 
 def _name_stem(name: str) -> str:
     folded = str(name or "").strip().casefold()
-    return folded[:-4] if folded.endswith(".pdf") else folded
+    return folded.removesuffix(".pdf")
 
 
 def duplicate_base_stem(name: str) -> str:
@@ -1624,9 +1639,22 @@ class ImaDocumentStore:
     def _state_item(self, state: dict[str, dict[str, Any]], record: dict[str, Any]) -> dict[str, Any]:
         return state.get(self.state_key(record)) or {}
 
+    def pdf_write_root(self) -> Path:
+        """PDF write/lookup root: ARM staging when middleware is on, else archive_root."""
+        if not arm_middleware_enabled():
+            return self.archive_root
+        root = resolve_arm_staging_root()
+        if root.exists() and root.is_symlink():
+            raise ValueError("archive root must not be a symlink")
+        return root.resolve()
+
+    def archive_relative(self, path: Path) -> str:
+        return str(path.resolve().relative_to(self.pdf_write_root()))
+
     def _safe_path(self, relative: str) -> Path | None:
-        candidate = (self.archive_root / relative).resolve()
-        if candidate == self.archive_root or not candidate.is_relative_to(self.archive_root):
+        root = self.pdf_write_root()
+        candidate = (root / relative).resolve()
+        if candidate == root or not candidate.is_relative_to(root):
             return None
         return candidate
 
@@ -1636,6 +1664,16 @@ class ImaDocumentStore:
     @staticmethod
     def _collision_token(media_id: str) -> str:
         return hashlib.sha256(media_id.encode("utf-8")).hexdigest()[:8]
+
+    def _colliding_filename(self, filename: str, media_id: str) -> str:
+        path = Path(filename)
+        token = self._collision_token(media_id)
+        suffix = path.suffix or ".pdf"
+        stem = _fit_utf8(
+            path.stem,
+            MAX_FILENAME_BYTES - len(token) - 2 - len(suffix.encode("utf-8")),
+        )
+        return f"{stem}__{token}{suffix}"
 
     def _marker_present(self) -> bool:
         try:
@@ -1672,27 +1710,45 @@ class ImaDocumentStore:
         """规范 PDF 相对路径——纯字符串计算，不做任何文件系统 IO。"""
         media_id = self.validate_media_id(record.get("media_id", ""))
         filename = safe_filename(str(record.get("name") or media_id), media_id)
+        if arm_middleware_enabled():
+            relative = ima_staging_relpath(
+                self._record_group_id(record),
+                filename,
+                record.get("day"),
+                record.get("ts"),
+            )
+            if occupied and str(relative) in occupied:
+                filename = self._colliding_filename(filename, media_id)
+                relative = ima_staging_relpath(
+                    self._record_group_id(record),
+                    filename,
+                    record.get("day"),
+                    record.get("ts"),
+                )
+            return relative
         day = _safe_component(str(record.get("day") or "unknown"))
         relative = Path(day) / filename
         group_id = self._record_group_id(record)
         if not self._is_legacy_group(group_id):
             relative = Path(self._group_namespace(group_id)) / relative
         if occupied and str(relative) in occupied:
-            path = Path(filename)
-            token = self._collision_token(media_id)
-            suffix = path.suffix or ".pdf"
-            stem = _fit_utf8(
-                path.stem,
-                MAX_FILENAME_BYTES - len(token) - 2 - len(suffix.encode("utf-8")),
-            )
-            filename = f"{stem}__{token}{suffix}"
+            filename = self._colliding_filename(filename, media_id)
             relative = Path(day) / filename
             if not self._is_legacy_group(group_id):
                 relative = Path(self._group_namespace(group_id)) / relative
         return relative
 
     def pdf_path(self, record: dict[str, Any], *, occupied: set[str] | None = None) -> Path:
-        return self._archive_path(str(self._relative_pdf(record, occupied)))
+        relative = self._relative_pdf(record, occupied)
+        if not arm_middleware_enabled():
+            return self._archive_path(str(relative))
+        root = self.pdf_write_root()
+        dest = (root / relative).resolve()
+        if dest == root or not dest.is_relative_to(root):
+            raise ValueError("archive path escapes root")
+        if dest.parent.exists() and dest.parent.is_symlink():
+            raise ValueError("archive directory must not be a symlink")
+        return dest
 
     def txt_path(self, record: dict[str, Any], *, occupied: set[str] | None = None) -> Path:
         return self.pdf_path(record, occupied=occupied).with_suffix(".txt")
@@ -1754,6 +1810,9 @@ class ImaDocumentStore:
         return occupied
 
     def restore_original_filenames(self) -> dict[str, int]:
+        if arm_middleware_enabled():
+            # Live staging uses a different layout; do not move classic archive files.
+            return {"renamed": 0}
         records_by_key: dict[str, dict[str, Any]] = {}
         records_by_media: dict[str, dict[str, Any]] = {}
         for item in self.load_manifest():
@@ -3672,7 +3731,7 @@ class ImaDocumentService:
         if not raw:
             return 0.0
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+            return datetime.fromisoformat(raw).timestamp()
         except ValueError:
             return 0.0
 
@@ -4248,7 +4307,7 @@ class ImaDocumentService:
         for record in pending:
             pdf = self.store.pdf_path(record, occupied=occupied)
             jobs.append((record, pdf))
-            occupied.add(str(pdf.relative_to(self.store.archive_root)))
+            occupied.add(self.store.archive_relative(pdf))
 
         def _fetch(record: dict[str, Any], pdf: Path) -> tuple[dict[str, Any], Path, int, str]:
             if self._cancel_requested:
@@ -4258,11 +4317,12 @@ class ImaDocumentService:
                 raise RuntimeError(blocked)
             media_id = str(record["media_id"])
             pull_url = os.environ.get("IMA_PULL_URL", "").strip()
-            if not pull_url:
+            local_write = (not pull_url) or arm_middleware_enabled()
+            if local_write:
                 pdf.parent.mkdir(parents=True, exist_ok=True)
             if pdf.parent.is_symlink():
                 raise ValueError("archive directory must not be a symlink")
-            if (not pull_url) and pdf.is_file():
+            if local_write and pdf.is_file():
                 size, md5 = client._pdf_info(pdf)
                 if not record.get("size") or size == int(record["size"]):
                     return record, pdf, int(size), str(md5)
@@ -4333,7 +4393,7 @@ class ImaDocumentService:
                                 "group_name": group.name,
                                 "day": record.get("day") or "unknown",
                                 "name": record.get("name") or media_id,
-                                "pdf": str(pdf.relative_to(self.store.archive_root)),
+                                "pdf": self.store.archive_relative(pdf),
                                 "txt": "",
                                 "size": size,
                                 "md5": md5,

@@ -11,16 +11,18 @@ from cryptography.hazmat.primitives.asymmetric import rsa as crypto_rsa
 
 from app.config import XueqiuConfig
 from app.db import DB
-from app.proxy import ProxyRouter, ProxyUnavailable
-from app.fetchers.combination import CombinationFetcher, _format_trade_price, extract_cube_symbol
+from app.fetchers.combination import (
+    CombinationFetcher,
+    _format_trade_price,
+    extract_cube_symbol,
+)
 from app.fetchers.xueqiu import (
     XueqiuFetcher,
-    _dewatermark_image,
-    _dewatermark_images,
     _load_waf_cookies,
     classify_status,
     merge_waf_cookie,
 )
+from app.proxy import ProxyRouter, ProxyUnavailable
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

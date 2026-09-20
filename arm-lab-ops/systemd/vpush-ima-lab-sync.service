@@ -1,0 +1,22 @@
+[Unit]
+Description=V Push ARM lab IMA sync (lab only; default dry-run)
+# Wrapper already lives on the host as bin/ima-lab-sync-all.sh.
+# Secrets stay under host secrets/ — never commit.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/vpush-ima-lab
+Environment=TZ=Asia/Shanghai
+Environment=CACHE_ROOT=/data/vpush-ima-cache
+Environment=VPUSH_SRC_ROOT=/opt/vpush-ima-lab/src
+Environment=VPUSH_PYTHON=/opt/vpush-ima-lab/venv/bin/python
+Environment=IMA_PURE_SECRETS_FILE=/opt/vpush-ima-lab/secrets/ima-pure.json
+# Flip to 0 on the host after a dry-run looks right. Do not put tokens here.
+Environment=DRY_RUN=1
+ExecStart=/opt/vpush-ima-lab/bin/ima-lab-sync-all.sh
+UMask=0077
+NoNewPrivileges=true
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

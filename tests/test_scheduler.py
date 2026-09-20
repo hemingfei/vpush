@@ -9,10 +9,10 @@ from types import SimpleNamespace
 
 import httpx
 
+import app.scheduler as app_scheduler
 from app.config import FeishuConfig, NotifiersConfig, TelegramConfig
 from app.db import DB
-from app.fetchers.base import Post, is_notify_stale
-import app.scheduler as app_scheduler
+from app.fetchers.base import Post, already_chinese, is_collapsed_translation, is_notify_stale
 from app.scheduler import (
     PlatformState,
     PushRetryQueue,
@@ -28,11 +28,11 @@ from app.scheduler import (
     keepalive_weibo_cookie,
     keepalive_xueqiu_cookie,
     maybe_alert_x_fallback,
-    probe_xueqiu,
     notify_digest_subscribers,
     notify_subscribers,
     parse_twitter_cookie,
     poll_once,
+    probe_xueqiu,
     translate_text,
 )
 
@@ -1658,6 +1658,21 @@ def test_frequency_settings_override_effective_interval():
     db.set_setting("config_combination_base_seconds", "abc")
     state.empty_rounds[1] = 0  # 清空空轮，聚焦基础间隔回退
     assert _effective_interval(db, kol_c, state, 180, 60) == COMBINATION_BASE_SECONDS
+
+
+def test_truth_interval_override():
+    """Truth 专属间隔（config_truth_interval_seconds）：0/未设=跟随优先档，空轮封顶沿用优先档。"""
+    db = make_db()
+    state = PlatformState()
+    kol = {"id": 5, "priority": 1, "platform": "truth"}
+    assert _effective_interval(db, kol, state, 180, 60) == 60  # 未设置 → 优先档
+    db.set_setting("config_truth_interval_seconds", "15")
+    assert _effective_interval(db, kol, state, 180, 60) == 15
+    state.empty_rounds[5] = 4  # 15*16=240 → 封顶 180（优先档封顶）
+    assert _effective_interval(db, kol, state, 180, 60) == 180
+    db.set_setting("config_truth_interval_seconds", "0")
+    state.empty_rounds[5] = 0
+    assert _effective_interval(db, kol, state, 180, 60) == 60  # 0 = 恢复跟随优先档
 
 
 def test_source_health_recorded():
@@ -3389,6 +3404,26 @@ def test_translate_text_skips_chinese_author_with_english_quote():
     )
     assert translate_text(src, client=client, tweet_id="1", twitter_cookie="auth_token=a; ct0=b") == src
     assert calls == []
+
+
+def test_already_chinese_ignores_links_and_tickers():
+    """口罩哥这类中文博主：中文夹英文股名/链接/短句，不该被当英文帖送翻译。"""
+    assert already_chinese("布鲁 我危险了")
+    assert already_chinese("听说开始做Biotech…了？ https://t.co/8toKpUvr6w")
+    assert already_chinese("北京好啊，  北京得去 https://t.co/b0yuwhsnBF")
+    assert already_chinese("现在消息来了 openai买了几万个mac... 端侧ai的风来 https://t.co/Pv9o3cMEEd")
+    assert not already_chinese("Tariffs are coming for chip makers")
+    assert not already_chinese("Nvidia CEO says 中国 is key")
+    # 有假名就是日文，不能因汉字够多就当中文跳过
+    assert not already_chinese("GPT-6 Astraならできるやろと思ったらできた。")
+
+
+def test_is_collapsed_translation_rejects_cosmetic_only_diff():
+    """只差空格/标点、或把中文译残的「译文」不能盖掉原文（否则前端会标成「翻译自英语」）。"""
+    assert is_collapsed_translation("苹果苟赢了,  端侧ai的风来", "苹果苟赢了, 端侧ai的风来")
+    assert is_collapsed_translation("了", "布鲁 我危险了")
+    assert is_collapsed_translation("北京好啊，北京得去", "北京好啊，  北京得去 https://t.co/b0yuwhsnBF")
+    assert not is_collapsed_translation("关税突发新闻", "Tariffs are breaking news today")
 
 
 def test_translate_text_mymemory_429_keeps_original_and_cools_down():

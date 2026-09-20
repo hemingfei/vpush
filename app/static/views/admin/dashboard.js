@@ -155,6 +155,10 @@ export function createAdminDashboardView(dependencies) {
                     <span>优先大V间隔<span class="cfg-unit">秒</span></span>
                     <input id="pc-priority" type="number" class="form-control" min="1" max="600" value="${s.polling_config.priority_interval_seconds}">
                   </label>
+                  <label class="cfg-field" title="Truth Social 专属抓取间隔，直连官方 API 实时拉取（匿名限速约 6 次/10 秒，建议不低于 10）；0 = 跟随优先大V间隔">
+                    <span>Truth 间隔<span class="cfg-unit">秒</span></span>
+                    <input id="pc-truth" type="number" class="form-control" min="0" max="600" value="${s.polling_config.truth_interval_seconds}">
+                  </label>
                   <label class="cfg-field" title="普通大V帖子按此周期合并推送摘要；0 = 实时单条推送">
                     <span>合并推送周期<span class="cfg-unit">秒</span></span>
                     <input id="pc-digest" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.digest_interval_seconds}">

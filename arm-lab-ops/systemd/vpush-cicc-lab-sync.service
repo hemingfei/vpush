@@ -1,0 +1,21 @@
+[Unit]
+Description=V Push ARM lab CICC sync (lab only; default dry-run)
+# Not production. Cookie file lives under host secrets/ — never commit.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/vpush-ima-lab
+Environment=TZ=Asia/Shanghai
+Environment=CACHE_ROOT=/data/vpush-ima-cache
+Environment=VPUSH_SRC_ROOT=/opt/vpush-ima-lab/src
+Environment=VPUSH_PYTHON=/opt/vpush-ima-lab/venv/bin/python
+Environment=VPUSH_CICC_COOKIE_FILE=/opt/vpush-ima-lab/secrets/cicc-cookies.txt
+# Flip to 0 on the host after a dry-run looks right. Do not put cookies here.
+Environment=DRY_RUN=1
+ExecStart=/opt/vpush-ima-lab/bin/cicc-lab-sync.sh
+UMask=0077
+NoNewPrivileges=true
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

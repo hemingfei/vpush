@@ -2,6 +2,8 @@
 
 日期：2026-08-29 · 脚本：`scripts/cicc_report_collector.py` · 部署位置：存储 VPS `/root/cicc/`
 
+ARM 中间层（默认关，写 staging 日期分片、不改本手册默认路径）见 [arm-middleware.md](arm-middleware.md)。实验室限量入口（默认关）见 [cicc_arm_lab_sync.md](../scripts/cicc_arm_lab_sync.md)；115 仍由 [puller_loop.md](../scripts/puller_loop.md) 上传。
+
 ## 链路
 
 ```

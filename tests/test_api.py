@@ -141,6 +141,45 @@ def test_news_source_selection_and_invalid_selection_are_authenticated():
     assert client.get("/api/news/sources").status_code == 401
 
 
+def test_admin_news_source_hard_delete_works_without_archive():
+    client = make_client("news-delete-api.db")
+    headers = auth_headers(client)
+    db = client.app.state.db
+    source_id = db.add_news_source("硬删媒体")
+    assert client.delete(
+        f"/api/admin/news/sources/{source_id}", headers={"Authorization": "Bearer nope"}
+    ).status_code == 401
+    assert client.delete(
+        f"/api/admin/news/sources/{source_id}", headers=headers
+    ).status_code == 200
+    assert db.get_news_source(source_id) is None
+    assert client.delete(
+        f"/api/admin/news/sources/{source_id}", headers=headers
+    ).status_code == 404
+
+
+def test_admin_news_feed_hard_delete_cascades_articles():
+    client = make_client("news-feed-delete-api.db")
+    headers = auth_headers(client)
+    db = client.app.state.db
+    source_id = db.add_news_source("硬删源")
+    feed_id = db.add_news_feed(
+        source_id, "主源", "https://feed.example/rss", "https://feed.example/rss"
+    )
+    insert_news_article(db, source_id, "2026-09-01T10:00:00+00:00")
+    assert client.delete(
+        f"/api/admin/news/feeds/{feed_id}", headers={"Authorization": "Bearer nope"}
+    ).status_code == 401
+    assert client.delete(
+        f"/api/admin/news/feeds/{feed_id}", headers=headers
+    ).status_code == 200
+    assert db.get_news_feed(feed_id) is None
+    assert db.count_news_articles_for_source(source_id) == 0
+    assert client.delete(
+        f"/api/admin/news/feeds/{feed_id}", headers=headers
+    ).status_code == 404
+
+
 def test_news_seen_rejects_naive_timestamp_and_moves_forward_only():
     client = make_client("news-seen-api.db")
     headers = user_headers(client, "news_seen_user")
@@ -2954,6 +2993,21 @@ def test_polling_config_get_and_update():
     cfg = client.get("/api/admin/polling-config", headers=headers).json()
     assert cfg["interval_seconds"] > 0 and cfg["daily_report_hour"] == 20
     assert cfg["telegram_rich_messages"] is True
+    assert cfg["truth_interval_seconds"] == 0  # 默认 0 = 跟随优先档
+
+    resp = client.put(
+        "/api/admin/polling-config",
+        headers=headers,
+        json={"truth_interval_seconds": 15},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["truth_interval_seconds"] == 15
+    resp = client.put(
+        "/api/admin/polling-config",
+        headers=headers,
+        json={"truth_interval_seconds": 601},
+    )
+    assert resp.status_code == 400
 
     resp = client.put(
         "/api/admin/polling-config",
@@ -4247,6 +4301,91 @@ def test_img_proxy_rejects_non_image(monkeypatch):
     assert resp.status_code == 400
 
 
+def test_img_proxy_streams_video_range(monkeypatch):
+    """视频代理透传 Range，返回 206 + Content-Range，供 <video> 拖进度。"""
+    import httpx as _httpx
+
+    seen = {}
+    body = b"V" * 1024
+    fake_resp = _httpx.Response(
+        206,
+        content=body,
+        headers={
+            "content-type": "video/mp4",
+            "content-range": "bytes 0-1023/34590354",
+            "content-length": "1024",
+        },
+    )
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.headers = {}
+
+        def stream(self, method, url, **kwargs):
+            seen["headers"] = kwargs.get("headers") or {}
+            seen["url"] = url
+
+            class Stream:
+                def __enter__(self):
+                    return fake_resp
+
+                def __exit__(self, *args):
+                    return False
+
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+    client = make_client()
+    video = "https://static-assets-1.truthsocial.com/media/clip.mp4"
+    resp = client.get(
+        "/api/img-proxy",
+        params={"url": video},
+        headers={"Range": "bytes=0-1023"},
+    )
+    assert resp.status_code == 206
+    assert resp.content == body
+    assert resp.headers["content-type"].startswith("video/mp4")
+    assert resp.headers["content-range"] == "bytes 0-1023/34590354"
+    assert resp.headers["accept-ranges"] == "bytes"
+    assert seen["headers"].get("Range") == "bytes=0-1023"
+
+
+def test_img_proxy_rejects_html_masquerading_as_mp4(monkeypatch):
+    import httpx as _httpx
+
+    fake_resp = _httpx.Response(
+        200, content=b"<html>nope</html>", headers={"content-type": "text/html"}
+    )
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def stream(self, method, url, **kwargs):
+            class Stream:
+                def __enter__(self):
+                    return fake_resp
+
+                def __exit__(self, *args):
+                    return False
+
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+    client = make_client()
+    resp = client.get(
+        "/api/img-proxy",
+        params={"url": "https://static-assets-1.truthsocial.com/x.mp4"},
+    )
+    assert resp.status_code == 400
+
+
 def test_recommend_weight_orders_recommendations():
     """推荐位排序：recommend_weight 优先于订阅人数。"""
     client = make_client()
@@ -4479,9 +4618,33 @@ def test_img_proxy_allows_transparent_proxy_range(monkeypatch):
 
 def test_img_proxy_rate_limit_per_ip(monkeypatch):
     """匿名 img-proxy 按 IP 限速，避免公网刷带宽。"""
+    import httpx as _httpx
+
+    # 白名单域名 + 假 Client：请求走到限流计数之后的「非图片内容」400，
+    # 否则 DNS/白名单校验会先短路，限流计数从未发生
+    fake_resp = _httpx.Response(200, content=b"<html>not an image</html>", headers={"content-type": "text/html"})
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.headers = {}
+
+        def stream(self, method, url, **kwargs):
+            class Stream:
+                def __enter__(self):
+                    return fake_resp
+
+                def __exit__(self, *args):
+                    return False
+
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
     monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 3)
     client = make_client()
-    params = {"url": "https://example-cdn.com/x.jpg"}
+    params = {"url": "https://pbs.twimg.com/x.jpg"}
     for _ in range(3):
         assert client.get("/api/img-proxy", params=params).status_code == 400
     blocked = client.get("/api/img-proxy", params=params)
@@ -4492,9 +4655,31 @@ def test_img_proxy_rate_limit_per_ip(monkeypatch):
 
 def test_img_proxy_xff_cannot_bypass_rate_limit(monkeypatch):
     """未信任反代时，轮换 X-Forwarded-For 不能绕过 img-proxy 限速。"""
+    import httpx as _httpx
+
+    fake_resp = _httpx.Response(200, content=b"<html>not an image</html>", headers={"content-type": "text/html"})
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.headers = {}
+
+        def stream(self, method, url, **kwargs):
+            class Stream:
+                def __enter__(self):
+                    return fake_resp
+
+                def __exit__(self, *args):
+                    return False
+
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
     monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 3)
     client = make_client()
-    params = {"url": "https://example-cdn.com/x.jpg"}
+    params = {"url": "https://pbs.twimg.com/x.jpg"}
     for i in range(3):
         assert client.get(
             "/api/img-proxy",
@@ -4510,11 +4695,33 @@ def test_img_proxy_xff_cannot_bypass_rate_limit(monkeypatch):
 
 def test_img_proxy_rate_limit_buckets_trusted_xff(monkeypatch):
     """信任反代后，不同 X-Forwarded-For 分桶，互不影响。"""
+    import httpx as _httpx
+
+    fake_resp = _httpx.Response(200, content=b"<html>not an image</html>", headers={"content-type": "text/html"})
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.headers = {}
+
+        def stream(self, method, url, **kwargs):
+            class Stream:
+                def __enter__(self):
+                    return fake_resp
+
+                def __exit__(self, *args):
+                    return False
+
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
     monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 2)
     cfg = Config()
     cfg.web.trust_proxy = True
     client = make_client(config=cfg)
-    params = {"url": "https://example-cdn.com/x.jpg"}
+    params = {"url": "https://pbs.twimg.com/x.jpg"}
     for _ in range(2):
         assert client.get(
             "/api/img-proxy",
@@ -5739,7 +5946,7 @@ def test_admin_users_batch_notify_and_delete():
     admin_headers = auth_headers(client)
     admin = client.get("/api/me", headers=admin_headers).json()
     a_headers = user_headers(client, "batchu_a")
-    b_headers = user_headers(client, "batchu_b")
+    user_headers(client, "batchu_b")  # 建 b 账号供后续断言，凭据本身用不到
     users = client.get("/api/users", headers=admin_headers).json()
     uid_a = next(u["id"] for u in users if u["username"] == "batchu_a")
     uid_b = next(u["id"] for u in users if u["username"] == "batchu_b")
@@ -6190,8 +6397,9 @@ def test_wscn_live_returns_normalized_items(monkeypatch):
 
 def test_wscn_live_rejects_freeform_cursor():
     """cursor 进缓存键与上游查询串，必须限定为短数字串（非法请求到不了取数层）。"""
-    from app.api import _wscn_evict_locked, _WSCN_CACHE, _WSCN_LOCK
     import time as _time
+
+    from app.api import _WSCN_CACHE, _WSCN_LOCK, _wscn_evict_locked
 
     client = make_client("wscn_cursor.db")
     headers = auth_headers(client, "wscncur", "secret1234")
@@ -6251,6 +6459,7 @@ def test_wscn_fetch_reuses_cache_and_http_client(monkeypatch):
 
 def test_wscn_serves_stale_cache_while_refreshing(monkeypatch):
     import threading
+
     from app import api as api_mod
 
     calls = []
@@ -6312,6 +6521,7 @@ def test_wscn_warmup_fetches_first_page_and_swallows_errors(monkeypatch):
 
 def test_wscn_refresh_does_not_hold_lock_during_http(monkeypatch):
     import threading
+
     from app import api as api_mod
 
     entered = threading.Event()

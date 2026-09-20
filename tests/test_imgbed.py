@@ -3,10 +3,9 @@ import hashlib
 import httpx
 import pytest
 
+from app import imgbed
 from app.config import ImgbedConfig
 from app.db import DB
-from app import imgbed
-
 
 JPEG = b"\xff\xd8\xff" + b"x" * 3000
 PNG = b"\x89PNG\r\n\x1a\n" + b"y" * 3000
@@ -56,6 +55,18 @@ def test_truth_images_enqueue_and_rewrite(db, cfg):
     assert imgbed.enqueue_recent_posts(db) == 1
     db.mark_hosted_image(truth_src, status="ready", hosted_url=truth_hosted)
     assert db.list_posts()[0]["images"] == [truth_hosted]
+
+
+def test_truth_videos_are_not_mirrored(db, cfg):
+    """图床对视频不回 206，mp4 不入镜像队列、读出也不改写。"""
+    imgbed.configure(type("C", (), {"imgbed": cfg})())
+    video_src = "https://static-assets-1.truthsocial.com/media/clip.mp4"
+    hosted = "https://img.053727.xyz/file/vpush/clip.mp4"
+    kid = db.add_kol("truth", "Donald J. Trump", "realDonaldTrump")
+    db.insert_post("truth", kid, "p-vid", "视频", "视频", "u", "", images=[video_src])
+    assert imgbed.enqueue_urls(db, [video_src]) == 0
+    db.mark_hosted_image(video_src, status="ready", hosted_url=hosted)
+    assert db.list_posts()[0]["images"] == [video_src]
 
 
 def test_apply_runtime_updates_public_host(db, cfg):

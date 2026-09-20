@@ -7,11 +7,11 @@ renderHomeList()，在非首页会因找不到 #kol-list 抛异常并落入 catc
   1. toggleSubscribe 成功后调用路由感知的 refreshKolsView()
   2. refreshKolsView 覆盖所有会出现订阅卡片的页面路由
 """
-import json
 import re
 import subprocess
 from pathlib import Path
-from scripts.bump_assets import asset_digest, module_urls
+
+from scripts.bump_assets import asset_digest, hashed_url, static_dir
 
 APP_JS = Path(__file__).parent.parent / "app" / "static" / "app.js"
 STYLE_CSS = APP_JS.with_name("style.css")
@@ -361,7 +361,6 @@ def test_mx_post_card_holdings_button_first_in_tag_row():
 
 def test_settings_async_responses_are_owned_by_route_and_session_before_mutation():
     """设置页的 /api/me 响应必须在写 state 或 DOM 前确认路由和会话仍是发起者。"""
-    src = APP_JS.read_text(encoding="utf-8")
     refresh = _fn_body("refreshSettingsStatus")
     fetch = refresh.index('await api("/api/me")')
     state_write = refresh.index("state.user = user", fetch)
@@ -443,7 +442,6 @@ def test_bind_code_callbacks_capture_and_require_current_owner_before_side_effec
 
 def test_feishu_personal_async_callbacks_are_owner_guarded_and_logout_resets_all_state():
     """飞书注册、轮询和倒计时不得跨账号停止新计时器或写设置区。"""
-    src = APP_JS.read_text(encoding="utf-8")
     start = _fn_body("startFeishuPersonal")
     assert "const owner" in start and "sessionGeneration" in start and "routeSeq" in start
     assert start.index("await api(") < start.index("fsPersonalState.sessionId =", start.index("await api("))
@@ -489,7 +487,6 @@ def test_feishu_personal_keeps_polling_while_awaiting_bind():
 
 def test_weibo_qr_callbacks_are_owner_guarded_and_logout_invalidates_timer():
     """微博二维码请求序列、路由和会话必须共同拥有状态及计时器。"""
-    src = APP_JS.read_text(encoding="utf-8")
     start = _fn_body("startWeiboQr")
     assert "const owner" in start and "wbQrSeq" in start and "sessionGeneration" in start
     assert "clearTimeout(wbQrTimer)" in start
@@ -561,7 +558,6 @@ def test_timeline_pills_always_show_short_labels():
 
 def test_mobile_platform_swipe_switches_adjacent_tab():
     """手机在列表上左右滑切相邻角标；动态含快讯，与胶囊同序；不循环。"""
-    src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
     ignore = _fn_body("mobilePlatformSwipeIgnore")
     ctx = _fn_body("mobilePlatformSwipeContext")
@@ -699,7 +695,7 @@ def test_timeline_polish_matches_chip_row_and_browser_surfaces():
     bar = re.search(r"\.tl-filterbar \.fav-toggle\s*\{([^}]*)\}", css)
     assert bar and "44px" in bar.group(1)
     assert 'data-platform="combination"]:not(.selected) .pt-icon { color: var(--color-brand-xueqiu)' in css
-    empty = re.search(r"^\.empty\s*>\s*div\s*\{([^}]*)\}", css, re.M)
+    empty = re.search(r"^\.empty\s*>\s*div\s*\{([^}]*)\}", css, re.MULTILINE)
     assert empty and "18px" in empty.group(1)
     assert "#tl-platform" not in pick
     assert "#tl-platform" not in remove
@@ -1337,7 +1333,6 @@ def test_stats_proxies_tab():
 
 def test_stats_tabs_expose_tab_aria():
     """数据源分段导航与注册码页同一套 tab 语义。"""
-    src = APP_JS.read_text()
     tabs = _fn_body("statsTabsHtml")
     assert 'role="tab"' in tabs
     assert 'id="tab-${tab}"' in tabs
@@ -1531,7 +1526,6 @@ def test_stats_default_tab_is_config():
 
 def test_stats_tabs_are_config_workshop_only():
     """数据源页只改管线，不再承担监控总览 / 大V健康。"""
-    src = APP_JS.read_text()
     load = _fn_body("loadAdminStats")
     assert "监控总览" not in load
     assert "大V健康" not in load
@@ -1835,7 +1829,7 @@ def test_cookie_tab_primary_buttons_are_44px():
     assert block, "缺少 #st-cookies/#st-imgbed/#ts-form .btn-normal"
     assert "44px" in block.group(1)
     tokens = (APP_JS.parent / "vendor" / "design-tokens.css").read_text()
-    root = re.search(r"^:root\s*\{", tokens, re.M)
+    root = re.search(r"^:root\s*\{", tokens, re.MULTILINE)
     assert root
     # 只断言浅色 :root 里仍是 42px，避免误伤深色块
     light = tokens.split(":root.theme-dark")[0]
@@ -1938,7 +1932,6 @@ def test_feishu_settings_auto_preview_and_uniform_source_actions():
 
 def test_feishu_source_display_mode_switchable_between_timeline_and_document():
     """飞书来源支持时间线/文档两种展示，设置行可切换，阅读器按模式分支。"""
-    src = APP_JS.read_text()
     rows = _fn_body("feishuSourceRowsHtml")
     assert "feishu-display-segment" in rows
     assert "feishu-display-option" in rows
@@ -2085,7 +2078,6 @@ def test_feishu_timeline_uses_windowed_pages_and_load_more_state():
 
 
 def test_feishu_timeline_source_selection_updates_pills_and_header():
-    src = APP_JS.read_text()
     source = _fn_body("selectFeishuTimelineSource")
     toolbar_update = _fn_body("updateFeishuTimelineToolbar")
     header_update = _fn_body("updateFeishuTimelineHeader")
@@ -2108,7 +2100,7 @@ def test_feishu_timeline_source_selection_updates_pills_and_header():
 
 def test_feishu_timeline_removes_unavailable_media_and_failed_image_shells():
     src = APP_JS.read_text()
-    asset = _fn_body("feishuTimelineAssetHtml")
+    _fn_body("feishuTimelineAssetHtml")
     fetch_asset = _fn_body("fetchFeishuTimelineAsset")
     view = _fn_body("renderFeishuTimelineView")
 
@@ -2292,7 +2284,7 @@ def test_ima_collector_save_rechecks_form_revision_after_stats_reload_before_cle
     """stats GET 期间输入新 token 后，完成回调不得清除新值。"""
     save = _fn_body("saveImaCollector")
     reload_index = save.index("await reloadAdminSettingsPage(routeSeq, savedImaStatus)")
-    clear_index = save.index('tokenInput.value = ""')
+    save.index('tokenInput.value = ""')
     assert "const noNewerEditsAfterReload" in save
     assert save.index("const noNewerEditsAfterReload") > reload_index
     assert "if (noNewerEditsAfterReload)" in save[reload_index:]
@@ -2348,7 +2340,6 @@ def test_ima_confirmed_departed_save_reconciles_server_state_on_next_stats_load(
 
 def test_ima_save_reload_owns_mount_generation_bump_and_preserves_stale_guards():
     """同路由 reload 自身的 mount generation bump 不得阻断清理；外部失效仍须中止。"""
-    src = APP_JS.read_text(encoding="utf-8")
     load = _fn_body("loadAdminKnowledge")
     save = _fn_body("saveImaCollector")
 
@@ -2716,7 +2707,6 @@ def test_ima_force_folder_retry_supersedes_inflight_owner():
 
 def test_ima_pending_token_restores_across_current_stats_route_not_owner_route():
     """重进知识库设置时，当前共享 owner 的 token/表单仍可恢复，不能按发起路由丢弃。"""
-    src = APP_JS.read_text(encoding="utf-8")
     restore = _fn_body("restoreImaCollectorOwnerToken")
     load = _fn_body("loadAdminKnowledge")
     assert "if (owner && owner !== imaMountState.saveOwner) return;" in restore
@@ -3041,8 +3031,8 @@ def test_timeline_type_roles_follow_four_step_ramp():
     """时间线字号只走四档：头像字形 20、分组标签淡灰 400 + 等宽数字。"""
     css = STYLE_CSS.read_text()
     avatar = re.search(r"\.post-item \.p-header \.kol-avatar\s*\{([^}]*)\}", css)
-    group = re.search(r"^\.tl-group-head\s*\{([^}]*)\}", css, re.M)
-    badge = re.search(r"^\.tl-badge-avatars \.ph\s*\{([^}]*)\}", css, re.M)
+    group = re.search(r"^\.tl-group-head\s*\{([^}]*)\}", css, re.MULTILINE)
+    badge = re.search(r"^\.tl-badge-avatars \.ph\s*\{([^}]*)\}", css, re.MULTILINE)
     assert avatar, "缺少帖子头像字号"
     assert "var(--text-icon)" in avatar.group(1)
     assert group, "缺少日期分组标签"
@@ -3057,10 +3047,9 @@ def test_timeline_type_roles_follow_four_step_ramp():
 def test_new_badge_avatars_fit_inside_capsule():
     """新帖胶囊跟 X NewTweetsPill：40px 条、32px 头像、1px 同色圈、-12px 叠、X 小阴影。"""
     css = STYLE_CSS.read_text()
-    js = APP_JS.read_text()
-    btn = re.search(r"^\.tl-new-badge-btn\s*\{([^}]*)\}", css, re.M)
-    av = re.search(r"^\.tl-badge-avatars > \*\s*\{([^}]*)\}", css, re.M)
-    arrow = re.search(r"^\.tl-badge-arrow\s*\{([^}]*)\}", css, re.M)
+    btn = re.search(r"^\.tl-new-badge-btn\s*\{([^}]*)\}", css, re.MULTILINE)
+    av = re.search(r"^\.tl-badge-avatars > \*\s*\{([^}]*)\}", css, re.MULTILINE)
+    arrow = re.search(r"^\.tl-badge-arrow\s*\{([^}]*)\}", css, re.MULTILINE)
     assert btn, "缺少 .tl-new-badge-btn"
     assert "height: 40px" in btn.group(1)
     assert "padding: 4px 16px" in btn.group(1)
@@ -3082,9 +3071,9 @@ def test_new_badge_avatars_fit_inside_capsule():
 def test_kol_card_name_wraps_full_combination_title():
     """订阅卡片名字独占一行可换行；平台/涨跌标签在下一行，不能把组合名裁成省略号。"""
     css = STYLE_CSS.read_text()
-    name = re.search(r"^\.kol-card-info \.name\s*\{([^}]*)\}", css, re.M)
-    meta = re.search(r"^\.kol-card-meta\s*\{([^}]*)\}", css, re.M)
-    head = re.search(r"^\.kol-card-head\s*\{([^}]*)\}", css, re.M)
+    name = re.search(r"^\.kol-card-info \.name\s*\{([^}]*)\}", css, re.MULTILINE)
+    meta = re.search(r"^\.kol-card-meta\s*\{([^}]*)\}", css, re.MULTILINE)
+    head = re.search(r"^\.kol-card-head\s*\{([^}]*)\}", css, re.MULTILINE)
     assert name, "缺少 .kol-card-info .name"
     assert "white-space: nowrap" not in name.group(1)
     assert "text-overflow: ellipsis" not in name.group(1)
@@ -3103,17 +3092,17 @@ def test_kol_card_name_wraps_full_combination_title():
 def test_timeline_new_badge_pins_to_sticky_filterbar():
     """新帖胶囊挂在吸顶筛选条上，往下滚仍能点，不能跟着时间线一起滑走。"""
     render = _fn_body("renderTimeline")
-    html = re.search(r'\$\("#main"\)\.innerHTML = `(.*?)`;', render, re.S)
+    html = re.search(r'\$\("#main"\)\.innerHTML = `(.*?)`;', render, re.DOTALL)
     assert html, "renderTimeline 未写入主栏 HTML"
     chunk = html.group(1)
-    feed = re.search(r'<section class="section-panel tl-feed-panel".*?</section>', chunk, re.S)
+    feed = re.search(r'<section class="section-panel tl-feed-panel".*?</section>', chunk, re.DOTALL)
     assert feed, "缺少时间线面板"
     assert 'id="tl-new-badge"' not in feed.group(0)
     assert chunk.index('id="tl-filterbar"') < chunk.index('id="tl-new-badge"') < chunk.index('id="tl-feed-panel"')
     css = STYLE_CSS.read_text()
-    bar = re.search(r"^\.tl-filterbar\s*\{([^}]*)\}", css, re.M)
+    bar = re.search(r"^\.tl-filterbar\s*\{([^}]*)\}", css, re.MULTILINE)
     assert bar and "position: sticky" in bar.group(1)
-    badge = re.search(r"^\.tl-new-badge\s*\{([^}]*)\}", css, re.M)
+    badge = re.search(r"^\.tl-new-badge\s*\{([^}]*)\}", css, re.MULTILINE)
     assert badge, "缺少 .tl-new-badge"
     assert "position: absolute" in badge.group(1)
     assert "top: 100%" in badge.group(1)
@@ -3124,7 +3113,7 @@ def test_timeline_new_badge_pins_to_sticky_filterbar():
 def test_ima_documents_group_switching_contract():
     """文档列表必须按 URL 群组切换，并让两个控件共享安全的选择逻辑。"""
     src = _all_view_source()
-    render = _fn_body("renderImaDocuments")
+    _fn_body("renderImaDocuments")
     assert "imaDocumentsGroup" in src
     assert "imaDocumentsGroupFromRoute" in src
     assert "imaDocumentsRoute" in src
@@ -3162,7 +3151,7 @@ def test_ima_documents_all_group_labels_and_single_group_title():
 
 def test_ima_document_group_switch_refreshes_locally():
     """群组切换只更新文档局部路由并使旧请求失效，不触发全局 router。"""
-    src = _all_view_source()
+    _all_view_source()
     select = _fn_body("selectImaDocumentGroup")
     helper = _fn_body("replaceImaDocumentsRoute")
     assert "replaceRoute(" not in select
@@ -3272,7 +3261,7 @@ def test_ima_reader_nav_requires_matching_snapshot_route():
 
 def test_ima_documents_refresh_and_retry_advance_local_route_seq():
     """刷新与重试必须递增局部路由序号，避免旧请求覆盖新结果。"""
-    src = _all_view_source()
+    _all_view_source()
     render = _fn_body("renderImaDocuments")
     refresh = _fn_body("refreshImaDocuments")
     assert "const seq = bumpRouteSeq();" in refresh
@@ -3387,7 +3376,7 @@ def test_ima_source_filter_is_compact_and_subscription_management_survives():
 def test_timeline_filterbar_stays_in_main_column():
     """筛选条只占主列，不横跨右侧栏留下空走廊；不居中、不收窄整页。"""
     render = _fn_body("renderTimeline")
-    html = re.search(r'\$\("#main"\)\.innerHTML = `(.*?)`;', render, re.S)
+    html = re.search(r'\$\("#main"\)\.innerHTML = `(.*?)`;', render, re.DOTALL)
     assert html, "renderTimeline 未写入主栏 HTML"
     chunk = html.group(1)
     assert chunk.index("tl-layout") < chunk.index('id="tl-filterbar"')
@@ -3430,7 +3419,6 @@ def test_timeline_wide_rail_markup():
 
 def test_live_rail_reuses_sidebar_and_shows_summary():
     """快讯宽屏侧栏复用现有外壳，只显示概览和刷新操作。"""
-    src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
     rail = _fn_body("liveRailHtml")
     assert 'id="tl-live-rail"' in _fn_body("renderTimeline")
@@ -3685,7 +3673,6 @@ def test_live_feed_is_prefetched_and_shares_inflight_request():
 
 def test_xueqiu_badge_uses_official_mark():
     """雪球角标用官方图，盒尺寸仍走 .pt-icon。"""
-    src = APP_JS.read_text()
     platforms = (APP_JS.parent / "core/platforms.js").read_text()
     css = STYLE_CSS.read_text()
     assert 'XUEQIU_ICON' in platforms
@@ -3700,14 +3687,17 @@ def test_xueqiu_badge_uses_official_mark():
     assert ":is(.post-item, .kol-card) .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }" in css
 
 
-def test_truth_badge_uses_single_cropped_viewbox():
-    """Truth 角标不得重复 viewBox：HTML 取第一个，0 0 24 24 会把 T 字画小。"""
+def test_truth_badge_is_scheme_d_glyph():
+    """Truth 角标：无底框断笔 T + 青绿点，单 viewBox。"""
     platforms = (APP_JS.parent / "core/platforms.js").read_text()
     icon = re.search(r"const TRUTH_ICON = `([^`]+)`", platforms).group(1)
     assert "${ICON_ATTRS}" not in icon
     assert icon.count("viewBox=") == 1
-    assert 'viewBox="0 0 24 24"' not in icon
-    assert 'viewBox="3.6 4.85 16 16"' in icon
+    assert 'viewBox="0 0 24 24"' in icon
+    assert 'fill="#2DD0B3"' in icon
+    assert 'fill="currentColor"' in icon
+    assert 'width="24"' not in icon
+    assert "M9.2 3.5H21.5V7.7H14.5V20.5H9.2V3.5z" in icon
 
 
 def test_post_origin_link_matches_adjacent_tags():
@@ -3845,7 +3835,7 @@ assert.doesNotMatch(weibo, /#e6162d|#ff8200|#287DFF/i);
 
 const truth = html("truth", { kol_external_id: "realDonaldTrump" });
 assert.match(truth, /data-platform="truth"/);
-assert.match(truth, /rect x="4\.4"/);
+assert.match(truth, /rect x="2\.5"/);
 assert.match(truth, /fill="#1668e0"/);
 assert.match(truth, /@realDonaldTrump/);
 
@@ -4075,7 +4065,6 @@ def test_live_toolbar_keeps_existing_filter_structure():
 
 def test_timeline_feeds_use_scroll_loading_instead_of_more_button():
     """快讯和其他动态源都在列表底部自动加载下一页，并显示加载状态。"""
-    src = APP_JS.read_text()
     auto = _fn_body("startFeedAutoLoad")
     stop = _fn_body("stopFeedAutoLoad")
     load_more = _fn_body("feedLoadMore")
@@ -4255,7 +4244,7 @@ def test_ima_reader_clamps_long_abstract_and_keeps_preview_floor():
 
 def test_ima_reader_abstract_callout_and_copy():
     src = _all_view_source()
-    reader = _fn_body("renderImaDocument")
+    _fn_body("renderImaDocument")
     css = STYLE_CSS.read_text()
 
     # Copy button removed; ensure no residual handlers or markup
@@ -4270,7 +4259,6 @@ def test_ima_reader_abstract_callout_and_copy():
 
 def test_ima_document_reader_preserves_group_context_and_metadata():
     """阅读页标题显示接口返回的群组和日期，并从当前 URL 保留列表筛选上下文。"""
-    src = APP_JS.read_text()
     reader = _fn_body("renderImaDocument")
     assert "let backRoute = imaDocumentsRoute(" in reader
     assert 'currentQuery.get("group")' in reader
@@ -4544,7 +4532,6 @@ def test_ima_doc_row_renders_abstract_when_present():
 
 
 def test_ima_report_search_is_debounced_and_explicitly_pages():
-    src = APP_JS.read_text()
     render = _fn_body("renderImaDocuments")
     queued = _fn_body("queueImaDocumentsSearch")
     more = _fn_body("loadImaDocumentsMore")
@@ -4620,7 +4607,6 @@ def test_ima_report_render_reuses_mounted_header_and_cancels_stale_search():
 
 
 def test_ima_reader_captures_and_restores_the_loaded_result_set():
-    src = APP_JS.read_text()
     capture = _fn_body("captureImaListSnapshot")
     current = _fn_body("currentImaListSnapshot")
     restore = _fn_body("restoreImaListSnapshot")
@@ -4784,7 +4770,6 @@ def test_admin_kols_list_has_news_selection_controls():
 
 
 def test_financial_news_visibility_is_runtime_controlled():
-    src = APP_JS.read_text()
     sidebar = _fn_body("renderSidebar")
     bottom = _fn_body("renderBottomNav")
     router = _fn_body("router")
@@ -4926,8 +4911,10 @@ def test_static_asset_cache_bust_versions():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     digest = asset_digest(ROOT)
-    assert f'href="/style.css?v={digest}"' in html
-    assert f'src="/app.js?v={digest}"' in html
+    style = hashed_url(static_dir(ROOT) / "style.css", ROOT)
+    app_js = hashed_url(static_dir(ROOT) / "app.js", ROOT)
+    assert f'href="{style}"' in html
+    assert f'src="{app_js}"' in html
     assert f'const CACHE = "dav-shell-{digest}";' in sw
 
 
@@ -5044,7 +5031,6 @@ def test_knowledge_index_status_copy_is_admin_only():
 
 
 def test_knowledge_report_first_shell_uses_one_surface_per_route():
-    src = APP_JS.read_text()
     list_shell = _fn_body("mountKnowledgeListShell")
     reader_shell = _fn_body("mountKnowledgeReaderShell")
     render = _fn_body("renderKnowledge")
@@ -5115,7 +5101,6 @@ def test_ima_report_metadata_contract_keeps_existing_capabilities():
 
 
 def test_ima_documents_search_leaves_day_view():
-    src = APP_JS.read_text()
     submit = _fn_body("submitImaDocumentsSearch")
     tag = _fn_body("selectImaDocumentsTag")
     day = _fn_body("selectImaDocumentsDay")
@@ -5511,19 +5496,19 @@ def test_sticky_chrome_is_opaque_canvas_not_glass():
     css = STYLE_CSS.read_text()
     assert "rgba(15, 17, 21, 0.82)" not in tokens
     assert "rgba(245, 245, 247, 0.78)" not in tokens
-    body = re.search(r"^body\s*\{([^}]*)\}", css, re.M)
+    body = re.search(r"^body\s*\{([^}]*)\}", css, re.MULTILINE)
     assert body and "gradient-page-admin-wide" not in body.group(1)
-    topbar = re.search(r"^\.topbar\s*\{([^}]*)\}", css, re.M)
+    topbar = re.search(r"^\.topbar\s*\{([^}]*)\}", css, re.MULTILINE)
     assert topbar and "backdrop-filter" not in topbar.group(1)
     assert "background: var(--color-bg)" in topbar.group(1)
-    bar = re.search(r"^\.tl-filterbar\s*\{([^}]*)\}", css, re.M)
+    bar = re.search(r"^\.tl-filterbar\s*\{([^}]*)\}", css, re.MULTILINE)
     assert bar and "backdrop-filter" not in bar.group(1)
     assert "calc(-1 * var(--page-pad-x))" in bar.group(1)
     assert css.count("--page-pad-x:") >= 3
-    sidebar = re.search(r"^\.sidebar\s*\{([^}]*)\}", css, re.M)
+    sidebar = re.search(r"^\.sidebar\s*\{([^}]*)\}", css, re.MULTILINE)
     assert sidebar and "backdrop-filter" not in sidebar.group(1)
     assert "background: var(--color-bg)" in sidebar.group(1)
-    bottom = re.search(r"^\.bottom-nav\s*\{([^}]*)\}", css, re.M)
+    bottom = re.search(r"^\.bottom-nav\s*\{([^}]*)\}", css, re.MULTILINE)
     assert bottom and "backdrop-filter" not in bottom.group(1)
     assert "background: var(--color-bg)" in bottom.group(1)
     assert "backdrop-filter" not in css
@@ -5626,7 +5611,7 @@ def test_admin_kols_filter_controls_match_input_height():
     assert "ak-platform-tabs" in body
     css = STYLE_CSS.read_text()
     assert re.search(r"\.toolbar \.btn-ghost[^{]*\{[^}]*--control-height-2xl", css)
-    assert re.search(r"\.platform-tab\s*\{[^}]*44px", css, re.S)
+    assert re.search(r"\.platform-tab\s*\{[^}]*44px", css, re.DOTALL)
 
 
 def test_admin_kols_mobile_filters_and_actions_align():
@@ -5672,9 +5657,9 @@ def test_type_emphasis_stays_on_ramp():
     assert "font-size:1.1em" not in src
     assert "class=\"bind-code\"" in _fn_body("fsPersonalStateHtml")
     assert 'resultEl.style.fontWeight = "600"' in _fn_body("adminBatchAddKols")
-    paste = re.search(r"^\.cookie-paste\s*\{([^}]*)\}", css, re.M)
-    bind = re.search(r"^\.bind-code\s*\{([^}]*)\}", css, re.M)
-    add_lines = re.search(r"^\.ak-add-lines\s*\{([^}]*)\}", css, re.M)
+    paste = re.search(r"^\.cookie-paste\s*\{([^}]*)\}", css, re.MULTILINE)
+    bind = re.search(r"^\.bind-code\s*\{([^}]*)\}", css, re.MULTILINE)
+    add_lines = re.search(r"^\.ak-add-lines\s*\{([^}]*)\}", css, re.MULTILINE)
     assert paste and "var(--font-mono)" in paste.group(1) and "var(--text-sm)" in paste.group(1)
     assert bind and "var(--font-mono)" in bind.group(1) and "var(--text-body)" in bind.group(1)
     assert add_lines and "var(--font-mono)" in add_lines.group(1) and "var(--text-sm)" in add_lines.group(1)
@@ -5756,7 +5741,7 @@ def test_type_scale_uses_four_reading_roles():
         assert retired not in tokens, f"token 仍保留已废弃的 {retired}"
         assert retired not in css, f"样式仍引用已废弃的 {retired}"
 
-    body = re.search(r"^body\s*\{([^}]*)\}", css, re.M)
+    body = re.search(r"^body\s*\{([^}]*)\}", css, re.MULTILINE)
     assert body and "font-size: var(--text-body)" in body.group(1)
     assert "font-size: 14px" not in css
 
@@ -6284,8 +6269,9 @@ INDEX_HTML = APP_JS.with_name("index.html")
 
 def test_app_uses_native_module_entry():
     html = INDEX_HTML.read_text()
-    assert '<script type="module" src="/app.js?v=' in html
-    assert re.search(r'<script(?![^>]*\btype=["\']module["\'])[^>]*src="/app\.js', html) is None
+    app_js = hashed_url(static_dir(ROOT) / "app.js", ROOT)
+    assert f'<script type="module" src="{app_js}"' in html
+    assert re.search(r'<script(?![^>]*\btype=["\']module["\'])[^>]*src="/app(?:\.[0-9a-f]{12})?\.js', html) is None
 
 
 def test_core_helpers_are_real_modules():
@@ -6463,7 +6449,6 @@ def test_mx_tag_test_button_disabled_while_in_flight():
 def test_ticker_page_route_and_entry_points():
     """标的综述页：/ticker/<code> 路由 + 徽章入口 + 空综述不出壳。"""
     app = APP_JS.read_text()
-    ima = IMA_JS.read_text()
     style = STYLE_CSS.read_text()
     main_src = (ROOT / "app" / "main.py").read_text()
 

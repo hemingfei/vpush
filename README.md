@@ -213,6 +213,10 @@ docker compose up -d --build
 
 默认对外端口 **18084**（宿主机 8000 常被占用）：访问 `http://<NAS IP>:18084`。数据目录为 `./data`。
 
+## ARM 中间层
+
+ARM（Oracle-SJ-ARM）可作为采集与对象存储之间的中间层：采集只写 staging，由宿主机权威 `scripts/puller_loop.py`（及 `lab_common.py` / `manifest.py`，部署到 `/opt/vpush-ima-lab/scripts/`）上传 115，存储恢复后再用 `scripts/arm_nfs_sync.py` 做 NFS 兼容同步（**默认关**，开关独立于中间层）。OpenList 只读 `/lab-hot`，不暴露 115。**默认关闭**（`VPUSH_ARM_MIDDLEWARE=1` / `--arm-middleware` 才打开），生产 compose 与存储机采集行为不变。中金与 IMA 新下载均可直接写 `$VPUSH_ARM_STAGING_ROOT/local/.../YYYY/MM/DD/`；实验室限量入口是 `ima_arm_lab_sync` / `cicc_arm_lab_sync`。实验室运维面板见 [arm-lab-ops/README.md](arm-lab-ops/README.md)（phase 3：同步时钟 / limit / `PULLER_BATCH_SIZE` 旋钮；hot 文件 `0664`）。说明见 [docs/arm-middleware.md](docs/arm-middleware.md)。
+
 ## 推送渠道配置
 
 ### Telegram
@@ -283,6 +287,8 @@ uvicorn app.main:app --reload
 ```
 
 测试：`python -m pytest -q`
+
+前端静态资源改完后跑 `python scripts/bump_assets.py --sync`：它按文件内容写成 `/app.<hash>.js`、`/style.<hash>.css` 以及 ES module 的 import map，无需手改哈希。源站对带哈希的 JS/CSS 发 `Cache-Control: public, max-age=31536000, immutable`，Cloudflare 可以长期 HIT；`index.html`、SPA 回退 HTML 和 `*.webmanifest` 仍是 `no-cache`（带 ETag 再校验），避免用户卡在旧前端。`/api/*` 与私有媒体不走这套缓存。
 
 ## 常见问题
 

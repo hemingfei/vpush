@@ -328,7 +328,7 @@ class ImaSearchIndex:
         allowed = [
             group_id
             for group_id in self.group_ids
-            if group_id in set(str(item) for item in readable_group_ids)
+            if group_id in {str(item) for item in readable_group_ids}
         ]
         if not allowed:
             return []

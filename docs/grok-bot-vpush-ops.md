@@ -74,7 +74,7 @@ ssh -i ~/.ssh/vpush_prod_key root@179.255.150.134 '
 '
 ```
 
-等 healthy，核对容器内 `APP_VERSION` 与 `index.html` 的 `app.js?v=`。
+等 healthy，核对容器内 `APP_VERSION` 与 `index.html` 的 `/app.<hash>.js`。
 
 禁止：`docker compose build`（compose 没有 build 字段）；`docker compose run` 第二进程（锁死 SQLite）。
 

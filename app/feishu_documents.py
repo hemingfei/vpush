@@ -30,7 +30,7 @@ MAX_MEDIA_BYTES = 50 * 1024 * 1024
 MAX_DOCUMENT_MEDIA_BYTES = 250 * 1024 * 1024
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _TIME_RE = re.compile(r"(?<!\d)(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\s+(\d{1,2}):(\d{2})(?!\d)")
-_SPEAKER_RE = re.compile(r"^([^：:\n]{1,40}?)(?:\s+回复\s+([^：:\n]{1,40}?))?[：:]\s*(.*)$", re.S)
+_SPEAKER_RE = re.compile(r"^([^：:\n]{1,40}?)(?:\s+回复\s+([^：:\n]{1,40}?))?[：:]\s*(.*)$", re.DOTALL)
 _SUPPORTED_HOSTS = ("feishu.cn", "larksuite.com")
 
 
@@ -824,7 +824,7 @@ class FeishuDocumentSyncService:
                             filename_match = re.search(
                                 r"filename\*?=(?:UTF-8''|\")?([^\";]+)",
                                 disposition,
-                                re.I,
+                                re.IGNORECASE,
                             )
                             if filename_match:
                                 raw_name = unquote(filename_match.group(1).strip().strip('"'))
@@ -906,7 +906,7 @@ class FeishuDocumentSyncService:
         for source in sources:
             try:
                 self.timeline(source)
-            except Exception:
+            except Exception:  # noqa: BLE001, S112 - 预热尽力而为，失败跳过该源
                 continue
             else:
                 warmed += 1

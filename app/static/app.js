@@ -54,7 +54,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.212";
+const APP_VERSION = "1.12.219";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -3926,10 +3926,14 @@ function postCard(post) {
   const expanded = _tlExpanded.has(post.id);
   const shown = expanded ? body : body.slice(0, 200);
   // X 帖常 title==content（如纯链接帖），标题和正文都渲染会视觉重复，跳过标题；
-  // 长文帖 title 常为 content 开头一段（截断），同样跳过避免重复展示
+  // 长文帖 title 常为 content 开头一段（截断），同样跳过避免重复展示。
+  // 译文标题/正文来自两次独立翻译、措辞可能不同，前缀匹配要落在原文侧才稳
+  const srcTitle = (post.title_src || title || "").trim();
+  const srcBody = (post.content_src || body || "").trim();
   const titleDup = !!title && (
     title.trim() === body.trim()
     || body.trimStart().startsWith(title.trim())
+    || !!(srcTitle && srcBody && srcBody.startsWith(srcTitle))
   );
   const trBar = translated ? `<div class="p-tr">${GROK_TRANSLATE_ICON}<span class="p-tr-label">翻译自英语</span><button type="button" class="p-tr-toggle" onclick="tlToggleOrigin(${post.id})">${showSrc ? "显示译文" : "显示原文"}</button></div>` : "";
   return `
@@ -3950,8 +3954,9 @@ function postCard(post) {
         : ""}</div>`}
       ${images.length ? `
         <div class="post-images">
-          ${images.slice(0, 4).map((img) => `
-            <a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(post.kol_name)}的配图"><img src="${escapeHtml(imgSrcFor(img))}" loading="lazy" alt="${escapeHtml(post.kol_name)} 的配图" onerror="imgOnError(this)"></a>`).join("")}
+          ${images.slice(0, 4).map((img) => (/\.(mp4|webm)(\?|$)/i.test(img) ? `
+            <video class="post-video" src="${escapeHtml(imgSrcFor(img))}" controls playsinline preload="none"></video>` : `
+            <a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(post.kol_name)}的配图"><img src="${escapeHtml(imgSrcFor(img))}" loading="lazy" alt="${escapeHtml(post.kol_name)} 的配图" onerror="imgOnError(this)"></a>`)).join("")}
           ${images.length > 4 ? `<span class="post-images-more">+${images.length - 4}</span>` : ""}
         </div>` : ""}
       ${postFiles(post).map((f) => {
@@ -5831,6 +5836,7 @@ async function savePollingConfig() {
   const body = {
     interval_seconds: Number($("#pc-interval").value),
     priority_interval_seconds: Number($("#pc-priority").value),
+    truth_interval_seconds: Number($("#pc-truth").value),
     digest_interval_seconds: Number($("#pc-digest").value),
     source_probe_interval_seconds: Number($("#pc-probe").value),
     cookie_keepalive_interval_seconds: Number($("#pc-keepalive").value),
@@ -6852,7 +6858,7 @@ let codesView, loadAdminCodes, adminCodesBatch, adminCodesClearSelect, adminCode
 
 // admin 视图懒加载：news 由 ensureAdminViews() 赋值，求值期读到的是 undefined
 let newsView, loadAdminNews, loadAdminPosts, selectAdminNewsSource, saveAdminNewsSettings, refreshAllAdminNews, refreshAdminNewsFeed, toggleAdminNewsSource,
-  toggleAdminNewsFeed, archiveAdminNewsSource, restoreAdminNewsSource, archiveAdminNewsFeed, restoreAdminNewsFeed, openNewsSourceModal, openNewsFeedModal,
+  toggleAdminNewsFeed, archiveAdminNewsSource, restoreAdminNewsSource, deleteAdminNewsSource, archiveAdminNewsFeed, restoreAdminNewsFeed, deleteAdminNewsFeed, openNewsSourceModal, openNewsFeedModal,
   updateAdminNewsQuery, updateAdminNewsStatus, updateAdminNewsArchived, adminFilterPosts, adminPostsLoadMore, adminTogglePost, adminDeletePost, adminSetPostHidden;
 
 // admin 视图懒加载：users 由 ensureAdminViews() 赋值，求值期读到的是 undefined
@@ -6973,8 +6979,10 @@ async function ensureAdminViews() {
   toggleAdminNewsFeed,
   archiveAdminNewsSource,
   restoreAdminNewsSource,
+  deleteAdminNewsSource,
   archiveAdminNewsFeed,
   restoreAdminNewsFeed,
+  deleteAdminNewsFeed,
   openNewsSourceModal,
   openNewsFeedModal,
   updateAdminNewsQuery,
@@ -8933,6 +8941,8 @@ const INLINE_HANDLERS = {
   copyText,
   createProxyPool,
   cycleTheme,
+  deleteAdminNewsFeed,
+  deleteAdminNewsSource,
   deleteProxyNode,
   deleteProxyPool,
   disableWebPush,

@@ -1,4 +1,4 @@
-"""Truth Social 抓取器：CNN 存档的头部窗口解析、增量过滤与基线裁剪。"""
+"""Truth Social 抓取器：直连 API 适配、CNN 存档兜底、增量过滤与基线裁剪。"""
 from __future__ import annotations
 
 import json
@@ -12,6 +12,7 @@ from app.fetchers.truth import (
     entry_images,
     entry_published_at,
     parse_archive_head,
+    status_to_entry,
 )
 
 NEW = {
@@ -37,6 +38,27 @@ TOO_OLD = {
     "media": [],
 }
 
+API_STATUS = {
+    "id": "117290107011309524",
+    "created_at": "2026-09-18T04:16:42.005Z",
+    "content": "<p>Very interesting. A must read!</p><p>Second line &amp; more</p>",
+    "url": "https://truthsocial.com/@realDonaldTrump/117290107011309524",
+    "media_attachments": [
+        {"type": "image", "url": "https://static-assets-1.truthsocial.com/a.jpg"},
+        {"type": "video", "url": "https://static-assets-1.truthsocial.com/v.mp4"},
+    ],
+}
+API_REBLOG = {
+    "id": "117290199999999999",
+    "created_at": "2026-09-18T05:00:00.000Z",
+    "content": "",
+    "reblog": {
+        "content": "<p>Reposted text</p>",
+        "url": "https://truthsocial.com/@someone/1",
+        "media_attachments": [{"type": "image", "url": "https://x/p.jpg"}],
+    },
+}
+
 
 def serialize(entries) -> bytes:
     return json.dumps(entries, indent=2, ensure_ascii=False).encode()
@@ -51,9 +73,91 @@ def test_parse_archive_head_cuts_at_last_complete_object():
 
 
 def test_entry_helpers_filter_images_and_format_time():
-    assert entry_images(NEW) == ["https://static-assets.truthsocial.com/x/original/pic.jpg"]
+    assert entry_images(NEW) == [
+        "https://static-assets.truthsocial.com/x/original/pic.jpg",
+        "https://static-assets.truthsocial.com/x/original/clip.mp4",  # 视频链接保留
+    ]
     assert entry_images({"media": []}) == []
     assert entry_published_at(NEW) == "2026-09-04 20:00"
+
+
+def test_status_to_entry_strips_html_and_filters_media():
+    entry = status_to_entry(API_STATUS)
+    assert entry["id"] == "117290107011309524"
+    assert entry["content"] == "Very interesting. A must read!\nSecond line & more"
+    assert entry["media"] == [
+        "https://static-assets-1.truthsocial.com/a.jpg",
+        "https://static-assets-1.truthsocial.com/v.mp4",  # 视频附件保留
+    ]
+    assert entry["url"].endswith("/117290107011309524")
+
+
+def test_status_to_entry_reblog_uses_inner_content():
+    entry = status_to_entry(API_REBLOG)
+    assert entry["id"] == "117290199999999999"  # 转发层 id/时间
+    assert entry["created_at"] == "2026-09-18T05:00:00.000Z"
+    assert entry["content"] == "Reposted text"  # 原帖内容
+    assert entry["media"] == ["https://x/p.jpg"]
+    assert entry["url"] == "https://truthsocial.com/@someone/1"
+    assert status_to_entry({"id": ""}) is None
+
+
+def test_status_to_entry_card_image_as_fallback_media():
+    no_media = dict(API_STATUS, media_attachments=[])
+    no_media["card"] = {
+        "image": "https://static-assets-1.truthsocial.com/cache/preview.jpeg",
+        "title": "Ruddy: 'A Rising Trump Lifts All Boats'",
+    }
+    assert status_to_entry(no_media)["media"] == [
+        "https://static-assets-1.truthsocial.com/cache/preview.jpeg"
+    ]
+    with_media = dict(API_STATUS, card={"image": "https://x/card.jpeg"})
+    assert status_to_entry(with_media)["media"] == [
+        "https://static-assets-1.truthsocial.com/a.jpg",
+        "https://static-assets-1.truthsocial.com/v.mp4",
+    ]  # 有真实图片时不混入预览卡题图
+
+
+def test_title_excludes_trailing_url():
+    entry = {
+        "id": "117292378116430890",
+        "created_at": "2026-09-18T13:54:16.318Z",
+        "content": "Ruddy: 'A Rising Trump Lifts All Boats': https://www.newsmax.com/ruddy/ruddy-donald-trump-economy/2026/09/13/id/1269294/",
+        "media": [],
+        "url": "u",
+    }
+    post = TruthFetcher()._to_post({"id": 1, "name": "特朗普"}, entry)
+    assert post.title == "Ruddy: 'A Rising Trump Lifts All Boats'"
+    assert "1269294/" in post.content  # 正文保留完整 URL
+
+
+API_VIDEO_STATUS = {
+    "id": "117289658560181496",
+    "created_at": "2026-09-18T02:22:39.184Z",
+    "content": "<p></p>",
+    "url": "https://truthsocial.com/@realDonaldTrump/117289658560181496",
+    "media_attachments": [
+        {
+            "type": "video",
+            "url": "https://static-assets-1.truthsocial.com/files/v.mp4",
+            "preview_url": "https://static-assets-1.truthsocial.com/files/t.jpg",
+        }
+    ],
+}
+
+
+def test_status_to_entry_includes_video_attachment():
+    entry = status_to_entry(API_VIDEO_STATUS)
+    assert entry["media"] == ["https://static-assets-1.truthsocial.com/files/v.mp4"]
+
+
+def test_video_only_post_uses_video_placeholder():
+    post = TruthFetcher()._to_post(
+        {"id": 1, "name": "特朗普"}, status_to_entry(API_VIDEO_STATUS)
+    )
+    assert post.title == "视频"
+    assert post.content == "视频"
+    assert post.images == ["https://static-assets-1.truthsocial.com/files/v.mp4"]
 
 
 @pytest.fixture(autouse=True)
@@ -85,24 +189,57 @@ def test_first_fetch_is_baseline_only_recent_30d(db, monkeypatch):
     assert posts[0].platform == "truth"
     assert posts[0].title == "A big announcement!"
     assert posts[0].published_at == "2026-09-04 20:00"
-    assert posts[0].images == [NEW["media"][0]]
+    assert posts[0].images == [
+        NEW["media"][0],
+        NEW["media"][1],  # 视频链接（clip.mp4）也入库
+    ]
     assert posts[0].url.endswith("/" + NEW["id"])
     assert db.max_external_id_num("truth") == 0  # 未入库前仍为 0，入库由调度器负责
 
 
-def test_incremental_fetch_only_returns_newer_ids(db, monkeypatch):
+def test_incremental_uses_api_and_skips_seen_ids(db, monkeypatch):
+    fetcher = TruthFetcher(db=db)
+    kid = db.add_kol("truth", "特朗普", "realDonaldTrump")
+    seen_id = str(int(API_STATUS["id"]) - 10)
+    db.insert_post("truth", kid, seen_id, "旧帖", "旧帖", "u", "")
+    seen_entry = {
+        "id": seen_id,
+        "created_at": "2026-09-18T03:00:00.000Z",
+        "content": "already seen",
+        "media": [],
+        "url": "u",
+    }
+    monkeypatch.setattr(
+        fetcher,
+        "_request_api",
+        lambda kol: [status_to_entry(API_STATUS), status_to_entry(API_REBLOG), seen_entry],
+    )
+    archive_called = []
+    monkeypatch.setattr(fetcher, "_request", lambda full: archive_called.append(full) or [])
+    posts = fetcher.fetch(db.get_kol(kid))
+    assert archive_called == []  # API 成功时不碰存档
+    assert [p.external_id for p in posts] == [API_STATUS["id"], API_REBLOG["id"]]
+    assert posts[0].content == "Very interesting. A must read!\nSecond line & more"
+    assert posts[1].title == "Reposted text"  # 转发帖取原帖内容
+
+
+def test_api_failure_falls_back_to_archive_head(db, monkeypatch):
     fetcher = TruthFetcher(db=db)
     kid = db.add_kol("truth", "特朗普", "realDonaldTrump")
     db.insert_post("truth", kid, str(int(NEW["id"]) - 5), "旧帖", "旧帖", "u", "")
-    seen = {}
+    calls = []
+
+    def boom(kol):
+        raise RuntimeError("Truth API HTTP 403")
 
     def fake_request(full):
-        seen["full"] = full
+        calls.append(full)
         return [NEW, OLD_IN_WINDOW]
 
+    monkeypatch.setattr(fetcher, "_request_api", boom)
     monkeypatch.setattr(fetcher, "_request", fake_request)
     posts = fetcher.fetch(db.get_kol(kid))
-    assert seen["full"] is False
+    assert calls == [False]  # 降级走存档头部窗口
     assert [p.external_id for p in posts] == [NEW["id"]]
 
 
@@ -116,9 +253,10 @@ def test_gap_window_falls_back_to_full_archive(db, monkeypatch):
         calls.append(full)
         return [NEW] if not full else [NEW, OLD_IN_WINDOW, TOO_OLD]
 
+    monkeypatch.setattr(fetcher, "_request_api", lambda kol: [NEW])  # 窗口在水位之上
     monkeypatch.setattr(fetcher, "_request", fake_request)
     posts = fetcher.fetch(db.get_kol(kid))
-    assert calls == [False, True]  # 头部窗口没盖住上次位置 → 整档回补
+    assert calls == [True]  # API 窗口没盖住上次位置 → 整档回补，不再拉头部
     assert {p.external_id for p in posts} == {NEW["id"], OLD_IN_WINDOW["id"]}
 
 
