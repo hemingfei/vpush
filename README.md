@@ -46,6 +46,10 @@
 
 ## 快速 Docker 部署
 
+自托管（NAS / VPS / 群晖）：按本节用 Docker Compose 或官方镜像。
+现网 [vpush.net](https://vpush.net/) 发版：只走 Lane A，见 [docs/deploy-lanes.md](docs/deploy-lanes.md) 与 `scripts/release_vpush.sh`。
+实验室 / IMA / 中金机房：见 [docs/ARM中间层架构.md](docs/ARM中间层架构.md)，不跟现网发版一起做。
+
 ### 0. 用 AI Agent 部署（可选，推荐）
 
 本项目从部署、配置到日常运维都可以交给 AI Agent（如 Codex、Claude Code、Cursor 等）直接完成。克隆仓库后，把目标交给 AI Agent，它会自行阅读本 README 与部署文档、准备配置、执行命令并做健康检查：
