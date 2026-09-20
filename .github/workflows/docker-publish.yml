@@ -285,7 +285,10 @@ jobs:
   # JENKINS_TOKEN（openclaw 账号 API Token）、VPUSH_WEBHOOK_URL/SECRET（系统通知预告）。
   publish-hmf:
     needs: test
-    if: github.ref == 'refs/heads/hmf'
+    # 车道拆分后 test 的 needs 里有 skipped 车道（本次只动 python 路径时 waf/mp 不跑），
+    # skipped 会沿 needs 图向下传播：只写 if: github.ref == ... 会被连带跳过、镜像不构建。
+    # 显式判 needs.test.result，跳过的车道不算失败（汇总作业已兜底 failure/cancelled）。
+    if: github.ref == 'refs/heads/hmf' && needs.test.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
