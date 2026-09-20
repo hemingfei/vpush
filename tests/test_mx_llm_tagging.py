@@ -964,13 +964,19 @@ def test_get_auto_status_roundtrip(monkeypatch):
             {"name": "开盘", "start": "09:15", "end": "11:35", "threshold": 20, "interval_minutes": 5}
         ],
     )
+    # 冻结到特殊时段（09:15-11:35）之外的正午，断言才与真实时钟无关
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 4, 12, 0, tzinfo=CN_TZ) if tz else super().now()
+    monkeypatch.setattr(m, "datetime", _Frozen)
     # 持久化 + 快照回读
     assert db.get_mx_llm_tag_auto_config()["specials"][0]["name"] == "开盘"
     status = m.get_auto_status(db)
     assert status["enabled"] is True
     assert status["regular"]["start"] == "00:00"
     assert len(status["specials"]) == 1
-    # 常规时段为全天 → 当前必然命中常规
+    # 常规时段为全天且当前在特殊时段之外 → 命中常规
     assert status["active_period"]["kind"] == "regular"
     assert status["armed"] is True
     assert status["last_trigger_at"] is None and status["interval_due_at"] is None
