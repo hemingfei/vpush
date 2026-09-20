@@ -673,6 +673,42 @@ def test_mx_feed_kol_card_click_still_opens_drawer():
     assert bind.index('actEl.dataset.act === "kol"') < bind.index('actEl.dataset.act === "target"')
 
 
+def test_holdings_buttons_gated_by_view_analysis_scope():
+    """持仓按钮按观点研判的分析大V范围显隐：范围外大V不出按钮/不开抽屉。
+
+    范围来源是 /api/me 的 mx_holdings_kol_ids（后端与研判分析名单同口径），
+    5 个入口统一走 mxHoldingsInScope 判断：时间线帖子卡、大V动态页工具栏、
+    智囊团大V总览卡、观点流大V卡、大V抽屉头部。数据端点另有 404 拦截兜底。
+    """
+    mxc = (STATIC / "views" / "mx-kol-holdings.js").read_text(encoding="utf-8")
+    # 判断函数：范围缺失（旧后端）不出按钮；命中才出
+    fn = _fn_body("mxHoldingsInScope")
+    assert "mx_holdings_kol_ids" in fn and "ids.includes(Number(kolId))" in fn
+    assert "if (!ids) return false" in fn
+    # 时间线帖子卡与大V动态页工具栏（app.js）
+    card = _fn_body("postCard")
+    assert 'post.platform === "mx" && mxHoldingsInScope(post.kol_id)' in card
+    kol_page = _fn_body("renderKolPage")
+    assert 'kol.platform === "mx" && mxHoldingsInScope(kol.id)' in kol_page
+    # 智囊团两处卡片 + 抽屉头部（mx-views.js）
+    assert "mxHoldingsInScope," in MX_VIEWS_JS  # 工厂依赖注入
+    kol_cards = _fn_body("mxvKolCardsHtml", MX_VIEWS_JS)
+    assert "mxHoldingsInScope(k.kol_id) ?" in kol_cards
+    feed_kol = _fn_body("mxvFeedKolHtml", MX_VIEWS_JS)
+    assert "mxHoldingsInScope(g.id) ?" in feed_kol
+    drawer_body = _fn_body("mxvRenderDrawerBody", MX_VIEWS_JS)
+    assert "mxHoldingsInScope(data.kol.kol_id || _mxv.drawer.kolId) ?" in drawer_body
+    # 抽屉/页面宿主前置拦截：范围外不开抽屉、独立页给明确空态
+    assert "mxHoldingsInScope," in mxc
+    open_fn = _fn_body("mxcOpenDrawer", mxc)
+    assert "if (!mxHoldingsInScope(kolId)) return;" in open_fn
+    page_fn = _fn_body("renderMxKolHoldings", mxc)
+    assert "if (!mxHoldingsInScope(kolId))" in page_fn
+    assert "不在持仓分析范围内" in page_fn
+    # 两个工厂都注入了判断函数（app.js 装配段）
+    assert APP_JS.count("mxHoldingsInScope,\n});") == 2
+
+
 def test_mx_kol_holdings_slider_change_and_sort():
     """最近观点滑动栏可整程拖动 + 松手刷新 + 按仓位/按时间排序。
 

@@ -1,8 +1,8 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-27e871a82bbd";
+const CACHE = "dav-shell-2dbae1b5a5f7";
 const SHELL = [
   "/",
-  "/app.434be01bb608.js",
+  "/app.6e5e9a687d20.js",
   // asset-modules:start
   "/core/dialog.3b30511c3cfd.js",
   "/core/html.817ab2339b89.js",
@@ -22,8 +22,8 @@ const SHELL = [
   "/views/holdings.84fe8f636d1c.js",
   "/views/ima.4ee73e107acf.js",
   "/views/market.b64771017dd0.js",
-  "/views/mx-kol-holdings.801435895c09.js",
-  "/views/mx-views.133127fefb79.js",
+  "/views/mx-kol-holdings.9340733cf11d.js",
+  "/views/mx-views.efb668c62c64.js",
   "/views/news.cb735ee469b6.js",
   "/views/post-card-export.877af7956711.js",
   "/views/push-settings.2630d93ede49.js",

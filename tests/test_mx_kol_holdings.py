@@ -283,3 +283,62 @@ def test_tag_vocab_cache_invalidates_on_content_change():
     db.set_setting("action_tag_vocabulary", '["建仓", "加仓", "自定义词"]')
     a3 = mkh._load_tag_vocab(db)
     assert a3 is not a2 and "自定义词" in a3[0]
+
+
+def test_holdings_scope_matches_view_analysis_kol_ids():
+    """持仓范围与观点研判分析名单同口径：空名单=全部启用 MX 大V；
+    非空=名单∩启用（停用大V即便残留在名单里也不再展示）。"""
+    import json as _json
+
+    from app.mx_view_analysis import holdings_kol_ids
+
+    client = make_client()
+    db = client.app.state.db
+    k1 = db.add_kol("mx", "范围大V一", "r1")
+    k2 = db.add_kol("mx", "范围大V二", "r2")
+    db.add_kol("weibo", "微博大V", "w1")
+
+    # 空名单（默认）：全部启用的 MX 大V，不含其他平台
+    assert set(holdings_kol_ids(db)) == {k1, k2}
+
+    # 非空名单：只取名单内的；名单外/其他平台不在
+    db.set_setting("mx_view_kol_ids", _json.dumps([k1, 99999]))
+    assert holdings_kol_ids(db) == [k1]
+
+    # 名单内大V被停用：残留 id 不再展示（与研判取数排除停用同口径）
+    db.set_kols_enabled([k1], False)
+    assert holdings_kol_ids(db) == []
+
+    # 恢复启用后回到名单口径
+    db.set_kols_enabled([k1], True)
+    assert holdings_kol_ids(db) == [k1]
+
+
+def test_api_blocks_kols_outside_holdings_scope():
+    """端点拦截：范围外大V mx-holdings/mx-pnl 均 404；范围内正常返回。
+    /api/me 下发范围名单供前端显隐按钮。"""
+    import json as _json
+
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    kol_in = db.add_kol("mx", "名单内大V", "r1")
+    kol_out = db.add_kol("mx", "名单外大V", "r2")
+    db.set_setting("mx_view_kol_ids", _json.dumps([kol_in]))
+    t = _today()
+    _seed_opinions(db, kol_in, [
+        (t, "09:20", "09:16", "stock", "贵州茅台", "bull", "建仓"),
+    ])
+
+    # 名单内：正常返回
+    assert client.get(f"/api/kols/{kol_in}/mx-holdings", headers=headers).status_code == 200
+    assert client.get(f"/api/kols/{kol_in}/mx-pnl", headers=headers).status_code == 200
+    # 名单外：404（不是空态 200——空态留给名单内但无观点的大V）
+    assert client.get(f"/api/kols/{kol_out}/mx-holdings", headers=headers).status_code == 404
+    assert client.get(f"/api/kols/{kol_out}/mx-pnl", headers=headers).status_code == 404
+    # 未登录照旧 401（鉴权在范围检查之前）
+    assert client.get(f"/api/kols/{kol_out}/mx-holdings").status_code == 401
+
+    # /api/me 下发范围：前端据此显隐持仓按钮
+    me = client.get("/api/me", headers=headers).json()
+    assert me["mx_holdings_kol_ids"] == [kol_in]

@@ -3980,7 +3980,7 @@ function postCard(post) {
           </div>`
         : `<a class="p-file" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</a>`).join("")}
       <div class="p-meta">
-        ${post.platform === "mx" ? `<button type="button" class="cat tl-hold-btn" data-kol-id="${Number(post.kol_id) || 0}"
+        ${post.platform === "mx" && mxHoldingsInScope(post.kol_id) ? `<button type="button" class="cat tl-hold-btn" data-kol-id="${Number(post.kol_id) || 0}"
           onclick="mxcOpenDrawer(this.dataset.kolId)" title="按该大V近 30 天多空观点回放推演的预估持仓"
           aria-label="查看${escapeHtml(post.kol_name)}的预估持仓">持仓 ${HOLDINGS_ICON}</button>` : ""}
         ${mxMarkChip(post)}
@@ -4035,6 +4035,16 @@ function mxMarkChip(post) {
       onclick="openActionMarkModal(${post.id})" title="标注中尚未生效，点击查看/参与">✍ 标注中 ${m.total}/${m.agree_n || 2}</button>`;
   }
   return "";
+}
+
+// MX 大V预估持仓范围：与观点研判的分析名单同口径（/api/me 下发，管理员改
+// 名单后重新登录/刷新生效）。范围外大V不出「持仓」按钮——持仓回放的数据源
+// 就是研判产出，没被研判的大V推不出持仓，展示入口只会点开一个空抽屉
+function mxHoldingsInScope(kolId) {
+  const ids = state.user && Array.isArray(state.user.mx_holdings_kol_ids)
+    ? state.user.mx_holdings_kol_ids : null;
+  if (!ids) return false; // 旧后端/字段缺失：不出按钮（后端同样拦截）
+  return ids.includes(Number(kolId));
 }
 
 // 标签徽章：最多直接显示 6 个，超出折叠进「更多N」，点击展开/收起；
@@ -4888,7 +4898,7 @@ async function renderKolPage(kolId, seq) {
           </div>
           <div class="toolbar" style="margin-top:12px">
             ${kol.subscribed && kol.platform === "xueqiu" ? subTypeSwitchesHtml(kol.id, kol.subscribe_type || "post") : ""}
-            ${kol.platform === "mx" ? `<button class="btn-sub holdings" id="kol-holdings-btn" onclick="go('/mx-kol/${kol.id}')" title="按该大V近 30 天多空观点回放推演的预估持仓">持仓</button>` : ""}
+            ${kol.platform === "mx" && mxHoldingsInScope(kol.id) ? `<button class="btn-sub holdings" id="kol-holdings-btn" onclick="go('/mx-kol/${kol.id}')" title="按该大V近 30 天多空观点回放推演的预估持仓">持仓</button>` : ""}
             <button class="btn-sub ${kol.subscribed ? "subscribed" : ""}" id="kol-sub-btn" onclick="toggleKolPageSubscribe(${kol.id})">
               ${kol.subscribed ? "✓ 已订阅" : "订阅"}
             </button>
@@ -6872,6 +6882,8 @@ const {
   // 预估持仓抽屉入口：mxcOpenDrawer/mxcCloseDrawer 定义在下方工厂（模块级 const），调用时已初始化
   openHoldingsDrawer: (kolId) => mxcOpenDrawer(kolId),
   closeHoldingsDrawer: () => mxcCloseDrawer(),
+  // 持仓按钮范围判断：与观点研判分析名单同口径（scope 外大V不出按钮）
+  mxHoldingsInScope,
 });
 
 const {
@@ -6922,6 +6934,8 @@ const {
   flash,
   // 从 /mx-views 大V抽屉头部进入持仓抽屉时先收起原抽屉（同一时刻只留一个）
   closeViewsDrawer: () => mxvCloseDrawer(),
+  // 持仓按钮/抽屉范围判断：与观点研判分析名单同口径
+  mxHoldingsInScope,
 });
 
 // admin 视图懒加载：codes 由 ensureAdminViews() 赋值，求值期读到的是 undefined

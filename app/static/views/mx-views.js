@@ -14,6 +14,7 @@ export function createMxViewsView(dependencies) {
     emptyState,
     flash,
     openHoldingsDrawer,
+    mxHoldingsInScope,
   } = dependencies;
   // Esc 关闭持仓抽屉：实现随抽屉工厂走（参数解构里箭头函数默认值不合法，拆出来赋值）
   const closeHoldingsDrawer = dependencies.closeHoldingsDrawer;
@@ -812,8 +813,8 @@ export function createMxViewsView(dependencies) {
       <div class="mxv-kolcard" onclick="mxvOpenKol(${k.kol_id})">
         <div class="mxv-avawrap">
           ${k.avatar ? `<img src="${escapeHtml(k.avatar)}" alt="" loading="lazy">` : `<div class="ava"></div>`}
-          <button type="button" class="mxv-hold-btn" onclick="event.stopPropagation();mxcOpenDrawer(${k.kol_id})"
-            title="预估持仓（近 30 天多空观点回放）" aria-label="查看${escapeHtml(k.name)}的预估持仓">持仓</button>
+          ${mxHoldingsInScope(k.kol_id) ? `<button type="button" class="mxv-hold-btn" onclick="event.stopPropagation();mxcOpenDrawer(${k.kol_id})"
+            title="预估持仓（近 30 天多空观点回放）" aria-label="查看${escapeHtml(k.name)}的预估持仓">持仓</button>` : ""}
         </div>
         <div style="flex:1;min-width:0">
           <div class="n">${escapeHtml(k.name)}${fav ? `<span class="fav" title="已关注">★</span>` : ""} <span style="color:var(--mxv-faint);font-size:11px">${k.opinion_count} 观点</span></div>
@@ -1145,8 +1146,8 @@ export function createMxViewsView(dependencies) {
       <div class="mxv-kolcard" data-act="kol" data-kol-id="${g.id}">
         <div class="mxv-avawrap">
           ${g.avatar ? `<img src="${escapeHtml(g.avatar)}" alt="" loading="lazy">` : `<div class="ava"></div>`}
-          <button type="button" class="mxv-hold-btn" data-act="mxc" data-kol-id="${g.id}"
-            title="预估持仓（近 30 天多空观点回放）" aria-label="查看${escapeHtml(g.name)}的预估持仓">持仓</button>
+          ${mxHoldingsInScope(g.id) ? `<button type="button" class="mxv-hold-btn" data-act="mxc" data-kol-id="${g.id}"
+            title="预估持仓（近 30 天多空观点回放）" aria-label="查看${escapeHtml(g.name)}的预估持仓">持仓</button>` : ""}
         </div>
         <div style="flex:1;min-width:0">
           <div class="n">${escapeHtml(g.name)}${_mxv.followed.has(g.id) ? `<span class="fav" title="已关注">★</span>` : ""}
@@ -1614,8 +1615,8 @@ export function createMxViewsView(dependencies) {
           <b style="color:var(--mxv-strong)">${escapeHtml(data.kol.name)}</b>
           <span style="color:var(--mxv-faint);font-size:12px">${data.timeline.length} 条观点 · 截至 ${escapeHtml(_mxv.at || "")}</span>
         </div>
-        <button type="button" class="mxv-hold-btn inline" data-kol-id="${Number(data.kol.kol_id || _mxv.drawer.kolId)}"
-          title="预估持仓（近 30 天多空观点回放）" aria-label="查看${escapeHtml(data.kol.name)}的预估持仓">查看持仓</button>
+        ${mxHoldingsInScope(data.kol.kol_id || _mxv.drawer.kolId) ? `<button type="button" class="mxv-hold-btn inline" data-kol-id="${Number(data.kol.kol_id || _mxv.drawer.kolId)}"
+          title="预估持仓（近 30 天多空观点回放）" aria-label="查看${escapeHtml(data.kol.name)}的预估持仓">查看持仓</button>` : ""}
         ${mxvDrawerFiltersHtml(data.timeline)}
         ${mxvTimelineListHtml(data.timeline)}`;
     }

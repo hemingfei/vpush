@@ -6,7 +6,7 @@
 export function createMxKolHoldingsView(dependencies) {
   const {
     $, state, api, escapeHtml, setPageTitle, go, routeStillActive, emptyState, flash,
-    closeViewsDrawer,
+    closeViewsDrawer, mxHoldingsInScope,
   } = dependencies;
 
   const _mxc = { seq: 0, data: null, pnl: null, days: 30, view: "all", recent: 3, sort: "weight",
@@ -118,6 +118,12 @@ export function createMxKolHoldingsView(dependencies) {
   async function renderMxKolHoldings(kolId, seq) {
     mxcTeardown(); // 页面宿主接管：清掉抽屉宿主残留引用（其 DOM 已由路由 teardown 移除）
     _mxc.seq = seq;
+    // 直接访问 /mx-kol/{id} 的范围外大V：后端同样 404 拦截，这里前置给明确空态
+    if (!mxHoldingsInScope(kolId)) {
+      setPageTitle("预估持仓");
+      $("#main").innerHTML = `<div class="mxc-root hd-root"><div class="mxv-empty">该大V不在持仓分析范围内（范围与观点研判的分析大V一致）</div></div>`;
+      return;
+    }
     _mxc.kolId = kolId;
     _mxc.days = 30; // 换大V/重新进页：天窗回默认，不带上一个大V的残留口径
     mxcLoadPrefs();
@@ -131,6 +137,7 @@ export function createMxKolHoldingsView(dependencies) {
   function mxcOpenDrawer(kolId) {
     kolId = Number(kolId);
     if (!Number.isInteger(kolId) || kolId <= 0) return;
+    if (!mxHoldingsInScope(kolId)) return; // 范围外无持仓可看：按钮本不展示，残留调用直接忽略
     if (typeof closeViewsDrawer === "function") closeViewsDrawer();
     mxcTeardown();
     const slot = document.getElementById("mxv-drawer-slot") || $("#main");

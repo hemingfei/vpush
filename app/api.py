@@ -2308,6 +2308,11 @@ def create_api_router(
         from .mx_action_marks import can_mark, get_mark_config
 
         profile["can_mx_action_mark"] = can_mark(user, get_mark_config(db))
+        # 预估持仓/盈亏的大V范围（与观点研判分析名单同口径）：前端据此显隐
+        # 「持仓」按钮——只有被研判的大V才有持仓回放，范围外不显示入口
+        from .mx_view_analysis import holdings_kol_ids
+
+        profile["mx_holdings_kol_ids"] = holdings_kol_ids(db)
         profile["subscription_count"] = db.count_subscriptions(user["id"])
         profile["keywords"] = db.get_user_keywords(user["id"])
         if notifiers_config is not None:
@@ -6935,6 +6940,11 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="大V不存在")
         if kol.get("platform") != "mx":
             raise HTTPException(status_code=400, detail="仅 MX 平台大V支持预估持仓")
+        # 范围与观点研判的分析名单同口径：范围外大V不做持仓推演（前端也不出按钮）
+        from .mx_view_analysis import holdings_kol_ids
+
+        if kol_id not in holdings_kol_ids(db):
+            raise HTTPException(status_code=404, detail="该大V不在持仓分析范围内")
         days = min(max(int(days), 7), 90)
         result = build_kol_holdings(db, kol_id, days=days)
         if not result:
@@ -6965,6 +6975,11 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="大V不存在")
         if kol.get("platform") != "mx":
             raise HTTPException(status_code=400, detail="仅 MX 平台大V支持预估盈亏")
+        # 范围与观点研判的分析名单同口径（与 mx-holdings 拦截保持一致）
+        from .mx_view_analysis import holdings_kol_ids
+
+        if kol_id not in holdings_kol_ids(db):
+            raise HTTPException(status_code=404, detail="该大V不在持仓分析范围内")
         days = min(max(int(days), 7), 90)
         result = build_kol_pnl(db, kol_id, days=days)
         if not result:

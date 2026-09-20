@@ -176,6 +176,18 @@ def get_kol_ids(db) -> list[int]:
     return [int(i) for i in raw] if isinstance(raw, list) else []
 
 
+def holdings_kol_ids(db) -> list[int]:
+    """预估持仓/盈亏的大V范围：与观点研判同口径。
+
+    名单为空 = 全部启用的 MX 大V；非空 = 名单 ∩ 启用的 MX 大V（停用大V
+    残留在设置里不再展示）。管理端改名单即刻生效（每次请求现算）。
+    """
+    configured = get_kol_ids(db)
+    enabled = set(db.list_kol_ids(platform="mx", status=1))
+    # 名单为空 = 全部启用的 MX 大V（与研判取数 kol_ids or None 同语义）
+    return sorted(enabled) if not configured else [i for i in configured if i in enabled]
+
+
 def get_topic_hints(db) -> list[str]:
     raw = _load_json_setting(db, MX_VIEW_TOPIC_HINTS_KEY, None)
     if raw is None:
