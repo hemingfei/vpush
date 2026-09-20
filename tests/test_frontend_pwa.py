@@ -38,9 +38,10 @@ def test_shell_assets_and_registration_present():
     src = SW_JS.read_text()
     for marker in ("/manifest.webmanifest", 'caches.open(CACHE)', "networkFirst"):
         assert marker in src, f"sw.js 缺少 {marker}"
-    # 前端注册 Service Worker 的入口仍在
+    # 前端注册 Service Worker 的入口仍在：URL 带 APP_VERSION（v1.12.226 起，
+    # 防 CF 边缘缓存旧 sw.js），断言按模板串匹配
     app_js = (SW_JS.parent / "app.js").read_text()
-    assert 'navigator.serviceWorker.register("/sw.js")' in app_js
+    assert "navigator.serviceWorker.register(`/sw.js?v=${APP_VERSION}`)" in app_js
 
 
 def test_sw_handles_push_and_notificationclick():
