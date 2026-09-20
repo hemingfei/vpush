@@ -1,2 +1,7 @@
 # Windows 上 core.autocrlf=true 会把工作区 shell 脚本转成 CRLF，复制到 Linux 后无法执行
 *.sh text eol=lf
+# 静态资源内容哈希按字节计算：CRLF/LF 混用会导致本地（Windows CRLF）与 CI（Linux LF）
+# 算出不同 digest，index.html/sw.js 里的 cache-bust 哈希与 CI 复算值必然失配
+app/static/** text eol=lf
+# 二进制资源必须排除在换行转换外——text 属性会按字节替换 \r\n 损坏 PNG
+app/static/**/*.png binary
