@@ -801,8 +801,12 @@ def test_mx_kol_pnl_actions_contract():
     # 渲染函数消费 actions 字段，文案/配色走 MXC_KINDS（与时间线徽章同源无双写）
     acts = _fn_body("mxcPnlActs", mxc)
     assert "actions" in acts and "MXC_KINDS" in acts
-    for label in ("买入建仓", "买入加仓", "卖出减仓", "卖出清仓", "翻空减仓"):
-        assert label in mxc, label
+    # 徽章文案不带买卖前缀（方向由红/绿配色承担），锁定 MXC_KINDS 块内断言
+    # （短文案与 MXC_VIEWS 撞词，全文 in 断言会假阳性）；翻空减仓保留前缀
+    kinds = mxc[mxc.index("const MXC_KINDS"):mxc.index("flip:")]
+    for label in ("建仓", "加仓", "减仓", "清仓"):
+        assert f'label: "{label}"' in kinds, label
+    assert 'label: "翻空减仓"' in mxc
     # 在持与已了结行都嵌操作时间线
     pnl = _fn_body("mxcRenderPnl", mxc)
     assert pnl.count("mxcPnlActs(") >= 2  # liveRows + closedRows

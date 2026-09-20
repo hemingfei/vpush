@@ -1,6 +1,6 @@
 // MX 大V预估持仓——两种宿主共用一套渲染：
 // ① 独立页 /mx-kol/{id}；② /mx-views 大V头像旁「持仓」按钮弹出的右侧抽屉。
-// 顶部当前持仓汇总（权重条），下方操作时间线（买入建仓/买入加仓/卖出减仓/卖出清仓/翻空减仓/持仓表态）。
+// 顶部当前持仓汇总（权重条），下方操作时间线（建仓/加仓/减仓/清仓/翻空减仓/持仓表态）。
 // 视觉与持股研判页同一套 .hd- token（holdings.css），样式全部 .mxc- 前缀；
 // 抽屉外壳自带 .hd-root 变量作用域，挂进 #mxv-drawer-slot（与智囊团抽屉同位，同一时刻只留一个）
 export function createMxKolHoldingsView(dependencies) {
@@ -21,12 +21,13 @@ export function createMxKolHoldingsView(dependencies) {
   // 持仓排序：weight=按仓位权重（后端默认序），time=按最近观点时间最新在前
   const MXC_SORT_KEY = "mxc_sort";
 
-  // 操作事件 → 徽章文案与色彩语义（A股口径：买入=红、卖出=绿）
+  // 操作事件 → 徽章文案与色彩语义；文案不带买卖前缀（方向由颜色承担：
+  // A股口径红=买、绿=卖），与筛选按钮 MXC_VIEWS 的短文案同口径
   const MXC_KINDS = {
-    open: { label: "买入建仓", cls: "buy" },
-    add: { label: "买入加仓", cls: "buy" },
-    trim: { label: "卖出减仓", cls: "sell" },
-    clear: { label: "卖出清仓", cls: "sell" },
+    open: { label: "建仓", cls: "buy" },
+    add: { label: "加仓", cls: "buy" },
+    trim: { label: "减仓", cls: "sell" },
+    clear: { label: "清仓", cls: "sell" },
     flip: { label: "翻空减仓", cls: "sell" },
     hold: { label: "持仓", cls: "hold" },
   };
