@@ -8022,8 +8022,9 @@ def create_api_router(
         """写入/更新我的操作标注：管理员直判立即生效；授权用户满一致人数生效。
 
         生效不落库——预估持仓/盈亏每次请求按标注现算（mx_kol_holdings），
-        下一次请求即反映。target_name 经别名表归一后必须命中个股正式名表，
-        操作词必须在词表内（或 'none'=非操作）。
+        下一次请求即反映。target_name 经别名表归一后必须命中个股正式名
+        （口径与打标管线一致：常用表+全市场−排除项），操作词必须在词表内
+        （或 'none'=非操作）。
         """
         from .mx_action_marks import (
             MARK_NONE,
@@ -8056,7 +8057,9 @@ def create_api_router(
         official = alias_map.get(target, target)
         if official not in stock_set:
             raise HTTPException(
-                status_code=400, detail=f"「{target}」不是名单内个股正式名，请先在词表维护"
+                status_code=400,
+                detail=f"「{target}」不是个股正式名：请核对名称拼写，"
+                       "黑话需先在标签分类页登记别名",
             )
         db.upsert_mx_action_mark(post_id, user["id"], official, action)
         if user.get("is_admin"):

@@ -99,8 +99,8 @@ def test_replay_topics_separate_from_stocks():
 def _seed_tag_posts(db, kol_id, rows):
     """rows: [(day, hhmm, tags, content)]——直接落带标签的 MX 消息。
 
-    标签配对要求个股在常用股票名单内（黑话/名单外不判仓），把用到的
-    测试股名一并写入名单。
+    标签配对的个股口径与打标管线一致（常用表+全市场），用到的测试
+    股名一并写入常用表以防资源文件里没有（黑话/名单外不判仓）。
     """
     extra = {t for _, _, tags, _ in rows for t in tags
              if t not in db.get_action_tag_vocabulary()}
@@ -211,6 +211,27 @@ def test_tag_events_skip_ambiguous_multi_stock_posts():
     ])
     out = mkh.build_kol_holdings(db, kol)
     assert out is None  # 无有效事件：返回 None（API 层转空态）
+
+
+def test_tag_events_pair_universe_names_not_in_curated():
+    """标签配对用宽口径：常用表外的全市场正式名也判仓（与打标管线同口径）。
+
+    回归：早先配对按常用表窄口径，冷门股标签事件被静默丢弃——
+    打标打出「工业富联 建仓」，持仓回放里却不出现该标的。
+    """
+    client = make_client()
+    db = client.app.state.db
+    kol = db.add_kol("mx", "冷门股大V", "room1")
+    t = _today()
+    # 不走 _seed_tag_posts（会把股名写进常用表），直接落帖
+    db.insert_post(platform="mx", kol_id=kol, external_id="uni1", title="", url="",
+                   content="工业富联建仓", published_at=f"{t} 09:16:00",
+                   tags=["工业富联", "建仓"])
+    assert "工业富联" not in set(db.get_stock_names())  # 前置：确为常用表外
+    out = mkh.build_kol_holdings(db, kol)
+    assert out is not None
+    assert [h["target_name"] for h in out["holdings"]] == ["工业富联"]
+    assert out["timeline"][0]["source"] == "tag" and out["timeline"][0]["kind"] == "open"
 
 
 def test_api_returns_holdings_and_empty_state():

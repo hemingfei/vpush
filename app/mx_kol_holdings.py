@@ -59,13 +59,19 @@ _vocab_cache: dict = {"key": None, "data": (set(), set(), {})}
 
 
 def _load_tag_vocab(db) -> tuple[set, set, dict]:
-    """标签分类用的词表：操作词表 / 个股正式名集合 / 黑话→正式名映射。"""
+    """标签分类用的词表：操作词表 / 个股正式名集合 / 黑话→正式名映射。
+
+    个股名与打标管线同口径（常用表+全市场−排除项，names_for_plain_text_tagging）：
+    帖子标签本就按宽口径打全市场名，回放配对与人工标注校验若按常用表窄口径，
+    冷门股的标签事件会被静默丢弃、标注提交报「不是名单内正式名」。
+    """
     from .db import (
         ACTION_TAG_VOCABULARY_KEY,
         STOCK_ALIASES_KEY,
         STOCK_NAMES_EXCLUDED_KEY,
         STOCK_NAMES_KEY,
     )
+    from .stock_universe import names_for_plain_text_tagging
 
     key = (
         db.get_setting(ACTION_TAG_VOCABULARY_KEY) or "",
@@ -76,7 +82,9 @@ def _load_tag_vocab(db) -> tuple[set, set, dict]:
     if _vocab_cache["key"] == key:
         return _vocab_cache["data"]
     action_set = {str(t).strip() for t in db.get_action_tag_vocabulary() if str(t).strip()}
-    stock_set = {str(n).strip() for n in db.get_stock_names() if str(n).strip()}
+    stock_set = set(
+        names_for_plain_text_tagging(db.get_stock_names(), db.get_stock_name_exclusions())
+    )
     alias_map = {str(a.get("alias") or "").strip(): str(a.get("stock") or "").strip()
                  for a in db.get_stock_aliases()}
     data = (action_set, stock_set, alias_map)

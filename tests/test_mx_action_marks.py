@@ -241,7 +241,11 @@ def test_api_none_mark_suppresses_false_positive():
 
 
 def test_api_validation_and_delete():
-    """非法操作词/名单外股票 400；DELETE 撤标回放还原；弹窗数据含权限与词表。"""
+    """非法操作词/全市场名单外股票 400；DELETE 撤标回放还原；弹窗数据含权限与词表。
+
+    个股校验口径与打标管线一致（常用表+全市场−排除项）：常用表外的
+    全市场正式名（如 工业富联）可标注，不存在/拼错的名字仍 400。
+    """
     client = make_client()
     db = client.app.state.db
     admin, alice, *_ = _setup_mark_env(client)
@@ -252,7 +256,7 @@ def test_api_validation_and_delete():
     resp = client.post(f"/api/posts/{p}/action-mark", headers=admin,
                        json={"target_name": "贵州茅台", "action": "梭哈"})
     assert resp.status_code == 400
-    # 名单外股票（黑话走别名归一，仍不在正式名表）
+    # 名单外股票（黑话走别名归一，仍不在全市场正式名内）
     resp = client.post(f"/api/posts/{p}/action-mark", headers=admin,
                        json={"target_name": "不存在的股票", "action": "建仓"})
     assert resp.status_code == 400
@@ -283,6 +287,33 @@ def test_api_validation_and_delete():
     resp = client.delete(f"/api/posts/{p}/action-mark?user_id="
                          f"{db.get_user_by_username_ci('mark_alice')['id']}", headers=admin)
     assert resp.status_code == 200
+
+
+def test_api_universe_stock_name_accepted():
+    """常用表外的全市场正式名可标注：校验口径与打标管线一致。
+
+    帖子标签按宽口径（常用表+全市场）打冷门股名，标注弹窗的输入建议
+    即来自这些标签；校验若按常用表窄口径会报「不是名单内正式名」。
+    """
+    client = make_client()
+    db = client.app.state.db
+    admin, *_ = _setup_mark_env(client)
+    kol = db.add_kol("mx", "宽口径大V", "room1")
+    t = _today()
+    p = _seed_post(db, kol, "工业富联建仓", f"{t} 10:00:00")
+    # 前置：工业富联确为全市场正式名且不在常用表（新装库默认名单）
+    assert "工业富联" not in set(db.get_stock_names())
+    resp = client.post(f"/api/posts/{p}/action-mark", headers=admin,
+                       json={"target_name": "工业富联", "action": "建仓"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["my_mark"]["target_name"] == "工业富联"
+    assert resp.json()["effective"]["action"] == "建仓"
+    # 管理员排除项仍然拦截：排除后同名校注 400（口径含「−排除项」）
+    db.set_stock_names(list(db.get_stock_names()) + ["工业富联"])
+    db.set_stock_name_exclusions(["工业富联"])
+    resp = client.post(f"/api/posts/{p}/action-mark", headers=admin,
+                       json={"target_name": "工业富联", "action": "建仓"})
+    assert resp.status_code == 400
 
 
 def test_api_me_flag_and_feed_attach():
