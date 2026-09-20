@@ -36,3 +36,5 @@ docs/research/
 
 # 带真实凭证的本地演示配置，禁止入库
 config.demo.yaml
+waf-bot/
+.scratch/
