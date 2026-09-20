@@ -1604,13 +1604,16 @@ body.lightbox-open { overflow: hidden; }
 .tl-feed-panel { margin-top: 0; }
 .tl-ima-entry { display: none; }
 @media (max-width: 900px) {
-  .tl-ima-entry { display: block; margin: 0 0 12px; }
+  .tl-ima-entry { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0 0 12px; }
 }
 .tl-ima-entry-btn {
   display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px;
   padding: 8px 12px; border: var(--border-default); border-radius: var(--radius-card);
   background: var(--color-surface); color: var(--color-text); text-align: left; cursor: pointer;
 }
+.tl-ima-entry-btn .nav-badge { margin-left: auto; }
+.tl-ima-entry-btn > span:not(.tl-ima-entry-icon):not(.nav-badge) { min-width: 0; }
+.tl-ima-entry-btn strong, .tl-ima-entry-btn small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl-ima-entry-btn:hover { border-color: var(--color-accent); background: var(--color-surface-hover); }
 .tl-ima-entry-btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .tl-ima-entry-icon { display: inline-flex; color: var(--color-accent-text); }

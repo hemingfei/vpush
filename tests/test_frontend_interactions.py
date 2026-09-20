@@ -4790,8 +4790,10 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert "打开研报中心" in timeline
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
-    # 手机（≤768px）也显示入口：知识库已放开移动端
-    assert "@media (max-width: 900px) {\n  .tl-ima-entry { display: block; margin: 0 0 12px; }" in css
+    # 手机（≤768px）也显示入口：知识库已放开移动端；财经新闻与研报中心并排
+    assert "grid-template-columns: 1fr 1fr" in css
+    assert "go('news')" in timeline
+    assert "财经新闻" in timeline
 
 
 
