@@ -6394,6 +6394,19 @@ def test_router_closes_body_level_modals_on_popstate():
     assert "closeRawModal()" in body and "closeTagVoteModal()" in body
 
 
+def test_spa_link_interceptor_skips_placeholder_hash_links():
+    """点击拦截器必须放行 href="#" 占位链接：它们是弹窗/灯箱入口（查看原始消息/
+    标注/配图灯箱），只消费默认行为不导航；当站内跳转 go(当前页) 会触发 router
+    整页重绘，router 的 closeRawModal 把刚开的「查看原始消息」弹窗秒关。"""
+    src = APP_JS.read_text()
+    start = src.index('document.addEventListener("click", (e) => {\n  const a = e.target.closest("a[href]");')
+    block = src[start:src.index("migrateHashRoute();", start)]
+    # 放行 "#" 先于 URL 解析（占位链接根本不进 go()）
+    guard = 'if (a.getAttribute("href") === "#") return;'
+    assert guard in block
+    assert block.index(guard) < block.index("new URL(")
+
+
 def test_mx_tag_run_modal_closable_via_data_close_and_escape():
     """打标弹窗（admin-modal-mask）：取消键带 data-close 供返回键命中，且挂 Esc 关闭监听。"""
     body = _fn_body("adminMxTagOpenRunModal", ADMIN_KOLS_JS)

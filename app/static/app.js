@@ -3989,9 +3989,9 @@ function postCard(post) {
         ${renderPostTagChips(post.tags, post.view_directions, post.pending_tags)}
         <div class="p-meta-actions">
         <button type="button" class="cat cat-export post-card-export" onclick="exportPostCard(${post.id}, event)" aria-label="复制图卡" title="复制图卡">图卡 ${IMAGE_CARD_ICON}</button>
-        ${(post.platform === "mx" && state.user?.can_mx_action_mark) ? `<a href="#" class="cat" data-post-id="${post.id}"
+        ${(post.platform === "mx" && state.user?.can_mx_action_mark) ? `<a href="#" data-post-id="${post.id}"
              onclick="event.preventDefault();openActionMarkModal(${post.id})"
-             title="人工标注该消息的个股操作（建仓/加仓/减仓/清仓/非操作），修正预估持仓">标注</a>` : ""}
+             title="人工标注该消息的个股操作（建仓/加仓/减仓/清仓/非操作），修正预估持仓">标注 ${CHEVRON_RIGHT_ICON}</a>` : ""}
         ${post.platform === "zsxq" || (post.platform === "mx" && !state.user?.is_admin) ? "" : RAW_MODAL_LABELS[post.platform]
           ? `<a href="#" data-raw-label="${escapeHtml(RAW_MODAL_LABELS[post.platform])}"
                onclick="event.preventDefault();openRawModal(${post.id}, this.dataset.rawLabel)"
@@ -7841,6 +7841,10 @@ document.addEventListener("click", (e) => {
 document.addEventListener("click", (e) => {
   const a = e.target.closest("a[href]");
   if (!a || a.target === "_blank" || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  // href="#" 是弹窗/灯箱入口的占位链接，只消费默认行为不导航；若当站内跳转
+  // go(当前页) 会触发 router 整页重绘，router 里的 closeRawModal 把刚开的
+  // 「查看原始消息」弹窗秒关（点了解不开的根因）
+  if (a.getAttribute("href") === "#") return;
   const url = new URL(a.getAttribute("href"), location.href);
   if (url.origin !== location.origin) return;
   if (url.pathname === location.pathname && url.search === location.search && url.hash) return;

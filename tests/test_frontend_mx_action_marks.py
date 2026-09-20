@@ -74,6 +74,9 @@ def test_post_card_mark_entry_and_chip():
     post_card = APP_JS[APP_JS.index("function postCard"):APP_JS.index("function mxMarkChip")]
     assert "can_mx_action_mark" in post_card
     assert "openActionMarkModal(${post.id})" in post_card
+    # 入口与「查看原始消息」同款：纯链接 + 右箭头，不再是 cat 胶囊标签款
+    assert '标注 ${CHEVRON_RIGHT_ICON}</a>' in post_card
+    assert 'href="#" class="cat" data-post-id' not in post_card
     chip = APP_JS[APP_JS.index("function mxMarkChip"):APP_JS.index("function renderPostTagChips")]
     # 生效：与 LLM 标签同款 cat-tag（am-mark-tag 供裁决后就地重画定位），
     # 无「人工:」前缀、无实心高亮
