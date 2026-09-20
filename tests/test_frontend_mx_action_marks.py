@@ -43,24 +43,50 @@ def test_action_mark_modal_shows_auto_and_multi_marks():
     # 多条人工标注（my_marks 列表）与逐条撤销按钮
     assert "data.my_marks" in APP_JS
     assert 'class="am-mark-del"' in APP_JS
-    assert "deleteActionMark(${Number(data.post.id)}, ${JSON.stringify(String(m.target_name))}" in APP_JS
+    # 票名经 JSON.stringify 嵌 onclick 属性需 &quot; 转义（双引号会截断属性）
+    assert 'deleteActionMark(${Number(data.post.id)}, ${JSON.stringify(String(m.target_name)).replace(/"/g, "&quot;")}' in APP_JS
     # 撤销按钮全撤入口（targetName=null）
     assert "deleteActionMark(${Number(data.post.id)}, null, 0)" in APP_JS
     # 生效行内「已生效」徽章
     assert 'tag-pending-badge is-approved' in APP_JS
 
 
+def test_action_mark_modal_llm_action_preselect_static():
+    """LLM 自动标注的操作词预选进表单：auto_tags 命中词表即预选操作并预填个股，
+    我的标注（人工）优先于自动预选；命中标签高亮与预选提示样式齐备。"""
+    # auto_tags 里命中操作词表的第一个标签被解析为预选操作
+    assert "autoTags.find((t) => actions.includes(t))" in APP_JS
+    # 人工优先：有我的标注用我的，否则落到 LLM 自动标注的操作
+    assert "_actionMarkPick = myPick ? myPick.action : autoAction;" in APP_JS
+    # 个股预填链：时间线预填 > 我的标注标的 > 自动标签里的股票名
+    assert '(myPick ? myPick.target_name : "") || stockTags[0]' in APP_JS
+    # 预选提示 + 人工改选后提示作废、自动标注区高亮跟随改选
+    assert "已按自动标注预选" in APP_JS
+    assert "if (hint) hint.remove();" in APP_JS
+    assert '"#action-mark-mask .am-auto-tags .cat-tag"' in APP_JS
+    for cls in (".am-auto-tags .cat-tag.on", ".am-auto-hint"):
+        assert cls in STYLE_CSS, f"style.css 缺 {cls}"
+
+
 def test_post_card_mark_entry_and_chip():
-    """消息卡：授权用户出「标注」入口；mx_mark 角标分已生效/标注中两态。"""
+    """消息卡：授权用户出「标注」入口；生效标注以普通标签款融入标签行
+    （与 LLM 标签同款、去重、不突出人工来源），未生效出「标注中」虚线角标。"""
     post_card = APP_JS[APP_JS.index("function postCard"):APP_JS.index("function mxMarkChip")]
     assert "can_mx_action_mark" in post_card
     assert "openActionMarkModal(${post.id})" in post_card
     chip = APP_JS[APP_JS.index("function mxMarkChip"):APP_JS.index("function renderPostTagChips")]
-    assert "is-effective" in chip and "is-pending" in chip
-    assert "人工:" in chip
-    assert "标注中" in chip
-    assert chip.index("m.effective") < chip.index("m.total")  # 生效优先展示
-    assert "effList.map" in chip  # 多生效逐条渲染
+    # 生效：与 LLM 标签同款 cat-tag（am-mark-tag 供裁决后就地重画定位），
+    # 无「人工:」前缀、无实心高亮
+    assert "cat-tag" in chip and "am-mark-tag" in chip
+    assert "人工:" not in chip and "is-effective" not in chip
+    # 去重：与消息已有标签（post.tags）及多标之间（mxMarkLabels Set 收敛）
+    assert "post.tags" in chip and "mxMarkLabels(" in chip
+    labels = APP_JS[APP_JS.index("function mxMarkLabels"):APP_JS.index("function mxMarkChip")]
+    assert "seen" in labels and "非操作" in labels  # none 操作出「非操作」标签
+    # 未生效：虚线「标注中 n/m」，生效优先展示，多生效逐条展开
+    assert "is-pending" in chip and "标注中" in chip
+    assert chip.index("m.effective") < chip.index("m.total")
+    assert "effList" in chip
 
 
 def test_me_flag_consumed_in_app():
@@ -99,10 +125,12 @@ def test_admin_panel_config_and_recent_marks():
 
 
 def test_mark_styles_present():
-    """CSS：卡片角标两态 + 弹窗表单 + 时间线人工徽章样式齐全。"""
-    for cls in (".am-chip.is-effective", ".am-chip.is-pending", ".am-target",
+    """CSS：卡片「标注中」虚线角标（生效标注走普通标签款无专属样式）
+    + 弹窗表单 + 时间线人工徽章样式齐全。"""
+    for cls in (".am-chip.is-pending", ".am-target",
                 ".am-act-btn.on", ".am-mark-row", ".am-suggest",
                 ".am-auto", ".am-auto-tags", ".am-mark-del", ".am-mark-row.is-effective"):
         assert cls in STYLE_CSS, f"style.css 缺 {cls}"
+    assert ".am-chip.is-effective" not in STYLE_CSS  # 生效高亮款已随普通标签化移除
     for cls in (".mxc-src-manual", ".mxc-mark-btn", ".mxc-manual-badge"):
         assert cls in MXC_CSS, f"mx-kol-holdings.css 缺 {cls}"

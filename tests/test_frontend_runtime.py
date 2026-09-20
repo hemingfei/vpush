@@ -1363,11 +1363,12 @@ def test_mx_kol_holdings_slider_drags_while_held_and_sorts(page: Page):
 
 def test_action_mark_modal_flow_and_chip_refresh(page: Page, static_origin: str):
     """操作标注弹窗（app.js 全局函数 + 网络层桩）：打开 → 自动标注对照 → 选操作
-    → 填个股 → 提交 POST body 断言 → 未生效反馈 → 达成一致后角标就地翻成已生效。
+    → 填个股 → 提交 POST body 断言 → 未生效反馈 → 达成一致后角标就地翻成普通标签款
+    （与消息标签去重，全重合则一张不剩）。
 
     回归口径：弹窗复用 tag-vote 外壳；POST body {target_name, action}；
     effective/my_marks 为列表（一帖多标）；DELETE 带 target_name 逐条撤销；
-    refreshActionMarkChips 按响应 effective 有无切换角标两态。
+    refreshActionMarkChips 按响应 effective 有无在普通标签款/「标注中」间就地切换。
     app.js 的 api 是模块内 const，window 层覆盖不了——统一走 page.route 网络桩。"""
     page.clock.install(time=datetime(2026, 9, 20, 3, 0, tzinfo=UTC))
     # 完整引导 app.js：token + /api 全量路由拦截（me 带标注权限，feed 空列表）
@@ -1415,9 +1416,12 @@ def test_action_mark_modal_flow_and_chip_refresh(page: Page, static_origin: str)
     page.wait_for_function("typeof openActionMarkModal === 'function'")
 
     page.evaluate("""() => {
-      // 卡片角标：初始标注中 1/2，裁决后就地翻已生效
+      // 卡片角标：初始标注中 1/2，裁决后就地翻已生效；
+      // 放进真实卡片结构（生效标签全去重移除后，撤销回落要按卡片定位重插）
       document.body.insertAdjacentHTML('beforeend',
-        '<button class="cat am-chip is-pending" data-post-id="77">✍ 标注中 1/2</button>');
+        '<div class="post-item" data-post-id="77"><div class="p-meta">'
+        + '<button class="cat am-chip is-pending" data-post-id="77">✍ 标注中 1/2</button>'
+        + '</div></div>');
     }""")
     page.evaluate("openActionMarkModal(77)")
     page.wait_for_selector("#action-mark-mask")
@@ -1443,23 +1447,26 @@ def test_action_mark_modal_flow_and_chip_refresh(page: Page, static_origin: str)
     state["effective"] = [{"target_name": "贵州茅台", "action": "清仓",
                            "by_admin": False, "voters": ["alice", "bob"]}]
     page.evaluate("submitActionMark(77)")
-    chip = page.locator('.am-chip[data-post-id="77"]')
-    expect(chip).to_have_class(re.compile("is-effective"))
-    expect(chip).to_contain_text("人工:清仓 贵州茅台")
+    # 生效后就地翻成普通标签款：动作词/标的与消息标签（清仓、贵州茅台）全重合，
+    # 去重后一张不剩（旧「人工:」实心高亮角标已废除）
+    expect(page.locator('.am-chip[data-post-id="77"]')).to_have_count(0)
+    expect(page.locator('.am-mark-tag[data-post-id="77"]')).to_have_count(0)
     # 生效行带「已生效」徽章（alice + bob 两行同标且都生效）
     expect(page.locator("#action-mark-mask .am-mark-row .tag-pending-badge.is-approved")).to_have_count(2)
-    # 逐条撤销走 DELETE?target_name=，角标回落标注中
+    # 逐条撤销走 DELETE?target_name=，回落「标注中」虚线角标
     state["effective"] = []
     page.evaluate("deleteActionMark(77, '贵州茅台', 0)")
     deleted = next((c for c in state["calls"] if c["method"] == "DELETE"), None)
     assert deleted and deleted["path"] == "/api/posts/77/action-mark"
+    chip = page.locator('.am-chip[data-post-id="77"]')
     expect(chip).to_have_class(re.compile("is-pending"))
+    expect(chip).to_contain_text("标注中 1/2")
     page.evaluate("closeActionMarkModal()")
     expect(page.locator("#action-mark-mask")).to_have_count(0)
 
 
 def test_action_mark_modal_multi_target_marks(page: Page, static_origin: str):
-    """一帖多标：同帖多标的各自成行展示、各自生效（角标两条并列），
+    """一帖多标：同帖多标的各自成行展示、各自生效（生效后普通标签款两张并列），
     逐条撤销只撤指定标的。"""
     page.clock.install(time=datetime(2026, 9, 20, 3, 0, tzinfo=UTC))
     page.context.add_init_script("localStorage.setItem('dav_token', 'test-token')")
@@ -1478,7 +1485,7 @@ def test_action_mark_modal_multi_target_marks(page: Page, static_origin: str):
                 "post": {"id": 88, "kol_id": 5, "kol_name": "测试大V",
                          "published_at": "2026-09-20 14:30:00",
                          "excerpt": "赛力斯和比亚迪都清仓了", "stock_tags": ["赛力斯", "比亚迪"]},
-                "auto_tags": ["清仓", "赛力斯", "比亚迪"],
+                "auto_tags": ["清仓"],
                 "llm_tagged": True,
                 "marks": [
                     {"username": "admin", "is_admin": True, "target_name": "赛力斯",
@@ -1508,17 +1515,73 @@ def test_action_mark_modal_multi_target_marks(page: Page, static_origin: str):
     expect(page.locator("#action-mark-mask .am-mark-row .tag-pending-badge.is-approved")).to_have_count(2)
     # 逐条撤销按钮存在（我的标注）
     expect(page.locator("#action-mark-mask .am-mark-del")).to_have_count(2)
-    # 角标多生效并列：先造角标容器，DELETE 响应落地后就地写入两条生效文本
+    # 角标多生效并列：先造角标容器，DELETE 响应落地后就地翻成普通标签款
+    # （动作词「清仓」与消息标签重合被去重，只补赛力斯/比亚迪两张，无「人工:」前缀）
     page.evaluate("""() => {
       document.body.insertAdjacentHTML('beforeend',
         '<button class="cat am-chip" data-post-id="88"></button>');
     }""")
     page.evaluate("deleteActionMark(88, '赛力斯', 0)")
-    chip = page.locator('.am-chip[data-post-id="88"]')
-    expect(chip).to_have_class(re.compile("is-effective"))
-    expect(chip).to_contain_text("人工:清仓 赛力斯 + 清仓 比亚迪")
+    mark_tags = page.locator('.am-mark-tag[data-post-id="88"]')
+    expect(mark_tags).to_have_count(2)
+    expect(mark_tags.nth(0)).to_have_text("赛力斯")
+    expect(mark_tags.nth(1)).to_have_text("比亚迪")
+    expect(page.locator('.am-chip[data-post-id="88"]')).to_have_count(0)
     # 逐条撤销：点比亚迪的 ×
     page.locator("#action-mark-mask .am-mark-del").nth(1).click()
     deleted = next((c for c in state["calls"] if c["method"] == "DELETE"), None)
     assert deleted and "target_name=" in deleted["query"]
+    page.evaluate("closeActionMarkModal()")
+
+
+def test_action_mark_modal_llm_action_preselect(page: Page, static_origin: str):
+    """LLM 自动标注的操作词直接预选进表单：无人工标注时按 auto_tags 预选操作
+    并预填个股；改选后「自动预选」提示撤掉；有我的标注时人工优先于自动。"""
+    page.clock.install(time=datetime(2026, 9, 20, 3, 0, tzinfo=UTC))
+    page.context.add_init_script("localStorage.setItem('dav_token', 'test-token')")
+    state = {"my_marks": []}
+
+    def respond(route):
+        path = urlsplit(route.request.url).path
+        data = []
+        if path == "/api/me":
+            data = {"id": 1, "username": "admin", "is_admin": True,
+                    "can_mx_action_mark": True, "timeline_platforms": []}
+        elif path == "/api/posts/99/action-mark":
+            data = {
+                "post": {"id": 99, "kol_id": 5, "kol_name": "测试大V",
+                         "published_at": "2026-09-20 14:30:00",
+                         "excerpt": "今天加了5500w联特", "stock_tags": ["联特科技"]},
+                "auto_tags": ["联特科技", "加仓"],
+                "llm_tagged": True,
+                "marks": [], "effective": [],
+                "my_marks": state["my_marks"],
+                "can_mark": True, "is_admin": True,
+                "config": {"agree_n": 2, "usernames": []},
+                "actions": ["建仓", "加仓", "低吸", "减仓", "高抛", "清仓", "做T", "观察", "none"],
+            }
+        route.fulfill(json=data)
+
+    page.route("**/api/**", respond)
+    page.goto(static_origin)
+    page.wait_for_function("typeof openActionMarkModal === 'function'")
+    page.evaluate("openActionMarkModal(99)")
+    page.wait_for_selector("#action-mark-mask")
+    # 无人工标注：LLM 打的「加仓」直接预选，个股预填，命中标签高亮 + 预选提示
+    expect(page.locator('#action-mark-mask .am-act-btn.on')).to_have_text("加仓")
+    assert page.evaluate('document.getElementById("am-target").value') == "联特科技"
+    expect(page.locator('#action-mark-mask .am-auto-tags .cat-tag.on')).to_have_text("加仓")
+    expect(page.locator("#am-auto-hint")).to_contain_text("已按自动标注预选")
+    # 人工改选：提示撤掉，自动标注区高亮跟随改选
+    page.locator('#action-mark-mask .am-act-btn[data-action="低吸"]').click()
+    expect(page.locator("#am-auto-hint")).to_have_count(0)
+    expect(page.locator('#action-mark-mask .am-act-btn.on')).to_have_text("低吸")
+    expect(page.locator('#action-mark-mask .am-auto-tags .cat-tag.on')).to_have_count(0)
+    page.evaluate("closeActionMarkModal()")
+    # 有我的标注时人工优先：预选我标的「减仓」，不出自动预选提示
+    state["my_marks"] = [{"target_name": "联特科技", "action": "减仓"}]
+    page.evaluate("openActionMarkModal(99)")
+    page.wait_for_selector("#action-mark-mask")
+    expect(page.locator('#action-mark-mask .am-act-btn.on')).to_have_text("减仓")
+    expect(page.locator("#am-auto-hint")).to_have_count(0)
     page.evaluate("closeActionMarkModal()")

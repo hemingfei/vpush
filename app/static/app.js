@@ -4002,20 +4002,33 @@ function postCard(post) {
     </div>`;
 }
 
-// 操作标注角标：生效逐条实心「人工:清仓 赛力斯」（多标的多条并列）；
-// 有标注未生效出虚线「标注中 1/2」。所有人可见（生效与否影响预估持仓展示）；
-// 可标注者点开弹窗，无权者只读提示
+// 生效标注的标签文案：逐条展开成动作词 + 标的，与消息已有标签（tags）及
+// 多标之间去重——「清仓 长盈通」「清仓 金博股份」+ 已有标签清仓 → 只补长盈通/金博股份
+function mxMarkLabels(effList, tags) {
+  const seen = new Set((tags || []).map(String));
+  const out = [];
+  (effList || []).forEach((eff) => {
+    [eff.action === "none" ? "非操作" : String(eff.action || ""), String(eff.target_name || "")]
+      .forEach((t) => {
+        const s = t.trim();
+        if (s && !seen.has(s)) { seen.add(s); out.push(s); }
+      });
+  });
+  return out;
+}
+
+// 操作标注：生效标注以普通标签款呈现（与 LLM 标签同款 cat-tag，内容即动作词/
+// 标的，去重后并列，不再突出人工来源；动作词与标的全重合时一张不剩），点击仍开
+// 标注弹窗。有标注未生效出虚线「标注中 1/2」。所有人可见（生效与否影响预估持仓
+// 展示），可标注者点开弹窗，无权者只读提示
 function mxMarkChip(post) {
   const m = post.mx_mark;
   if (!m || post.platform !== "mx") return "";
   const effList = m.effective || [];
   if (effList.length) {
-    return effList.map((eff) => {
-      const label = eff.action === "none"
-        ? `人工:非操作 ${eff.target_name}` : `人工:${eff.action} ${eff.target_name}`;
-      return `<button type="button" class="cat am-chip is-effective" data-post-id="${post.id}"
-        onclick="openActionMarkModal(${post.id})" title="人工标注已生效，点击查看/修改">✍ ${escapeHtml(label)}</button>`;
-    }).join("");
+    return mxMarkLabels(effList, post.tags).map((t) =>
+      `<button type="button" class="cat cat-tag am-mark-tag" data-post-id="${post.id}"
+        onclick="openActionMarkModal(${post.id})" title="人工标注（已生效），点击查看/修改">${escapeHtml(t)}</button>`).join("");
   }
   if (m.total) {
     return `<button type="button" class="cat am-chip is-pending" data-post-id="${post.id}"
@@ -4435,28 +4448,32 @@ function paintActionMarkModal(data) {
   const agreeN = cfg.agree_n ?? 2;
   const myMarks = data.my_marks || [];
   const effList = data.effective || [];
-  // 打开/重绘时选中态：预填标的对应的我的标注（改判场景）> 第一条 > null
+  const actions = Array.isArray(data.actions) ? data.actions : [];
+  // 自动标注区：消息当前标签（LLM 打标/观点回流写入 posts.tags）；操作词直接预选进表单
+  const autoTags = Array.isArray(data.auto_tags) ? data.auto_tags : [];
+  const stockTags = (data.post && Array.isArray(data.post.stock_tags)) ? data.post.stock_tags : [];
+  // 打开/重绘时选中态：预填标的对应的我的标注（改判场景）> LLM 自动标注的操作 > null
   const presetTarget = String(data._target || "").trim();
   const myPick = (myMarks.find((m) => m.target_name === presetTarget) || myMarks[0] || null);
-  _actionMarkPick = myPick ? myPick.action : null;
-  const actions = Array.isArray(data.actions) ? data.actions : [];
+  const autoAction = (!myPick && autoTags.find((t) => actions.includes(t))) || null;
+  _actionMarkPick = myPick ? myPick.action : autoAction;
+  const inputTarget = presetTarget
+    || (myPick ? myPick.target_name : "") || stockTags[0] || "";
   const actionBtn = (a) => {
     const on = _actionMarkPick === a ? " on" : "";
     const label = a === "none" ? "非操作" : escapeHtml(a);
     return `<button type="button" class="am-act-btn${on}" data-action="${escapeHtml(a)}"
       onclick="actionMarkPick(this.dataset.action)">${label}</button>`;
   };
-  const suggest = (data.post && Array.isArray(data.post.stock_tags) && data.post.stock_tags.length)
-    ? data.post.stock_tags.map((s) => `<button type="button" class="am-suggest"
+  const suggest = stockTags.length
+    ? stockTags.map((s) => `<button type="button" class="am-suggest"
         onclick="actionMarkFillTarget(this.textContent)">${escapeHtml(s)}</button>`).join("")
     : "";
-  // 自动标注区：消息当前标签（LLM 打标/观点回流写入 posts.tags），供人工对照
-  const autoTags = Array.isArray(data.auto_tags) ? data.auto_tags : [];
   const autoBlock = autoTags.length
     ? `<div class="am-auto">
         <div class="am-marks-head">自动标注${data.llm_tagged ? "（LLM 已打标）" : "（消息当前标签）"}</div>
         <div class="am-auto-tags">${autoTags.map((t) =>
-          `<span class="cat cat-tag">${escapeHtml(t)}</span>`).join("")}</div>
+          `<span class="cat cat-tag${t === _actionMarkPick ? " on" : ""}">${escapeHtml(t)}</span>`).join("")}</div>
       </div>`
     : `<div class="am-auto">
         <div class="am-marks-head">自动标注</div>
@@ -4512,10 +4529,10 @@ function paintActionMarkModal(data) {
         <label class="am-label" for="am-target">个股（正式名）</label>
         <div class="am-target-row">
           <input id="am-target" class="am-target" type="text" placeholder="如：贵州茅台"
-            value="${escapeHtml(data._target || "")}" autocomplete="off">
+            value="${escapeHtml(inputTarget)}" autocomplete="off">
           ${suggest}
         </div>
-        <label class="am-label">操作</label>
+        <label class="am-label">操作${autoAction ? '<span id="am-auto-hint" class="am-auto-hint">已按自动标注预选，确认或改选</span>' : ""}</label>
         <div class="am-acts">${actions.map(actionBtn).join("")}</div>
         <div class="tag-vote-actions">
           <button type="button" class="btn-normal" onclick="submitActionMark(${Number(data.post.id)})">
@@ -4537,6 +4554,11 @@ function actionMarkPick(action) {
   document.querySelectorAll("#action-mark-mask .am-act-btn").forEach((btn) => {
     btn.classList.toggle("on", btn.dataset.action === action);
   });
+  document.querySelectorAll("#action-mark-mask .am-auto-tags .cat-tag").forEach((el) => {
+    el.classList.toggle("on", el.textContent === action);
+  });
+  const hint = document.getElementById("am-auto-hint");
+  if (hint) hint.remove(); // 人工改选后「自动预选」提示作废
 }
 
 function actionMarkFillTarget(name) {
@@ -4594,25 +4616,28 @@ async function deleteActionMark(postId, targetName, userId) {
   }
 }
 
-// 裁决后就地更新消息卡上的标注角标（下次刷新列表自然与数据一致）
+// 裁决后就地更新消息卡上的标注标签（下次刷新列表自然与数据一致）：
+// 生效→普通标签款（与 auto_tags 去重后可能一张不剩），未生效→「标注中 n/m」
 function refreshActionMarkChips(data) {
   if (!data || !data.post) return;
-  const effList = data.effective || [];
-  document.querySelectorAll(`.am-chip[data-post-id="${Number(data.post.id)}"]`).forEach((chip) => {
-    if (effList.length) {
-      chip.classList.remove("is-pending");
-      chip.classList.add("is-effective");
-      chip.title = "人工标注已生效，点击查看/修改";
-      const label = effList.map((e) =>
-        `${e.action === "none" ? "非操作" : e.action} ${e.target_name}`).join(" + ");
-      chip.textContent = `人工:${label}`;
-    } else {
-      chip.classList.remove("is-effective");
-      chip.classList.add("is-pending");
-      chip.title = "标注中，尚未生效";
-      chip.textContent = `标注中 ${data.marks?.length || 0}/${(data.config && data.config.agree_n) || 2}`;
-    }
-  });
+  const pid = Number(data.post.id);
+  const nodes = Array.from(document.querySelectorAll(
+    `.am-mark-tag[data-post-id="${pid}"], .am-chip[data-post-id="${pid}"]`));
+  const html = mxMarkChip({ id: pid, platform: "mx", tags: data.auto_tags,
+    mx_mark: { effective: data.effective || [],
+      total: (data.marks || []).length, agree_n: (data.config && data.config.agree_n) || 2 } });
+  if (nodes.length) {
+    nodes[0].outerHTML = html; // 置空串即移除节点（生效标注全被去重时）
+    nodes.slice(1).forEach((n) => n.remove());
+    return;
+  }
+  // 生效标签曾全被去重移除后再裁决（如撤销）没有现存节点可锚定：
+  // 按卡片定位回 .p-meta 原位（mxMarkChip 槽位 = 持仓按钮之后）
+  const meta = document.querySelector(`.post-item[data-post-id="${pid}"] .p-meta`);
+  if (!meta) return;
+  const anchor = meta.querySelector(".tl-hold-btn");
+  anchor ? anchor.insertAdjacentHTML("afterend", html)
+    : meta.insertAdjacentHTML("afterbegin", html);
 }
 
 // ---------- MX 语音播放 ----------

@@ -1654,16 +1654,9 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
 .tag-detail-pending-row + .tag-detail-pending-row { border-top: 1px dashed var(--color-border); }
 .tag-detail-pending-meta { flex: 1; font-size: var(--text-xs); color: var(--color-text-muted); }
 .tag-detail-pending-ops { display: flex; gap: 6px; }
-/* 大V消息操作标注：消息卡角标（已生效实心 / 标注中虚线）+ 标注弹窗 */
-.am-chip { cursor: pointer; font-weight: 600; }
-.am-chip.is-effective {
-  background: rgba(64, 98, 213, .12); border-color: rgba(64, 98, 213, .45);
-  color: #3352b8;
-}
-.theme-dark .am-chip.is-effective {
-  background: rgba(122, 162, 255, .18); border-color: rgba(122, 162, 255, .5);
-  color: #9db9ff;
-}
+/* 大V消息操作标注：生效标注走普通标签款（.cat-tag，无专属样式），
+   消息卡只剩「标注中」虚线角标 + 标注弹窗 */
+.am-chip { cursor: pointer; }
 .am-chip.is-pending {
   border-style: dashed; color: var(--color-text-muted); font-weight: 400;
 }
@@ -1695,9 +1688,14 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
 .theme-dark .am-act-btn.on { background: rgba(122, 162, 255, .2); color: #9db9ff; }
 .am-marks { margin-top: 14px; }
 .am-marks-head { font-size: var(--text-xs); color: var(--color-text-muted); margin-bottom: 6px; }
-/* 自动标注区：消息当前标签（LLM/观点回流），供人工标注对照 */
+/* 自动标注区：消息当前标签（LLM/观点回流），操作词预选进表单，命中的标签高亮 */
 .am-auto { margin-top: 14px; }
 .am-auto-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.am-auto-tags .cat-tag.on {
+  border-color: rgba(64, 98, 213, .55); background: rgba(64, 98, 213, .14); color: #3352b8; font-weight: 600;
+}
+.theme-dark .am-auto-tags .cat-tag.on { background: rgba(122, 162, 255, .2); color: #9db9ff; }
+.am-auto-hint { margin-left: 6px; font-weight: 400; color: var(--color-text-muted); }
 .am-mark-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--text-xs); padding: 5px 0; }
 .am-mark-row + .am-mark-row { border-top: 1px dashed var(--color-border); }
 .am-mark-row.is-effective { background: rgba(64, 98, 213, .06); border-radius: var(--radius-sm, 6px); padding: 5px 4px; }
