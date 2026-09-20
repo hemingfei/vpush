@@ -315,13 +315,66 @@ class Puller:
     def to_hot(self, src: Path, rel: Path) -> None:
         if not self.keep_hot:
             return
+        self.admit_to_hot(src, rel)
+
+    def admit_to_hot(self, src: Path, rel: Path) -> Path | None:
+        """Copy PDF (and CICC .json sidecar) into hot/. Never required 115."""
         dest = self.hot / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            shutil.copy2(src, dest)
+            if src.resolve() != dest.resolve():
+                shutil.copy2(src, dest)
             ensure_hot_modes(dest, stop_at=self.hot)
         except OSError as exc:
             logging.warning("hot copy failed rel=%s err=%s", rel.as_posix(), safe_exc(exc))
+            return None
+        companion = src.with_suffix(".json")
+        if src.suffix.lower() == ".pdf" and companion.is_file():
+            try:
+                cdest = dest.with_suffix(".json")
+                if companion.resolve() != cdest.resolve():
+                    shutil.copy2(companion, cdest)
+                ensure_hot_modes(cdest, stop_at=self.hot)
+            except OSError as exc:
+                logging.warning(
+                    "hot sidecar copy failed rel=%s err=%s",
+                    rel.with_suffix(".json").as_posix(),
+                    safe_exc(exc),
+                )
+        return dest if dest.is_file() else None
+
+    def release_source(self, src: Path, rel: Path, source: str) -> None:
+        """Drop the staging/failed copy after hot has the bytes. Keep retry sidecar."""
+        if source == "hot":
+            return
+        stop = self.staging if source == "staging" else self.failed
+        victims = [src]
+        if src.suffix.lower() == ".pdf":
+            companion = src.with_suffix(".json")
+            if companion.is_file():
+                victims.append(companion)
+        if source == "staging":
+            sc = sidecar(src)
+            if sc.is_file():
+                victims.append(sc)
+        for path in victims:
+            try:
+                path.unlink()
+            except OSError as exc:
+                logging.warning("unlink failed rel=%s err=%s", rel.as_posix(), safe_exc(exc))
+        prune(src, stop)
+
+    def _sidecar_path(self, rel: Path) -> Path:
+        return sidecar(self.failed / rel)
+
+    def _clear_retry_sidecar(self, rel: Path) -> None:
+        sc = self._sidecar_path(rel)
+        if sc.is_file():
+            try:
+                sc.unlink()
+            except OSError:
+                pass
+        prune(sc, self.failed)
 
     def on_ok(self, src: Path, rel: Path, remote: str, size: int, attempts: int, source: str, up=None) -> None:
         sha = None
@@ -330,18 +383,10 @@ class Puller:
         except OSError:
             pass
         cid, pick = meta_from(up)
-        self.to_hot(src, rel)
-        try:
-            src.unlink()
-        except OSError as exc:
-            logging.warning("unlink failed rel=%s err=%s", rel.as_posix(), safe_exc(exc))
-        sc = sidecar(src)
-        if sc.is_file():
-            try:
-                sc.unlink()
-            except OSError:
-                pass
-        prune(src, self.staging if source == "staging" else self.failed)
+        if source != "hot":
+            self.to_hot(src, rel)
+            self.release_source(src, rel, source)
+        self._clear_retry_sidecar(rel)
         mark_uploaded(
             rel.as_posix(),
             remote_cid=cid,
@@ -370,17 +415,20 @@ class Puller:
 
     def on_fail(self, src: Path, rel: Path, err: BaseException, attempts: int, source: str) -> None:
         kind, msg = classify_error(err)
-        dest = self.failed / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if src.resolve() != dest.resolve():
-            if dest.exists():
-                stamp = utcnow().strftime("%Y%m%d-%H%M%S")
-                dest = dest.with_name(f"{dest.stem}.dup-{stamp}{dest.suffix}")
-            try:
-                shutil.move(str(src), str(dest))
-            except OSError as move_exc:
-                logging.error("move to failed/ failed rel=%s err=%s", rel.as_posix(), safe_exc(move_exc))
-                dest = src
+        serving = self.hot / rel if self.keep_hot else None
+        kept_hot = bool(serving is not None and serving.is_file())
+        dest = serving if kept_hot else self.failed / rel
+        if not kept_hot:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if src.resolve() != dest.resolve():
+                if dest.exists():
+                    stamp = utcnow().strftime("%Y%m%d-%H%M%S")
+                    dest = dest.with_name(f"{dest.stem}.dup-{stamp}{dest.suffix}")
+                try:
+                    shutil.move(str(src), str(dest))
+                except OSError as move_exc:
+                    logging.error("move to failed/ failed rel=%s err=%s", rel.as_posix(), safe_exc(move_exc))
+                    dest = src
         attempts = max(attempts, 1)
         delay = backoff(attempts, self.backoff_sched)
         next_at = utcnow().timestamp() + delay
@@ -395,11 +443,14 @@ class Puller:
             "last_failed_at": iso_now(),
             "size": dest.stat().st_size if dest.is_file() else None,
             "source": source,
+            "kept_hot": kept_hot,
         }
-        old = read_sidecar(sidecar(dest))
+        sc = self._sidecar_path(rel)
+        sc.parent.mkdir(parents=True, exist_ok=True)
+        old = read_sidecar(sc)
         meta["first_failed_at"] = old.get("first_failed_at") or iso_now()
-        atomic_write_json(sidecar(dest), meta)
-        if source == "staging":
+        atomic_write_json(sc, meta)
+        if source == "staging" and not kept_hot:
             prune(src, self.staging)
         mark_failed(rel.as_posix(), msg, attempts=attempts)
         self.failed_n += 1
@@ -408,17 +459,24 @@ class Puller:
         append_jsonl(self.manifest / "uploads.jsonl", {**meta, "ok": False, "ts": iso_now()})
         self.save_state()
         logging.error(
-            "upload failed rel=%s kind=%s attempts=%s retry_in=%ss err=%s",
+            "upload failed rel=%s kind=%s attempts=%s retry_in=%ss kept_hot=%s err=%s",
             rel.as_posix(),
             kind,
             attempts,
             delay,
+            kept_hot,
             msg,
         )
         if kind == "cookie":
             self.client = None
 
     def upload_one(self, src: Path, rel: Path, attempts: int, source: str) -> bool:
+        if self.keep_hot and source != "hot":
+            hot = self.admit_to_hot(src, rel)
+            if hot is not None:
+                self.release_source(src, rel, source)
+                src = hot
+                source = "hot"
         remote = remote_of(rel, self.root)
         remote_dir = remote.rsplit("/", 1)[0]
         size = src.stat().st_size
@@ -466,6 +524,8 @@ class Puller:
                 break
             if not stable(src, self.stable_secs):
                 continue
+            if src.suffix.lower() != ".pdf":
+                continue
             try:
                 rel = rel_under(src, self.staging)
             except ValueError:
@@ -504,30 +564,58 @@ class Puller:
             self.upload_one(src, rel, attempts, "staging")
         return n
 
-    def process_retries(self) -> int:
-        n = 0
-        now = time.time()
-        self.batch_size = resolve_batch_size()
-        if not self.failed.is_dir():
+    def promote_failed_pdfs(self) -> int:
+        """Lift failed/ PDFs into hot so display does not wait on 115."""
+        if not self.keep_hot or not self.failed.is_dir():
             return 0
-        files = [
-            p
-            for p in list_files(self.failed)
-            if not p.name.endswith(RETRY_SUFFIX)
-        ]
-        for src in files:
-            if STOP or n >= self.batch_size:
-                break
+        n = 0
+        for src in list_files(self.failed):
+            if src.name.endswith(RETRY_SUFFIX) or src.suffix.lower() != ".pdf":
+                continue
             meta = read_sidecar(sidecar(src))
-            next_ts = float(meta.get("next_retry_ts") or 0)
-            if next_ts and next_ts > now:
-                continue
-            if not stable(src, self.stable_secs):
-                continue
             try:
                 rel = self._retry_relpath(src, meta)
             except ValueError as exc:
                 raw = redact(str(meta.get("relpath") or "")[:200])
+                logging.error(
+                    "promote skipped error_kind=other src=%s raw_relpath=%s err=%s",
+                    src.name,
+                    raw,
+                    safe_exc(exc),
+                )
+                continue
+            hot = self.admit_to_hot(src, rel)
+            if hot is None:
+                continue
+            self.release_source(src, rel, "failed")
+            n += 1
+        return n
+
+    def _retry_jobs(self) -> list[tuple[Path, Path, dict]]:
+        jobs: list[tuple[Path, Path, dict]] = []
+        seen: set[str] = set()
+        if not self.failed.is_dir():
+            return jobs
+        sidecars = list(self.failed.rglob(f"*{RETRY_SUFFIX}"))
+        leftovers = [
+            p for p in list_files(self.failed)
+            if p.suffix.lower() == ".pdf" and not p.name.endswith(RETRY_SUFFIX)
+        ]
+        for src in leftovers + sidecars:
+            meta = read_sidecar(src if src.name.endswith(RETRY_SUFFIX) else sidecar(src))
+            raw_key = str(meta.get("relpath") or src.name)
+            try:
+                rel = self._retry_relpath(
+                    src if src.suffix.lower() == ".pdf" else src.with_name(
+                        src.name[: -len(RETRY_SUFFIX)]
+                    ),
+                    meta,
+                )
+            except ValueError as exc:
+                if raw_key in seen:
+                    continue
+                seen.add(raw_key)
+                raw = redact(raw_key[:200])
                 logging.error(
                     "retry skipped error_kind=other src=%s raw_relpath=%s err=%s",
                     src.name,
@@ -542,10 +630,38 @@ class Puller:
                 self.skipped += 1
                 self.tick_skip += 1
                 continue
+            key = rel.as_posix()
+            if key in seen:
+                continue
+            seen.add(key)
+            if rel.suffix.lower() != ".pdf":
+                continue
+            hot = self.hot / rel
+            src_pdf = src if src.suffix.lower() == ".pdf" else None
+            if self.keep_hot and hot.is_file():
+                jobs.append((hot, rel, meta))
+            elif src_pdf is not None:
+                jobs.append((src_pdf, rel, meta))
+        return jobs
+
+    def process_retries(self) -> int:
+        n = 0
+        now = time.time()
+        self.batch_size = resolve_batch_size()
+        self.promote_failed_pdfs()
+        for src, rel, meta in self._retry_jobs():
+            if STOP or n >= self.batch_size:
+                break
+            next_ts = float(meta.get("next_retry_ts") or 0)
+            if next_ts and next_ts > now:
+                continue
+            if not stable(src, self.stable_secs):
+                continue
             attempts = int(meta.get("attempts") or 0) + 1
             n += 1
             logging.info("retry rel=%s attempts=%s", rel.as_posix(), attempts)
-            self.upload_one(src, rel, attempts, "failed")
+            source = "hot" if self.keep_hot and src.is_relative_to(self.hot) else "failed"
+            self.upload_one(src, rel, attempts, source)
         return n
 
     def _retry_relpath(self, src: Path, meta: dict) -> Path:
@@ -565,9 +681,29 @@ class Puller:
             resolve_under(root, rel)
         return rel
 
+    def admit_staging(self) -> list[tuple[Path, Path, int]]:
+        """Move stable staging PDFs into hot before any 115 call."""
+        jobs: list[tuple[Path, Path, int]] = []
+        if not self.keep_hot:
+            return jobs
+        for src, rel, attempts in self.discover_batch():
+            if STOP:
+                break
+            hot = self.admit_to_hot(src, rel)
+            if hot is None:
+                self.on_fail(src, rel, RuntimeError("hot copy failed"), attempts, "staging")
+                continue
+            self.release_source(src, rel, "staging")
+            jobs.append((hot, rel, attempts))
+        return jobs
+
     def tick(self) -> None:
         self.tick_ok = self.tick_fail = self.tick_skip = 0
         t0 = time.time()
+        admitted: list[tuple[Path, Path, int]] = []
+        if self.keep_hot:
+            admitted = self.admit_staging()
+            self.promote_failed_pdfs()
         try:
             self.client_get()
         except SystemExit as exc:
@@ -580,7 +716,13 @@ class Puller:
             self.save_state({"ok": False, "last_error": {"error_kind": kind, "last_error": msg}})
             return
         self.process_retries()
-        self.process_staging()
+        if self.keep_hot:
+            for src, rel, attempts in admitted:
+                if STOP:
+                    break
+                self.upload_one(src, rel, attempts, "hot")
+        else:
+            self.process_staging()
         elapsed = max(time.time() - t0, 0.001)
         logging.info(
             "tick throughput ok=%s fail=%s skip=%s elapsed=%.2fs rate=%.2f/s",

@@ -11,6 +11,7 @@ touches the archive path.
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import threading
@@ -142,14 +143,76 @@ def fetch_timeout_seconds() -> int:
     return _env_int("IMA_FETCH_TIMEOUT", _DEFAULT_FETCH_TIMEOUT, lo=1, hi=30)
 
 
+def _pull_sibling(suffix: str) -> str:
+    pull = os.environ.get("IMA_PULL_URL", "").strip()
+    if pull.endswith("/pull"):
+        return pull[: -len("/pull")] + suffix
+    return ""
+
+
 def archive_fetch_url() -> str:
     explicit = os.environ.get("IMA_FETCH_URL", "").strip()
     if explicit:
         return explicit
-    pull = os.environ.get("IMA_PULL_URL", "").strip()
-    if pull.endswith("/pull"):
-        return pull[: -len("/pull")] + "/file"
-    return ""
+    return _pull_sibling("/file")
+
+
+def archive_list_url() -> str:
+    explicit = os.environ.get("IMA_LIST_URL", "").strip()
+    if explicit:
+        return explicit
+    return _pull_sibling("/list")
+
+
+def _allowed_fetch_dest(dest: str) -> bool:
+    lower = dest.lower()
+    if lower.endswith(".pdf") or lower.endswith(".txt"):
+        return True
+    return dest.startswith("local/") and lower.endswith(".json")
+
+
+def list_archive_prefix(prefix: str) -> list[dict[str, object]]:
+    """List incremental local-library files on ARM. Empty on failure."""
+    url = archive_list_url()
+    token = os.environ.get("IMA_PULL_TOKEN", "").strip()
+    text = str(prefix or "").replace("\\", "/").strip("/")
+    if not url or not token or not text.startswith("local/") or ".." in Path(text).parts:
+        return []
+    if not _arm_circuit.allow():
+        return []
+    query = urllib.parse.urlencode({"prefix": text})
+    request = urllib.request.Request(
+        f"{url}?{query}",
+        method="GET",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=fetch_timeout_seconds()) as response:
+            payload = json.loads(response.read().decode())
+        _arm_circuit.success()
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+        _arm_circuit.failure()
+        return []
+    files = payload.get("files") if isinstance(payload, dict) else None
+    if not isinstance(files, list):
+        return []
+    out: list[dict[str, object]] = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        dest = str(item.get("dest") or "").replace("\\", "/").lstrip("/")
+        if not dest or dest.startswith("/") or ".." in Path(dest).parts:
+            continue
+        if not dest.startswith(text + "/") and dest != text:
+            continue
+        if not _allowed_fetch_dest(dest):
+            continue
+        try:
+            size = int(item.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        out.append({"dest": dest, "size": size})
+    return out
 
 
 def fetch_missing_archive_file(root: Path, relative: str) -> Path | None:
@@ -163,8 +226,7 @@ def fetch_missing_archive_file(root: Path, relative: str) -> Path | None:
     dest = str(relative or "").replace("\\", "/").lstrip("/")
     if not dest or dest.startswith("/") or ".." in Path(dest).parts:
         return None
-    lower = dest.lower()
-    if not (lower.endswith(".pdf") or lower.endswith(".txt")):
+    if not _allowed_fetch_dest(dest):
         return None
     if not _arm_circuit.allow():
         return None

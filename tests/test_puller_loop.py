@@ -153,9 +153,12 @@ def test_upload_one_empty_filesha1_retries_then_failed(tmp_path, monkeypatch):
     assert len(client.uploads) == 3
     assert sleeps == [1.0, 2.0]
     assert not src.exists()
-    failed = worker.failed / rel
-    assert failed.is_file()
-    assert (failed.parent / (failed.name + lab_common.RETRY_SUFFIX)).is_file()
+    hot = worker.hot / rel
+    assert hot.is_file()
+    assert not (worker.failed / rel).exists()
+    assert (worker.failed / (rel.as_posix() + lab_common.RETRY_SUFFIX)).is_file() or (
+        (worker.failed / rel).parent / (rel.name + lab_common.RETRY_SUFFIX)
+    ).is_file()
     row = manifest.get_by_rel(rel.as_posix())
     assert row is not None
     assert row["status"] == "failed"
@@ -172,7 +175,8 @@ def test_non_retryable_fails_immediately(tmp_path, monkeypatch):
     assert worker.upload_one(src, rel, attempts=1, source="staging") is False
     assert len(client.uploads) == 1
     assert sleeps == []
-    assert (worker.failed / rel).is_file()
+    assert (worker.hot / rel).is_file()
+    assert not (worker.failed / rel).exists()
 
 
 def test_discover_skips_already_uploaded(tmp_path):
@@ -415,3 +419,60 @@ def test_safe_relpath_matches_ops_whitelist():
         lab_common.safe_relpath("foo\x00bar")
     with pytest.raises(ValueError):
         lab_common.safe_relpath("   ")
+
+
+def test_upload_one_keeps_hot_and_copies_cicc_json(tmp_path, monkeypatch):
+    _patch_retry_sleeper(monkeypatch, [])
+    staging = lab_common.cache_root() / "staging"
+    src = _write_pdf(staging, "local/cicc-research/2026/09/20/a_42.pdf", b"%PDF-cicc")
+    src.with_suffix(".json").write_text(
+        json.dumps({"id": "42", "category": "宏观经济"}),
+        encoding="utf-8",
+    )
+    reject = {"state": False, "errno": 1, "error": "empty filesha1"}
+    client = FakeClient([reject, reject, reject])
+    worker = _puller_with_client(client)
+    rel = lab_common.rel_under(src, worker.staging)
+    assert worker.upload_one(src, rel, attempts=1, source="staging") is False
+    assert (worker.hot / rel).read_bytes() == b"%PDF-cicc"
+    assert json.loads((worker.hot / rel).with_suffix(".json").read_text(encoding="utf-8"))[
+        "category"
+    ] == "宏观经济"
+    assert not src.exists()
+    assert not src.with_suffix(".json").exists()
+    assert worker._sidecar_path(rel).is_file()
+    assert worker.last_error is not None
+    assert worker.last_error.get("kept_hot") is True
+
+
+def test_tick_admits_hot_when_115_client_unavailable(tmp_path):
+    staging = lab_common.cache_root() / "staging"
+    src = _write_pdf(staging, "local/ima/legacy/2026/09/20/offline.pdf", b"%PDF-off")
+    worker = _puller_with_client(FakeClient([]))
+
+    def boom(force: bool = False):
+        raise RuntimeError("401 unauthorized")
+
+    worker.client_get = boom  # type: ignore[method-assign]
+    worker.tick()
+    rel = Path("local/ima/legacy/2026/09/20/offline.pdf")
+    assert (worker.hot / rel).read_bytes() == b"%PDF-off"
+    assert not src.exists()
+    assert worker.uploaded == 0
+
+
+def test_process_retries_promotes_failed_pdf_before_115(tmp_path, monkeypatch):
+    _patch_retry_sleeper(monkeypatch, [])
+    cache = lab_common.cache_root()
+    failed = cache / "failed"
+    src = _write_pdf(failed, "local/ima/legacy/2026/09/20/lift.pdf", b"%PDF-lift")
+    _write_retry_sidecar(src, "local/ima/legacy/2026/09/20/lift.pdf")
+    reject = {"state": False, "errno": 1, "error": "empty filesha1"}
+    client = FakeClient([reject, reject, reject])
+    worker = _puller_with_client(client)
+    assert worker.process_retries() == 1
+    hot = worker.hot / "local/ima/legacy/2026/09/20/lift.pdf"
+    assert hot.read_bytes() == b"%PDF-lift"
+    assert not src.exists()
+    assert worker.last_error is not None
+    assert worker.last_error.get("kept_hot") is True

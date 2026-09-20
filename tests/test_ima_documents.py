@@ -1235,6 +1235,24 @@ def test_list_items_retries_transient_code_30005(monkeypatch):
     assert sleeps == [1.5]
 
 
+def test_list_items_retries_rate_limit_code_30021(monkeypatch):
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    responses = iter([
+        {"code": 30021},
+        {"code": "30021"},
+        {"code": 0, "knowledge_list": []},
+    ])
+    sleeps = []
+    client._token = lambda: "access"
+    client._open_json = lambda request: (next(responses), {})
+    monkeypatch.setattr("app.ima_documents.time.sleep", sleeps.append)
+
+    assert client.list_items("root") == []
+    assert sleeps == [1.5, 3.0]
+
+
 def test_knowledge_tab_reader_status_prefers_code_on_success(monkeypatch):
     client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh", root_folder_id="root"))
     client._token = lambda: "access"

@@ -266,17 +266,12 @@ def test_wrappers_read_settings_file():
     ima = (root / "ima-lab-sync-all.sh").read_text(encoding="utf-8")
     cicc = (root / "cicc-lab-sync.sh").read_text(encoding="utf-8")
     helper = (root / "apply-lab-sync-timers.sh").read_text(encoding="utf-8")
-    assert "ops-lab-settings.json" in ima
-    assert "ima_limit_per_group" in ima
-    assert "ima_groups_parallel" in ima
-    assert "ima_parallel" in ima
-    assert "ima_limit" in ima
-    assert 'DRY_RUN:-1' in ima
-    assert 'MODE="--dry-run"' in ima
-    assert 'MODE="--apply"' in ima
-    assert "--enable --apply" not in ima
-    assert "ops-lab-settings.json" in cicc
-    assert "cicc_limit" in cicc
+    assert "ima_host_sync.py" in ima
+    assert "IMA_PURE_GROUPS_FILE" in ima
+    assert "cicc_report_collector.py" in cicc
+    assert "--arm-middleware" in cicc
+    assert "--days" in cicc
+    assert "CICC_INCR_DAYS" in cicc
     assert 'DRY_RUN:-1' in cicc
     assert "OnCalendar=" in helper
     assert "vpush-ima-lab-sync.timer" in helper

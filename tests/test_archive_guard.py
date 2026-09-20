@@ -5,8 +5,10 @@ import urllib.request
 from app.archive_guard import (
     CircuitBreaker,
     archive_fetch_url,
+    archive_list_url,
     fetch_missing_archive_file,
     is_remote_nfs,
+    list_archive_prefix,
     path_without_stat,
     reset_arm_circuit,
 )
@@ -48,8 +50,10 @@ def test_circuit_opens_after_failures():
 
 def test_archive_fetch_url_rewrites_pull(monkeypatch):
     monkeypatch.delenv("IMA_FETCH_URL", raising=False)
+    monkeypatch.delenv("IMA_LIST_URL", raising=False)
     monkeypatch.setenv("IMA_PULL_URL", "http://100.112.25.21:8743/pull")
     assert archive_fetch_url() == "http://100.112.25.21:8743/file"
+    assert archive_list_url() == "http://100.112.25.21:8743/list"
 
 
 def test_fetch_missing_skips_nfs(tmp_path, monkeypatch):
@@ -87,6 +91,52 @@ def test_fetch_missing_writes_local_file(tmp_path, monkeypatch):
     path = fetch_missing_archive_file(tmp_path, "g/a.pdf")
     assert path is not None
     assert path.read_bytes() == b"%PDF-1.7fetch"
+
+
+def test_fetch_missing_allows_local_json(tmp_path, monkeypatch):
+    reset_arm_circuit()
+    monkeypatch.setenv("IMA_PULL_URL", "http://100.112.25.21:8743/pull")
+    monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
+    monkeypatch.setattr("app.archive_guard.is_remote_nfs", lambda *args, **kwargs: False)
+
+    class Resp:
+        def read(self):
+            return b'{"id":"1"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=5: Resp())
+    path = fetch_missing_archive_file(tmp_path, "local/cicc-research/a.json")
+    assert path is not None
+    assert path.read_bytes() == b'{"id":"1"}'
+    assert fetch_missing_archive_file(tmp_path, "secrets.json") is None
+
+
+def test_list_archive_prefix_filters_escape(monkeypatch):
+    reset_arm_circuit()
+    monkeypatch.setenv("IMA_PULL_URL", "http://100.112.25.21:8743/pull")
+    monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
+
+    class Resp:
+        def read(self):
+            return (
+                b'{"files":[{"dest":"local/cicc-research/a.pdf","size":3},'
+                b'{"dest":"../etc/passwd","size":1}]}'
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=5: Resp())
+    files = list_archive_prefix("local/cicc-research")
+    assert files == [{"dest": "local/cicc-research/a.pdf", "size": 3}]
 
 
 def test_store_refuses_nfs_without_statting(tmp_path, monkeypatch):

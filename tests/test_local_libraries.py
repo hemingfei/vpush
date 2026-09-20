@@ -270,7 +270,7 @@ def test_scan_skips_symlink_escape(tmp_path):
     assert not any("secret" in str(item.get("pdf")) for item in state.values())
 
 
-def test_scan_removes_disappeared_library(tmp_path):
+def test_scan_keeps_disappeared_library_index(tmp_path):
     service, archive = _service(tmp_path)
     _make_library(archive, slug="gone", pdfs=["a.pdf"])
     _make_library(archive, slug="stay", pdfs=["b.pdf"])
@@ -280,12 +280,95 @@ def test_scan_removes_disappeared_library(tmp_path):
     import shutil
 
     shutil.rmtree(archive / "local" / "gone")
-    service.scan_local_libraries()
+    result = service.scan_local_libraries()
 
-    assert _index_group_ids(service.store) == {"local-stay"}
-    assert service.db.ima_document_index_count() == 1
-    assert service._index_usable() is True
-    # ACL 行不受库消失影响（本用例没有 ACL 行，只要组行被清掉即可）
+    assert _index_group_ids(service.store) == {"local-gone", "local-stay"}
+    assert service.db.ima_document_index_count() == 2
+    gone = next(item for item in result["libraries"] if item["slug"] == "gone")
+    assert "不存在" in gone["error"]
+    assert gone["pdf_count"] == 1
+
+
+def test_scan_keeps_index_when_disk_has_fewer_pdfs(tmp_path):
+    service, archive = _service(tmp_path)
+    lib = _make_library(
+        archive,
+        slug="cicc-research",
+        pdfs=[f"091{i}/old_{i}.pdf" for i in range(4)],
+    )
+    service.scan_local_libraries()
+    for i in range(3):
+        (lib / f"091{i}" / f"old_{i}.pdf").unlink()
+    result = service.scan_local_libraries()
+
+    assert service.db.ima_document_index_count() == 4
+    row = next(item for item in result["libraries"] if item["slug"] == "cicc-research")
+    assert "少于上次" in row["error"]
+    assert row["pdf_count"] == 4
+
+
+def test_ingest_local_library_increment_adds_without_dropping(tmp_path):
+    service, archive = _service(tmp_path)
+    _make_library(
+        archive,
+        slug="cicc-research",
+        pdfs=["宏观经济/0919/旧稿_1.pdf"],
+        sidecar=[{"id": "1", "summary": "旧摘要", "tags": ["宏观"], "publish": "2026-09-19"}],
+    )
+    service.scan_local_libraries()
+    lib = archive / "local" / "cicc-research"
+    new_pdf = lib / "宏观经济" / "0920" / "新稿_2.pdf"
+    new_pdf.parent.mkdir(parents=True, exist_ok=True)
+    new_pdf.write_bytes(b"%PDF-1.7 new")
+    new_pdf.with_suffix(".json").write_text(
+        json.dumps({"id": "2", "summary": "新摘要", "tags": ["策略"], "publish": "2026-09-20"}),
+        encoding="utf-8",
+    )
+
+    result = service.ingest_local_library_increment("cicc-research")
+
+    assert result["status"] == "finished"
+    assert result["added"] == 1
+    assert result["catalog"] == 2
+    names = {item["name"] for item in service.store.load_manifest()}
+    assert names == {"旧稿_1", "新稿_2"}
+    new_state = next(
+        item
+        for item in service.store.load_state().values()
+        if item.get("name") == "新稿_2"
+    )
+    assert new_state["tags"] == ["策略"]
+    assert service.db.ima_document_index_count() == 2
+
+
+def test_sync_local_library_from_arm_fetches_then_ingests(tmp_path, monkeypatch):
+    service, archive = _service(tmp_path)
+    _make_library(archive, slug="cicc-research", name="中金点睛", pdfs=["宏观经济/0919/旧稿_1.pdf"])
+    service.scan_local_libraries()
+    dest = "local/cicc-research/宏观经济/0920/新稿_2.pdf"
+
+    def fake_list(prefix):
+        assert prefix == "local/cicc-research"
+        return [{"dest": dest, "size": 12}]
+
+    def fake_fetch(root, relative):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"%PDF-1.7new")
+        path.with_suffix(".json").write_text(
+            json.dumps({"id": "2", "summary": "ARM", "tags": ["宏观"], "publish": "2026-09-20"}),
+            encoding="utf-8",
+        )
+        return path
+
+    monkeypatch.setattr("app.ima_documents.list_archive_prefix", fake_list)
+    monkeypatch.setattr("app.ima_documents.fetch_missing_archive_file", fake_fetch)
+    result = service.sync_local_library_from_arm("cicc-research")
+
+    assert result["status"] == "finished"
+    assert result["fetched"] == 1
+    assert result["added"] == 1
+    assert service.db.ima_document_index_count() == 2
 
 
 def test_set_enabled_writes_marker_and_updates_status(tmp_path):

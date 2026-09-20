@@ -209,6 +209,9 @@ def plan_cicc(source: Path, dest: Path) -> tuple[list[PlannedCopy], list[Path]]:
         mmdd = mmdd_from_parts(month, day)
         dest_pdf = cicc_dest / _safe_component(category, "unknown") / mmdd / pdf.name
         planned.append(PlannedCopy(pdf, dest_pdf))
+        sidecar = pdf.with_suffix(".json")
+        if sidecar.is_file():
+            planned.append(PlannedCopy(sidecar, dest_pdf.with_suffix(".json")))
     return planned, skipped
 
 

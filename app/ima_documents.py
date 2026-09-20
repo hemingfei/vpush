@@ -35,6 +35,7 @@ from .archive_guard import (
     arm_circuit,
     fetch_missing_archive_file,
     is_remote_nfs,
+    list_archive_prefix,
     path_without_stat,
     pull_timeout_seconds,
 )
@@ -71,6 +72,10 @@ IMA_FTS_MAX_BATCHES = 11
 IMA_STATE_FLUSH_COUNT = 20
 IMA_STATE_FLUSH_SECONDS = 2.0
 IMA_SCHEDULE_HOUR = 1  # 上海时间每日自动同步起点
+ARM_LIBRARY_SYNC_INTERVAL = 3600
+ARM_LIBRARY_SYNC_BATCH = 40
+ARM_LIBRARY_FIRST_DELAY = 180
+CICC_RESEARCH_SLUG = "cicc-research"
 
 BASE = os.environ.get("IMA_BASE", "https://ima.qq.com/cgi-bin")
 GUID = os.environ.get("IMA_GUID", "7497986728819336")
@@ -521,6 +526,18 @@ def _ima_success_status(value: Any) -> bool:
     return (isinstance(value, int) and not isinstance(value, bool) and value == 0) or value == "0"
 
 
+_IMA_LIST_RETRY_CODES = frozenset({51, 429, 30005, 30021})
+
+
+def _ima_transient_list_status(status: Any) -> bool:
+    """IMA list rate-limit / busy codes that are safe to retry."""
+    if status in _IMA_LIST_RETRY_CODES:
+        return True
+    if isinstance(status, str) and status.isdigit():
+        return int(status) in _IMA_LIST_RETRY_CODES
+    return False
+
+
 def _discovery_payload(payload: Any) -> dict[str, Any]:
     data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else payload
     return data if isinstance(data, dict) else {}
@@ -969,7 +986,7 @@ class ImaPureClient:
                     status = _ima_response_status(data, "IMA list")
                     if _ima_success_status(status):
                         break
-                    if status not in (51, 429, 30005) or attempt == 3:
+                    if not _ima_transient_list_status(status) or attempt == 3:
                         raise RuntimeError(f"IMA list failed code={status}")
                     time.sleep(1.5 * (attempt + 1))
                     request = urllib.request.Request(
@@ -2541,7 +2558,14 @@ class ImaDocumentStore:
                     )
                     continue
                 record, state_item = self._local_document(
-                    path, slug, full.relative_to(path), int(size), name, lib_tags, sidecar, now_iso
+                    path,
+                    slug,
+                    full.relative_to(path),
+                    int(size),
+                    name,
+                    lib_tags,
+                    self._sidecar_with_sibling(sidecar, full),
+                    now_iso,
                 )
                 entry["records"].append(record)
                 entry["state"][self.state_key(record)] = state_item
@@ -2552,6 +2576,28 @@ class ImaDocumentStore:
             return entry
         entry["pdf_count"] = len(entry["records"])
         return entry
+
+    @staticmethod
+    def _sidecar_with_sibling(
+        sidecar: dict[str, dict[str, Any]], pdf: Path
+    ) -> dict[str, dict[str, Any]]:
+        """Overlay per-PDF .json (ARM collector) onto the library jsonl map."""
+        match = re.search(r"_([0-9]+)$", pdf.stem)
+        if not match:
+            return sidecar
+        report_id = match.group(1)
+        sibling = pdf.with_suffix(".json")
+        if not sibling.is_file():
+            return sidecar
+        try:
+            item = json.loads(sibling.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return sidecar
+        if not isinstance(item, dict):
+            return sidecar
+        merged = dict(sidecar)
+        merged[report_id] = item
+        return merged
 
     @staticmethod
     def _load_local_sidecar(lib_dir: Path) -> dict[str, dict[str, Any]]:
@@ -2772,10 +2818,12 @@ class ImaDocumentService:
         storage_status: ImaStorageStatus | None = None,
         llm_config: Any = None,
         search_index: ImaSearchIndex | None = None,
+        trust_index_state: bool = False,
     ):
         self.db = db
         self.llm_config = llm_config
         self.search_index = search_index
+        self.trust_index_state = bool(trust_index_state)
         self.storage_status = storage_status or ImaStorageStatus(None, remote=False)
         self.store = ImaDocumentStore(
             index_root,
@@ -2792,6 +2840,8 @@ class ImaDocumentService:
         self._maintenance_thread: threading.Thread | None = None
         self._worker_thread: threading.Thread | None = None
         self._local_scan_thread: threading.Thread | None = None
+        self._arm_library_thread: threading.Thread | None = None
+        self._last_arm_library_sync = 0.0
         self._running = False
         self._next_run_at = 0.0
         self._cancel_requested = False
@@ -3871,6 +3921,207 @@ class ImaDocumentService:
         finally:
             self._sync_lock.release()
 
+    def ingest_local_library_increment(self, slug: str) -> dict[str, Any]:
+        """Upsert on-disk PDFs for one local library. Existing catalog rows stay."""
+        slug = str(slug or "").strip()
+        if not LOCAL_LIBRARY_SLUG_RE.fullmatch(slug):
+            raise ValueError("invalid local library slug")
+        if not self._sync_lock.acquire(blocking=False):
+            return {"status": "already_running", "slug": slug, "added": 0}
+        try:
+            path = self.store.local_root / slug
+            entry = self.store._scan_local_library(path, set())
+            if entry is None:
+                return {"status": "missing", "slug": slug, "added": 0, "error": "库目录或标记不存在"}
+            if entry.get("error"):
+                return {
+                    "status": "error",
+                    "slug": slug,
+                    "added": 0,
+                    "error": str(entry.get("error") or ""),
+                }
+            group_id = str(entry["group_id"])
+            incoming = [
+                record
+                for record in entry.get("records") or []
+                if isinstance(record, dict) and record.get("media_id")
+            ]
+            incoming_state = entry.get("state") if isinstance(entry.get("state"), dict) else {}
+            current = [
+                record
+                for record in self.store.load_manifest()
+                if str(record.get("group_id") or "") == group_id
+            ]
+            by_id = {
+                str(record.get("media_id")): record
+                for record in current
+                if record.get("media_id")
+            }
+            added = 0
+            for record in incoming:
+                media_id = str(record["media_id"])
+                if media_id not in by_id:
+                    added += 1
+                by_id[media_id] = record
+            merged = list(by_id.values())
+            state = self.store.load_state()
+            state.update(incoming_state)
+            self.store.save_group_manifest(group_id, merged)
+            self.store.save_state(state)
+            self._update_index_rows(incoming, state)
+            status = self.local_scan_status()
+            libraries = list(status.get("libraries") or [])
+            found = False
+            for item in libraries:
+                if str(item.get("slug") or "") == slug:
+                    item["pdf_count"] = len(merged)
+                    item["error"] = ""
+                    item["name"] = str(entry.get("name") or item.get("name") or slug)
+                    item["enabled"] = bool(entry.get("enabled") if "enabled" in entry else item.get("enabled"))
+                    found = True
+                    break
+            if not found:
+                libraries.append(
+                    {
+                        "slug": slug,
+                        "group_id": group_id,
+                        "name": str(entry.get("name") or slug),
+                        "enabled": bool(entry.get("enabled")),
+                        "pdf_count": len(merged),
+                        "tags": [str(tag) for tag in entry.get("tags") or []],
+                        "error": "",
+                    }
+                )
+            payload = {
+                "scanned_at": str(status.get("scanned_at") or datetime.now(UTC).isoformat()),
+                "libraries": libraries,
+            }
+            self.db.set_setting(IMA_LOCAL_LIBRARIES_KEY, json.dumps(payload, ensure_ascii=False))
+            return {
+                "status": "finished",
+                "slug": slug,
+                "added": added,
+                "catalog": len(merged),
+                "disk": len(incoming),
+            }
+        finally:
+            self._sync_lock.release()
+
+    def _ensure_local_library_marker(self, slug: str) -> bool:
+        marker = self.store.local_library_marker_path(slug)
+        if marker.is_file():
+            return True
+        previous = next(
+            (
+                item
+                for item in self.local_scan_status()["libraries"]
+                if str(item.get("slug") or "") == slug
+            ),
+            None,
+        )
+        if previous is None:
+            return False
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(
+            json.dumps(
+                {
+                    "name": str(previous.get("name") or slug),
+                    "enabled": bool(previous.get("enabled")),
+                    "tags": [str(tag) for tag in previous.get("tags") or []],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return True
+
+    def sync_local_library_from_arm(self, slug: str = CICC_RESEARCH_SLUG) -> dict[str, Any]:
+        """Fetch ARM incrementals for one local library, then upsert the catalog."""
+        slug = str(slug or "").strip()
+        if not LOCAL_LIBRARY_SLUG_RE.fullmatch(slug):
+            return {"status": "invalid", "slug": slug, "fetched": 0, "added": 0}
+        if is_remote_nfs(self.store.archive_root):
+            return {"status": "isolated", "slug": slug, "fetched": 0, "added": 0}
+        remote = list_archive_prefix(f"local/{slug}")
+        fetched = 0
+        root = path_without_stat(self.store.archive_root)
+        for item in remote:
+            dest = str(item.get("dest") or "")
+            try:
+                expected = int(item.get("size") or 0)
+            except (TypeError, ValueError):
+                expected = 0
+            local = root / dest
+            try:
+                if local.is_file() and (expected <= 0 or local.stat().st_size == expected):
+                    continue
+            except OSError:
+                pass
+            if fetched >= ARM_LIBRARY_SYNC_BATCH:
+                break
+            if fetch_missing_archive_file(self.store.archive_root, dest) is None:
+                continue
+            fetched += 1
+        if not self._ensure_local_library_marker(slug):
+            return {"status": "missing", "slug": slug, "fetched": fetched, "added": 0}
+        ingested = self.ingest_local_library_increment(slug)
+        return {
+            "status": str(ingested.get("status") or "finished"),
+            "slug": slug,
+            "fetched": fetched,
+            "added": int(ingested.get("added") or 0),
+            "catalog": int(ingested.get("catalog") or 0),
+        }
+
+    def _protect_local_library_entries(
+        self,
+        libraries: list[dict[str, Any]],
+        previous: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Missing or shrunken libraries keep the last good catalog.
+
+        ARM only holds incrementals. A scan of an empty or partial tree must
+        not prune the production CICC index.
+        """
+        found = {str(entry.get("slug") or "") for entry in libraries}
+        protected = list(libraries)
+        for slug, old in previous.items():
+            if not slug or slug in found:
+                continue
+            protected.append(
+                {
+                    "slug": slug,
+                    "group_id": str(old.get("group_id") or LOCAL_LIBRARY_PREFIX + slug),
+                    "name": str(old.get("name") or slug),
+                    "enabled": bool(old.get("enabled")),
+                    "pdf_count": int(old.get("pdf_count") or 0),
+                    "tags": [str(tag) for tag in old.get("tags") or []],
+                    "error": "库目录不存在，保留上次索引",
+                    "records": [],
+                    "state": {},
+                }
+            )
+        output: list[dict[str, Any]] = []
+        for entry in protected:
+            slug = str(entry.get("slug") or "")
+            old = previous.get(slug) or {}
+            old_count = int(old.get("pdf_count") or 0)
+            new_count = int(entry.get("pdf_count") or 0)
+            if entry.get("error") or old_count <= 0 or new_count >= old_count:
+                output.append(entry)
+                continue
+            # Allow deleting a few files. Block empty/partial ARM trees
+            # collapsing the production catalog (e.g. 5437 → 22).
+            if new_count > 0 and new_count * 2 >= old_count:
+                output.append(entry)
+                continue
+            kept = dict(entry)
+            kept["error"] = (
+                f"扫描篇数 {new_count} 少于上次 {old_count}，保留上次索引"
+            )
+            output.append(kept)
+        return output
+
     def _scan_local_libraries_locked(self) -> dict[str, Any]:
         result = self.store.scan_local_libraries(
             existing_group_ids={group.id for group in self.config().groups}
@@ -3881,7 +4132,11 @@ class ImaDocumentService:
         previous = {
             str(item.get("slug") or ""): item
             for item in self.local_scan_status()["libraries"]
+            if item.get("slug")
         }
+        result["libraries"] = self._protect_local_library_entries(
+            list(result.get("libraries") or []), previous
+        )
         state = self.store.load_state()
         summaries: list[dict[str, Any]] = []
         applied: set[str] = set()
@@ -4074,7 +4329,39 @@ class ImaDocumentService:
         result = self.trigger(scheduled=True) if current >= next_run else {"status": "not_due"}
         if self._local_libraries_need_scan() and result.get("status") != "started":
             self._start_local_scan()
+        if self._last_arm_library_sync <= 0:
+            self._last_arm_library_sync = current - ARM_LIBRARY_SYNC_INTERVAL + ARM_LIBRARY_FIRST_DELAY
+        elif current - self._last_arm_library_sync >= ARM_LIBRARY_SYNC_INTERVAL:
+            self._last_arm_library_sync = current
+            self._start_arm_library_sync()
         return result
+
+    def _start_arm_library_sync(self) -> None:
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return
+        if not os.environ.get("IMA_PULL_URL", "").strip():
+            return
+        with self._state_lock:
+            if self._arm_library_thread and self._arm_library_thread.is_alive():
+                return
+            self._arm_library_thread = threading.Thread(
+                target=self._arm_library_sync_safe,
+                name="ima-arm-library-sync",
+                daemon=True,
+            )
+            self._arm_library_thread.start()
+
+    def _arm_library_sync_safe(self) -> None:
+        try:
+            result = self.sync_local_library_from_arm()
+            logger.info(
+                "ARM local library sync status=%s fetched=%s added=%s",
+                result.get("status"),
+                result.get("fetched"),
+                result.get("added"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ARM local library sync failed error=%s", _safe_error(exc))
 
     def _start_local_scan(self) -> None:
         with self._state_lock:
@@ -4323,7 +4610,11 @@ class ImaDocumentService:
             record
             for record in records
             if not self.store.is_complete(
-                record, state, verify_archive=not self.storage_status.remote
+                record,
+                state,
+                verify_archive=not (
+                    self.storage_status.remote or self.trust_index_state
+                ),
             )
         ]
         self._set_progress(phase="download", pending=len(pending), downloaded=0, failed=0)

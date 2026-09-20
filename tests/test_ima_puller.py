@@ -10,6 +10,8 @@ import pytest
 from app.ima_puller import (
     _error_status,
     allowed_url,
+    list_local_library,
+    safe_archive_prefix,
     safe_dest,
     save_pdf,
     serve_puller,
@@ -402,5 +404,54 @@ def test_file_returns_pdf(tmp_path, monkeypatch):
             raise AssertionError("should 400")
         except urllib.error.HTTPError as exc:
             assert exc.code == 400
+    finally:
+        server.shutdown()
+
+
+def test_list_local_library_only_under_slug(tmp_path):
+    lib = tmp_path / "local" / "cicc-research" / "宏观经济" / "0920"
+    lib.mkdir(parents=True)
+    (lib / "a_1.pdf").write_bytes(b"%PDF-1")
+    (lib / "a_1.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "local" / "cicc-research" / ".vpush-local-library.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "secret.pdf").write_bytes(b"%PDF")
+    files = list_local_library(tmp_path, "local/cicc-research")
+    dests = {item["dest"] for item in files}
+    assert dests == {
+        "local/cicc-research/宏观经济/0920/a_1.pdf",
+        "local/cicc-research/宏观经济/0920/a_1.json",
+    }
+    with pytest.raises(ValueError):
+        safe_archive_prefix(tmp_path, "local/../etc")
+    with pytest.raises(ValueError):
+        list_local_library(tmp_path, "")
+
+
+def test_list_and_json_file_require_token(tmp_path, monkeypatch):
+    lib = tmp_path / "local" / "cicc-research"
+    lib.mkdir(parents=True)
+    (lib / "a.json").write_text('{"id":"1"}', encoding="utf-8")
+    server, base = _start(tmp_path, monkeypatch)
+    try:
+        try:
+            urllib.request.urlopen(base + "/list?prefix=local/cicc-research", timeout=5)
+            raise AssertionError("should 401")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+        listed = urllib.request.urlopen(
+            urllib.request.Request(
+                base + "/list?prefix=local/cicc-research",
+                headers={"Authorization": "Bearer secret"},
+            ),
+            timeout=5,
+        )
+        body = json.loads(listed.read().decode())
+        assert body["files"][0]["dest"] == "local/cicc-research/a.json"
+        req = urllib.request.Request(
+            base + "/file?dest=local/cicc-research/a.json",
+            headers={"Authorization": "Bearer secret"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert json.loads(resp.read().decode()) == {"id": "1"}
     finally:
         server.shutdown()

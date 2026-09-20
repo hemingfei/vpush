@@ -1889,6 +1889,17 @@ def test_replace_database_failure_wakes_waiting_readers(tmp_path, monkeypatch):
     }
 
 
+def test_touch_last_login_ignores_database_locked(tmp_path, monkeypatch):
+    db = DB(str(tmp_path / "login-lock.sqlite"))
+    user_id = db.add_user("locked", "hash")
+
+    def boom(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db, "_execute", boom)
+    db.touch_last_login(user_id)
+
+
 def test_ima_read_models_do_not_wait_for_python_db_lock(tmp_path):
     db = DB(str(tmp_path / "ima-readonly.sqlite"))
     db.replace_ima_document_index(

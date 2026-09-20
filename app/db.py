@@ -2753,10 +2753,15 @@ class DB:
                 raise
 
     def touch_last_login(self, user_id: int) -> None:
-        self._execute(
-            "UPDATE users SET last_login_at = datetime('now') WHERE id = ?",
-            (user_id,),
-        )
+        try:
+            self._execute(
+                "UPDATE users SET last_login_at = datetime('now') WHERE id = ?",
+                (user_id,),
+            )
+        except sqlite3.OperationalError as exc:
+            # WAL writer contention must not 500 /api/me — the SPA treats that as a blank page.
+            if "locked" not in str(exc).lower():
+                raise
 
     def note_llm_status(self, user_id: int, status: str) -> None:
         self._execute(

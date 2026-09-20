@@ -1,6 +1,6 @@
 # ARM lab puller_loop（实验室 115 上传）
 
-`scripts/puller_loop.py` 是 Oracle-SJ-ARM `/opt/vpush-ima-lab/scripts/` 的**权威副本**（连同 `lab_common.py`、`manifest.py`）。从 `CACHE_ROOT/staging` 抽文件上传 115（`P115_LAB_ROOT`，默认 `/vpush`），写 `lab.sqlite`，失败进 `failed/`，成功拷到 `hot/`。**不是**生产 compose 服务，**不要**在生产 `docker-compose*.yml` 里启用中间层或跑本脚本。
+`scripts/puller_loop.py` 是 Oracle-SJ-ARM `/opt/vpush-ima-lab/scripts/` 的**权威副本**（连同 `lab_common.py`、`manifest.py`）。从 `CACHE_ROOT/staging`（以及 `failed/` 存量）**先入 `hot/`**，再后台上传 115（`P115_LAB_ROOT`，默认 `/vpush`），写 `lab.sqlite`。115 失败只写 `failed/*.retry.json` 并保留热缓存，不把展示文件搬走。**不是**生产 compose 服务，**不要**在生产 `docker-compose*.yml` 里启用中间层或跑本脚本。
 
 采集（中金 / IMA lab sync）只写 staging；115 只走本脚本。
 
@@ -33,7 +33,7 @@ install -m 755 scripts/healthcheck.py /opt/vpush-ima-lab/scripts/healthcheck.py
 | `PULLER_POLL_SECONDS` | `5` | 循环间隔 |
 | `PULLER_STABLE_SECONDS` | `3` | 文件 mtime 稳定后才传 |
 | `PULLER_BATCH_SIZE` | `20` | 每 tick 最多几个。**实验室旋钮** `$CACHE_ROOT/ops-lab-settings.json` 的 `puller_batch_size`（默认 40）以及 `$CACHE_ROOT/ops-puller.env` 优先于本环境变量 |
-| `PULLER_KEEP_HOT` | `true` | 成功后 `copy2` 到 `hot/`，然后 **chmod 0664**；父目录至少 **0775**，好让非 root / OpenList 读 IMA 热缓存 PDF（与 CICC 一样） |
+| `PULLER_KEEP_HOT` | `true` | **先** `copy2` 到 `hot/`（chmod **0664**，目录至少 **0775**），再传 115。115 失败不撤热缓存 |
 | `PULLER_BACKOFF_SECONDS` | `60,300,1800` | 失败后再试间隔 |
 
 采集中间层默认写 `VPUSH_ARM_STAGING_ROOT`（`/data/vpush-ima-cache/staging`）。实验室须让 **puller 的 `CACHE_ROOT/staging` 与采集 staging 是同一棵树**（bind-mount 或改环境变量）。不要改生产 compose。
@@ -44,7 +44,7 @@ Cookie 文件不进仓库。`lab_common.load_cookies` 只从上述路径读；`r
 
 ## 上传与重试
 
-每个文件：`client.upload_file` → 若 `lab_common.upload_ok(result)` 为假则 **raise**（`RuntimeError` 只带 errno/kind，不 dump 响应 body）→ `call_with_retry`（`scripts/puller_retry.py`，默认 3 次，退避 1s/2s）。这样 `MultipartUploadAbort` / empty `filesha1` 会重试；耗尽后 `on_fail` 移入 `failed/` 并写 `.retry.json`。Cookie 类错误会重建 client 再试一轮。`.retry.json` 的 `relpath` 走与 ops 相同的相对路径白名单，绝对路径 / `..` 会跳过。
+每个文件：先入 `hot/`，再 `client.upload_file` → 若 `lab_common.upload_ok(result)` 为假则 **raise**（`RuntimeError` 只带 errno/kind，不 dump 响应 body）→ `call_with_retry`（`scripts/puller_retry.py`，默认 3 次，退避 1s/2s）。`MultipartUploadAbort` / empty `filesha1` 会重试；耗尽后只记 `.retry.json`，PDF 留在 `hot/`。Cookie 类错误会重建 client 再试一轮。`.retry.json` 的 `relpath` 走与 ops 相同的相对路径白名单，绝对路径 / `..` 会跳过。
 
 不实现第二套 puller，不直写 OpenList / NFS。
 
