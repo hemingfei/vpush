@@ -344,10 +344,19 @@ function render(s) {
   setText("puller-uploads",
     "115 上传 ok " + (uploads.ok || 0) + " / fail " + (uploads.fail || 0) +
     (uploads.source && uploads.source !== "none" ? " · " + uploads.source : ""));
+  const unit = puller.unit || {};
   const boxes = (puller.docker && puller.docker.containers) || [];
-  setText("puller-docker", boxes.length
-    ? boxes.map((c) => (c.name || "") + " " + (c.state || c.status || "")).join(" · ")
-    : (puller.docker && puller.docker.available ? "docker 可见，无 puller 容器" : "未挂 docker.sock"));
+  if (unit.unit) {
+    let unitText = (unit.unit || "") + " · " + (unit.active || "unknown");
+    if (unit.sub) unitText += " / " + unit.sub;
+    if (unit.pid) unitText += " · pid " + unit.pid;
+    if (unit.enabled) unitText += " · " + unit.enabled;
+    setText("puller-unit", unitText);
+  } else if (boxes.length) {
+    setText("puller-unit", boxes.map((c) => (c.name || "") + " " + (c.state || c.status || "")).join(" · "));
+  } else {
+    setText("puller-unit", "未探测到 puller unit");
+  }
   const logs = puller.logs || [];
   const pre = document.getElementById("puller-log");
   if (pre) {

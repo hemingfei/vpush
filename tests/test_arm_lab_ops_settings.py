@@ -288,3 +288,30 @@ def test_wrappers_read_settings_file():
     assert nfsd.strip().endswith("host=100.112.25.21")
     assert "cookie" not in ima.lower()
     assert "password" not in ima.lower()
+
+
+def test_host_units_prefer_systemd_not_compose():
+    systemd = Path(__file__).resolve().parent.parent / "arm-lab-ops" / "systemd"
+    puller = (systemd / "vpush-ima-lab-puller.service").read_text(encoding="utf-8")
+    ops = (systemd / "vpush-arm-lab-ops.service").read_text(encoding="utf-8")
+    snippet = (systemd.parent / "docker-compose.snippet.yml").read_text(encoding="utf-8")
+    readme = (systemd.parent / "README.md").read_text(encoding="utf-8")
+    assert "puller_loop.py" in puller
+    assert "CACHE_ROOT=/data/vpush-ima-cache" in puller
+    assert "P115_COOKIES_FILE=/opt/vpush-ima-lab/secrets/115-cookies.txt" in puller
+    assert "EnvironmentFile=-/data/vpush-ima-cache/ops-puller.env" in puller
+    assert "docker.sock" not in puller
+    assert "ops_app.py" in ops
+    assert "ARM_OPS_BIND=tailscale" in ops
+    assert "ARM_OPS_PASSWORD_FILE=/opt/vpush-ima-lab/secrets/arm-ops-password.txt" in ops
+    assert not any(
+        line.startswith("Environment=PULLER_CONTAINER_NAME") for line in ops.splitlines()
+    )
+    assert "docker.sock" not in ops
+    assert "0.0.0.0" not in ops
+    assert "UID=" not in puller and "UID=" not in ops
+    assert "refresh_token" not in puller and "refresh_token" not in ops
+    assert "Leftover" in snippet
+    assert "vpush-arm-lab-ops.service" in snippet
+    assert "vpush-ima-lab-puller.service" in readme
+    assert "只留 OpenList" in readme

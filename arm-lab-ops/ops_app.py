@@ -266,7 +266,8 @@ def main() -> None:
     print(f"ARM lab ops bind {host}:{port} (ARM_OPS_BIND={spec!r})", file=sys.stderr)
     if not password_configured():
         print(
-            "ARM lab ops: set ARM_OPS_PASSWORD or write /secrets/arm-ops-password.txt",
+            "ARM lab ops: set ARM_OPS_PASSWORD or ARM_OPS_PASSWORD_FILE "
+            "(host: /opt/vpush-ima-lab/secrets/arm-ops-password.txt)",
             file=sys.stderr,
         )
     import uvicorn

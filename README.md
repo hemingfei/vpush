@@ -214,7 +214,7 @@ docker compose up -d --build
 
 ## ARM 中间层
 
-ARM（Oracle-SJ-ARM）是采集 + 中间层：只做增量采集，热缓存与 HTTP 拉取给 vpush；115 / 存储机是冷备。生产只连 ARM HTTP（超时 + 熔断），**禁止把 ARM/存储 NFS 挂进现网**。实验室脚本在 `/opt/vpush-ima-lab/`；运维见 [arm-lab-ops/README.md](arm-lab-ops/README.md)。说明见 [docs/ARM中间层架构.md](docs/ARM中间层架构.md)。
+ARM（Oracle-SJ-ARM）是采集 + 中间层：只做增量采集，热缓存与 HTTP 拉取给 vpush；115 / 存储机是冷备。生产只连 ARM HTTP（超时 + 熔断），**禁止把 ARM/存储 NFS 挂进现网**。实验室脚本在 `/opt/vpush-ima-lab/`；ops / puller / ima-pull 走宿主机 systemd，compose **只留 OpenList**。运维见 [arm-lab-ops/README.md](arm-lab-ops/README.md)。说明见 [docs/ARM中间层架构.md](docs/ARM中间层架构.md)。
 
 ## 推送渠道配置
 

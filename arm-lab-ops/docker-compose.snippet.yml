@@ -1,4 +1,8 @@
-# Add this service to /opt/vpush-ima-lab compose (lab only).
+# Leftover. Prefer host systemd for ops + puller:
+#   vpush-arm-lab-ops.service
+#   vpush-ima-lab-puller.service
+# OpenList stays in the lab compose. Do not add puller/ops back.
+# This snippet is only a fallback if you must run the panel in Docker.
 # Not production vpush. Not a reading desk. Do not merge into
 # production docker-compose*.yml.
 #

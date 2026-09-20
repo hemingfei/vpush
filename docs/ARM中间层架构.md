@@ -30,9 +30,10 @@ vpush（本机盘）───────────┤  只走 HTTP ima-pull :
 | 组件 | 状态 |
 |---|---|
 | 生产 vpush | 归档必须是**本机盘**；`IMA_PULL_URL` 仍指存储 8743 ← 网络通了改 ARM HTTP，**不改挂载** |
-| ARM ima-pull | **active** `100.112.25.21:8743` → `/srv/vpush-ima`（另有 `GET /file`） |
-| ARM puller_loop | 在跑 → 115 + hot |
-| OpenList | `/lab-hot` Local；`/vpush` 115 Cloud |
+| ARM ima-pull | **systemd** `vpush-ima-pull` · `100.112.25.21:8743` → `/srv/vpush-ima`（另有 `GET /file`） |
+| ARM puller_loop | **systemd** `vpush-ima-lab-puller` → 115 + hot（不要再跑 puller 容器） |
+| ARM ops | **systemd** `vpush-arm-lab-ops` · Tailscale `:8055`（不要再跑 ops 容器） |
+| OpenList | 实验室 compose **仅留这一份**：`/lab-hot` Local；`/vpush` 115 Cloud |
 | ARM nfs-kernel-server | Tailscale `100.64.0.0/10` 导出 `/srv/vpush-ima`（实验室用，生产不挂） |
 | 采集 timer | IMA apply 已开；CICC 仍 DRY_RUN / disabled |
 

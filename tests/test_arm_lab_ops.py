@@ -113,6 +113,8 @@ def test_status_redacts_ima_refresh_token_and_cookie_body(lab_env):
     assert health["ok"] is True
     assert "refresh_token" not in health
     assert "cookie" not in health
+    assert payload["puller"]["unit"]["unit"] == "vpush-ima-lab-puller.service"
+    assert payload["puller"]["docker"]["containers"] == []
 
 
 def test_ima_and_cookie_helpers_omit_bodies(tmp_path):
@@ -271,6 +273,7 @@ def test_qr_start_rate_limit(monkeypatch, lab_env):
 
 def test_compose_snippet_matches_live_lab_contract():
     text = (OPS_DIR / "docker-compose.snippet.yml").read_text(encoding="utf-8")
+    assert "Leftover" in text
     assert "VPUSH_PYTHON: /opt/vpush-ima-lab/venv/bin/python" in text
     assert "VPUSH_SCRIPTS_ROOT: /opt/vpush-ima-lab/src/scripts" in text
     assert "VPUSH_CICC_COOKIE_FILE: /secrets/cicc-cookies.txt" in text

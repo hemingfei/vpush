@@ -40,6 +40,7 @@ from ops_settings import (
     puller_container_name,
     puller_health_file,
     puller_health_url,
+    puller_unit,
     timer_unit,
 )
 
@@ -349,8 +350,10 @@ def _docker_via_sock(sock: Path, name: str) -> dict[str, Any] | None:
 
 
 def docker_status() -> dict[str, Any]:
-    sock = docker_sock()
     name = puller_container_name()
+    if not name:
+        return {"available": False, "source": None, "containers": []}
+    sock = docker_sock()
     via_cli = _docker_via_cli(name)
     if via_cli is not None:
         return via_cli
@@ -442,6 +445,60 @@ def timer_status(unit: str | None = None) -> dict[str, Any]:
         "detail": err[:80],
         "next": None,
         "last_trigger": None,
+    }
+
+
+def service_status(unit: str | None = None) -> dict[str, Any]:
+    """Best-effort `systemctl show` for a long-running unit (lab puller)."""
+    name = unit or puller_unit()
+    try:
+        proc = subprocess.run(
+            [
+                "systemctl",
+                "show",
+                name,
+                "--property=ActiveState,UnitFileState,SubState,MainPID",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "unit": name,
+            "active": "unknown",
+            "detail": type(exc).__name__,
+            "enabled": None,
+            "sub": None,
+            "pid": None,
+        }
+    if proc.returncode != 0:
+        raw = (proc.stderr or proc.stdout or "unavailable").splitlines()
+        err = redact(raw[0] if raw else "unavailable")
+        return {
+            "unit": name,
+            "active": "unavailable",
+            "detail": err[:80],
+            "enabled": None,
+            "sub": None,
+            "pid": None,
+        }
+    props = _parse_systemctl_show(proc.stdout)
+    known = {"active", "inactive", "failed", "activating", "deactivating"}
+    active = (props.get("ActiveState") or "").strip()
+    pid_raw = (props.get("MainPID") or "").strip()
+    pid = int(pid_raw) if pid_raw.isdigit() and int(pid_raw) > 0 else None
+    enabled = (props.get("UnitFileState") or "").strip() or None
+    if enabled and enabled.lower() in {"n/a", "0", "none"}:
+        enabled = None
+    return {
+        "unit": name,
+        "active": active if active in known else (active or "unknown"),
+        "detail": None,
+        "enabled": enabled,
+        "sub": (props.get("SubState") or "").strip() or None,
+        "pid": pid,
     }
 
 
@@ -924,12 +981,15 @@ def collect_status() -> dict[str, Any]:
     health_url = puller_health_url()
     file_health = health_from_file(puller_health_file())
     url_health = health_from_url(health_url) if health_url else None
+    unit = service_status()
     docker = docker_status()
     source = "none"
     if url_health is not None:
         source = "health_url"
     elif file_health is not None:
         source = "health_file"
+    elif unit.get("active") == "active":
+        source = "systemd"
     elif docker.get("containers"):
         source = "docker"
     elif (root / "logs").is_dir():
@@ -970,6 +1030,7 @@ def collect_status() -> dict[str, Any]:
         "last_job": read_last_job(root),
         "puller": {
             "source": source,
+            "unit": unit,
             "docker": docker,
             "health": url_health or file_health,
             "timer": timer,

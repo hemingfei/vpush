@@ -37,6 +37,7 @@ CICC_INCR_DAYS_MIN = 1
 CICC_INCR_DAYS_MAX = 14
 DEFAULT_EXPORT_ROOT = "/srv/vpush-ima"
 DEFAULT_PULL_HEALTH_URL = "http://127.0.0.1:8743/healthz"
+DEFAULT_PULLER_UNIT = "vpush-ima-lab-puller.service"
 SESSION_COOKIE = "arm_ops"
 SESSION_TTL_SECONDS = 12 * 3600
 QR_START_LIMIT = 5
@@ -236,7 +237,12 @@ def docker_sock() -> Path:
 
 
 def puller_container_name() -> str:
+    """Set only to watch a leftover compose puller. Host units leave this empty."""
     return env_str("PULLER_CONTAINER_NAME", "")
+
+
+def puller_unit() -> str:
+    return env_str("ARM_OPS_PULLER_UNIT", DEFAULT_PULLER_UNIT)
 
 
 def timer_unit() -> str:
