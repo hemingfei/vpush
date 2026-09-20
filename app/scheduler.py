@@ -3621,10 +3621,13 @@ class Scheduler:
                 logger.exception("未激活用户清理失败")
             # 研报结构化抽取（每小时一批，LLM 离线批处理；失败不影响主流程）
             extract_interval = int(self.db.get_setting("report_extract_interval_seconds") or 3600)
-            if (
-                now_mono - self._last_report_extract > extract_interval
-                and not self._report_extract_running
-            ):
+            # 0.0 = 从未跑过：重启后首 tick 立即触发。不能写成 now_mono - 0.0 > interval——
+            # Linux monotonic 自开机起算，刚启动的容器/CI VM uptime 不足 interval 会卡住首轮
+            extract_due = (
+                self._last_report_extract == 0.0
+                or now_mono - self._last_report_extract > extract_interval
+            )
+            if extract_due and not self._report_extract_running:
                 # 大批次单轮可达 20-30 分钟：后台任务化，主循环的采集/推送不被阻塞
                 self._last_report_extract = now_mono
                 self._report_extract_running = True

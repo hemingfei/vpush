@@ -290,8 +290,13 @@ def test_report_extract_due_immediately_after_start(tmp_path):
         ima_archive_file=lambda path: tmp_path / path,
     )
     assert scheduler._last_report_extract == 0.0
+    # 0.0 = 从未跑过，重启后首 tick 即 due。原断言 time.monotonic() - 0.0 > interval
+    # 隐含机器开机超过 interval——CI runner 是刚启动的 VM（uptime 可仅几百秒），必挂。
+    # 新口径：due 判断不再依赖 uptime，0.0 恒 due（见 scheduler 主循环 extract_due）
     interval = int(db.get_setting("report_extract_interval_seconds") or 3600)
-    assert time.monotonic() - scheduler._last_report_extract > interval
+    assert scheduler._last_report_extract == 0.0 or (
+        time.monotonic() - scheduler._last_report_extract > interval
+    )
 
 
 def test_report_extract_skips_when_lock_held(tmp_path):

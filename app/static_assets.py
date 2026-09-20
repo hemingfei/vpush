@@ -71,13 +71,20 @@ def asset_paths(root: Path = ROOT) -> list[Path]:
     return sorted(set(paths), key=lambda path: path.relative_to(root).as_posix())
 
 
+def _normalized_bytes(path: Path) -> bytes:
+    # 摘要按 LF 字节计算：Windows core.autocrlf=true 的 CRLF 工作区与
+    # Linux CI 的 LF checkout 必须算出同一 digest，否则本地 sync 的哈希
+    # 在 CI 复算必失配（曾两次踩坑：merge 后工作区被重新写成 CRLF）
+    return path.read_bytes().replace(b"\r\n", b"\n")
+
+
 def file_digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:DIGEST_LEN]
+    return hashlib.sha256(_normalized_bytes(path)).hexdigest()[:DIGEST_LEN]
 
 
 @functools.lru_cache(maxsize=512)
 def _digest_for(path: str, mtime_ns: int, size: int) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:DIGEST_LEN]
+    return hashlib.sha256(_normalized_bytes(Path(path))).hexdigest()[:DIGEST_LEN]
 
 
 def cached_file_digest(path: Path) -> str:
@@ -89,7 +96,7 @@ def asset_digest(root: Path = ROOT) -> str:
     digest = hashlib.sha256()
     for path in asset_paths(root):
         relative = path.relative_to(root).as_posix().encode()
-        digest.update(relative + b"\0" + path.read_bytes() + b"\0")
+        digest.update(relative + b"\0" + _normalized_bytes(path) + b"\0")
     return digest.hexdigest()[:DIGEST_LEN]
 
 
