@@ -83,8 +83,33 @@ SCHEMA_MIGRATIONS: list[tuple[int, str, str | tuple[str, ...]]] = [
             "    action TEXT NOT NULL,\n"
             "    created_at TEXT NOT NULL DEFAULT (datetime('now')),\n"
             "    updated_at TEXT NOT NULL DEFAULT (datetime('now')),\n"
-            "    UNIQUE(post_id, user_id)\n"
+            "    UNIQUE(post_id, user_id, target_name)\n"
             ")",
+            "CREATE INDEX IF NOT EXISTS idx_mx_action_marks_post ON mx_action_marks(post_id)",
+        ),
+    ),
+    (
+        2026092002,
+        "操作标注一帖多标：唯一键放宽为 (post_id, user_id, target_name)",
+        (
+            # 一条消息可同时是「甲股清仓 + 乙股清仓」：唯一键收窄到「同一人对
+            # 同一帖同一标的只有一个当前判断」，跨标的并存。旧库 (post_id,
+            # user_id) 唯一约束以隐式自动索引存在（不可 DROP），整表重建换键：
+            # 旧表连同其索引随 RENAME/DROP 走，新表按新约束建
+            "ALTER TABLE mx_action_marks RENAME TO mx_action_marks_old",
+            "CREATE TABLE mx_action_marks (\n"
+            "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+            "    post_id INTEGER NOT NULL,\n"
+            "    user_id INTEGER NOT NULL,\n"
+            "    target_name TEXT NOT NULL,\n"
+            "    action TEXT NOT NULL,\n"
+            "    created_at TEXT NOT NULL DEFAULT (datetime('now')),\n"
+            "    updated_at TEXT NOT NULL DEFAULT (datetime('now')),\n"
+            "    UNIQUE(post_id, user_id, target_name)\n"
+            ")",
+            "INSERT INTO mx_action_marks (id, post_id, user_id, target_name, action, created_at, updated_at) "
+            "SELECT id, post_id, user_id, target_name, action, created_at, updated_at FROM mx_action_marks_old",
+            "DROP TABLE mx_action_marks_old",
             "CREATE INDEX IF NOT EXISTS idx_mx_action_marks_post ON mx_action_marks(post_id)",
         ),
     ),
@@ -1240,8 +1265,9 @@ CREATE TABLE IF NOT EXISTS tag_review_votes (
 CREATE INDEX IF NOT EXISTS idx_tag_review_votes_review ON tag_review_votes(review_id);
 
 -- 大V消息操作标注：授权用户/管理员对单条 MX 消息标注「某个股的某操作（或非操作）」，
--- 修正观点研判/标签管线漏判误判（如清仓未被识别）。UNIQUE(post_id, user_id)：
--- 每人每帖一个当前标注，改标即 upsert 覆盖（标注是当前判断，与投票不可改不同）。
+-- 修正观点研判/标签管线漏判误判（如清仓未被识别）。UNIQUE(post_id, user_id,
+-- target_name)：一条消息可含多标的操作（如同时清仓两只票）——同一人对同一帖
+-- 同一标的只有一个当前判断（改标即 upsert 覆盖），跨标的并存。
 -- 生效与否不落库：回放（mx_kol_holdings）每次请求按 mx_action_marks.resolve 现算
 CREATE TABLE IF NOT EXISTS mx_action_marks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1251,7 +1277,7 @@ CREATE TABLE IF NOT EXISTS mx_action_marks (
     action TEXT NOT NULL,                    -- 操作词（词表内）或 'none'=非操作（仅压制）
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(post_id, user_id)
+    UNIQUE(post_id, user_id, target_name)
 );
 CREATE INDEX IF NOT EXISTS idx_mx_action_marks_post ON mx_action_marks(post_id);
 
@@ -7129,28 +7155,26 @@ class DB:
     # ---------- 大V消息操作标注（mx_action_marks） ----------
 
     def upsert_mx_action_mark(self, post_id: int, user_id: int, target_name: str, action: str) -> None:
-        """写入/更新某用户对某帖的操作标注：一人一帖一标，改标即覆盖（upsert）。"""
+        """写入/更新某用户对某帖某标的的操作标注：一人一帖一标的一判断，改标即覆盖。"""
         self._execute(
             "INSERT INTO mx_action_marks (post_id, user_id, target_name, action) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(post_id, user_id) DO UPDATE SET "
-            "target_name = excluded.target_name, action = excluded.action, "
-            "updated_at = datetime('now')",
+            "ON CONFLICT(post_id, user_id, target_name) DO UPDATE SET "
+            "action = excluded.action, updated_at = datetime('now')",
             (int(post_id), int(user_id), str(target_name), str(action)),
         )
 
-    def delete_mx_action_mark(self, post_id: int, user_id: int) -> bool:
-        """撤销某用户对某帖的标注；先查再删，返回是否确有删除。"""
-        existing = self._rows(
-            "SELECT id FROM mx_action_marks WHERE post_id = ? AND user_id = ?",
-            (int(post_id), int(user_id)),
-        )
-        if not existing:
-            return False
-        self._execute(
-            "DELETE FROM mx_action_marks WHERE post_id = ? AND user_id = ?",
-            (int(post_id), int(user_id)),
-        )
-        return True
+    def delete_mx_action_mark(self, post_id: int, user_id: int, target_name: str | None = None) -> bool:
+        """撤销操作标注：默认撤该用户在此帖的全部标注，指定标的则只撤该标的。"""
+        sql = "DELETE FROM mx_action_marks WHERE post_id = ? AND user_id = ?"
+        params: list = [int(post_id), int(user_id)]
+        if target_name is not None:
+            sql += " AND target_name = ?"
+            params.append(str(target_name))
+        with self._lock:
+            cur = self._conn.execute(sql, tuple(params))
+            self._conn.commit()
+            removed = cur.rowcount > 0
+        return removed
 
     def _mx_action_mark_rows(self, where: str, params: tuple) -> list[dict]:
         """标注行统一取法：带标注人 username/is_admin（生效解析需判现任身份）。"""

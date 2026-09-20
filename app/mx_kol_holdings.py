@@ -6,7 +6,8 @@
   研判漏提操作时补位）——仅当同标的当日观点未给出操作词时采纳；
 - 修正源：mx_action_marks 人工标注（授权用户标注某消息是某个股的某操作，
   管理员直判/多人一致生效）——同帖同标的的自动信号被压制，操作词标注
-  注入人工事件；修正漏判（如清仓未被识别）与误判（'none' 压制）。
+  注入人工事件；修正漏判（如清仓未被识别）与误判（'none' 压制）。一条
+  消息含多笔操作时逐条注入（如同时清仓两只票）。
 本模块只做纯计算回放，不落库、不调 LLM——历史数据不可变，结果可随时重算。
 窗口默认近 30 个自然日，越窗的持仓视为已了结，不再计入。
 """
@@ -144,10 +145,15 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
     rows = db.list_mx_opinions_for_kol(kol_id, since_day=since)
 
     # 人工标注信号源：授权用户/管理员对单条消息的「个股×操作」标注，优先级最高。
-    # 生效随标注与白名单配置现算（纯计算不落库），管理员标注即刻反映
+    # 生效随标注与白名单配置现算（纯计算不落库），管理员标注即刻反映；
+    # 值为该帖生效标注列表（一帖多标多生效，按标的各自独立判定）
     from .mx_action_marks import MARK_NONE, effective_marks_for_kol
 
-    marks = effective_marks_for_kol(db, kol_id, since)  # post_id -> {target_name, action, ...}
+    marks = effective_marks_for_kol(db, kol_id, since)  # post_id -> [{target_name, action, ...}]
+
+    # 帖上某标的是否有生效标注（人工已修正/否定的自动信号让位）
+    def _marked(pid: int, name: str) -> bool:
+        return any(e["target_name"] == name for e in marks.get(pid, []))
 
     # 事件流：观点为主、标签补位。同标的当日观点已给出**有仓位语义的**操作词时
     # 该日标签事件整体让位（观点管线对证据/作者有强校验，可信度更高）；观察/做T
@@ -163,8 +169,7 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
         evidence_ids = json.loads(r.get("evidence_post_ids") or "[]")
         # 人工标注压制（观点源）：证据帖上该标的有生效标注——观点结论已被人工
         # 修正或否定，让位（'none' 与操作词标注同样压制，操作词另行注入事件）
-        if any(int(pid) in marks and marks[int(pid)]["target_name"] == name
-               for pid in evidence_ids):
+        if any(int(pid) in marks and _marked(int(pid), name) for pid in evidence_ids):
             continue
         day = str(r.get("trading_day") or "")
         direction = str(r.get("direction") or "")
@@ -188,7 +193,7 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
             continue
         # 人工标注压制（标签源）：该帖该标的已有生效标注，标签管线让位
         ev_post = ev["evidence_post_ids"][0] if ev["evidence_post_ids"] else 0
-        if ev_post in marks and marks[ev_post]["target_name"] == ev["target_name"]:
+        if ev_post in marks and _marked(ev_post, ev["target_name"]):
             continue
         dedup = (ev["target_name"], ev["action"], ev["trading_day"])
         if dedup in seen_tag:
@@ -199,37 +204,40 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
     # 标签多为同一段行情的重复表述，且窗口日粒度下两条都会留存——让最新判断
     # （人工）优先。跨日标签不受影响（dedup 本就按日区分）
     manual_days: dict[str, set] = {}
-    for pid, mk in marks.items():
-        if mk["action"] == MARK_NONE:
-            continue
-        post = db.get_post(pid)
-        if not post:
-            continue
-        manual_days.setdefault(mk["target_name"], set()).add(
-            str(post.get("published_at") or "")[:10])
+    for pid, eff_list in marks.items():
+        for mk in eff_list:
+            if mk["action"] == MARK_NONE:
+                continue
+            post = db.get_post(pid)
+            if not post:
+                continue
+            manual_days.setdefault(mk["target_name"], set()).add(
+                str(post.get("published_at") or "")[:10])
     events = [e for e in events if not (
         e["source"] == "tag"
         and e["target_name"] in manual_days
         and e["trading_day"] in manual_days[e["target_name"]]
     )]
     # 人工标注事件注入：操作词标注直接作为回放事件（'none' 只压制不注入）。
-    # 人工事件不参与观点对标签的压制（优先级最高）；时间取消息发布时刻，
-    # 与其他事件统一按时间排序回放——清仓后再遇别的帖的加仓标签会正确重开仓
-    for pid, mk in marks.items():
-        if mk["action"] == MARK_NONE:
-            continue
-        post = db.get_post(pid)
-        if not post:
-            continue
-        published = str(post.get("published_at") or "")
-        events.append({
-            "trading_day": published[:10], "occurred_at": published, "snapshot_at": "",
-            "target_type": "stock", "target_name": mk["target_name"],
-            "direction": "bull" if mk["action"] in TAG_BUY_ACTIONS else "bear",
-            "action": mk["action"], "source": "manual",
-            "summary": str(post.get("content") or "").strip()[:160],
-            "evidence_post_ids": [pid],
-        })
+    # 一帖多标逐条注入（如同时清仓两只票）；人工事件不参与观点对标签的压制
+    # （优先级最高）；时间取消息发布时刻，与其他事件统一按时间排序回放——
+    # 清仓后再遇别的帖的加仓标签会正确重开仓
+    for pid, eff_list in marks.items():
+        for mk in eff_list:
+            if mk["action"] == MARK_NONE:
+                continue
+            post = db.get_post(pid)
+            if not post:
+                continue
+            published = str(post.get("published_at") or "")
+            events.append({
+                "trading_day": published[:10], "occurred_at": published, "snapshot_at": "",
+                "target_type": "stock", "target_name": mk["target_name"],
+                "direction": "bull" if mk["action"] in TAG_BUY_ACTIONS else "bear",
+                "action": mk["action"], "source": "manual",
+                "summary": str(post.get("content") or "").strip()[:160],
+                "evidence_post_ids": [pid],
+            })
     if not events:
         return None
     events.sort(key=lambda e: (e["trading_day"], e["occurred_at"]))  # 早 → 晚

@@ -8084,7 +8084,7 @@ def create_api_router(
     # ---------- 大V消息操作标注（人工修正预估持仓/盈亏的回放信号） ----------
 
     def _mx_action_mark_payload(post_id: int, viewer: dict) -> dict:
-        """单帖标注弹窗数据：帖摘要 + 标注名单 + 生效状态 + 词表与输入建议。"""
+        """单帖标注弹窗数据：帖摘要 + 自动标签 + 人工标注名单 + 生效状态 + 词表。"""
         from .mx_action_marks import MARK_NONE, can_mark, get_mark_config, marks_summary_for_posts
 
         post = db.get_post(post_id)
@@ -8094,7 +8094,8 @@ def create_api_router(
             raise HTTPException(status_code=400, detail="仅支持 MX 平台消息")
         cfg = get_mark_config(db)
         s = marks_summary_for_posts(db, [post_id], viewer, cfg)[int(post_id)]
-        # 输入建议：帖上已有的股票类标签（写库时已按正式名归一），弹窗免手输
+        # 消息上的标签即自动标注结果（LLM 打标/观点回流写入 posts.tags），弹窗
+        # 原样展示供人工对照；非操作词的股票标签兼作表单输入建议
         tags = post.get("tags") or []
         if isinstance(tags, str):
             try:
@@ -8113,9 +8114,11 @@ def create_api_router(
                 "stock_tags": [str(t) for t in tags if str(t).strip()
                                and str(t).strip() not in vocab][:6],
             },
+            "auto_tags": [str(t) for t in tags if str(t).strip()],
+            "llm_tagged": bool(post.get("llm_tagged")),
             "marks": s["marks"],
             "effective": s["effective"],
-            "my_mark": s["my_mark"],
+            "my_marks": s["my_marks"],
             "can_mark": can_mark(viewer, cfg),
             "is_admin": bool(viewer.get("is_admin")),
             "config": {"agree_n": cfg["agree_n"], "usernames": cfg["usernames"]},
@@ -8129,12 +8132,13 @@ def create_api_router(
 
     @router.post("/posts/{post_id}/action-mark")
     def mx_action_mark_submit(post_id: int, body: MxActionMarkIn, user: dict = Depends(get_current_user)):
-        """写入/更新我的操作标注：管理员直判立即生效；授权用户满一致人数生效。
+        """写入/更新我的一条操作标注：管理员直判立即生效；授权用户满一致人数生效。
 
-        生效不落库——预估持仓/盈亏每次请求按标注现算（mx_kol_holdings），
-        下一次请求即反映。target_name 经别名表归一后必须命中个股正式名
-        （口径与打标管线一致：常用表+全市场−排除项），操作词必须在词表内
-        （或 'none'=非操作）。
+        一条消息可标多笔操作（不同标的各自独立、可同时生效）；同一标的重复
+        提交视为改判，upsert 覆盖。生效不落库——预估持仓/盈亏每次请求按标注
+        现算（mx_kol_holdings），下一次请求即反映。target_name 经别名表归一后
+        必须命中个股正式名（口径与打标管线一致：常用表+全市场−排除项），
+        操作词必须在词表内（或 'none'=非操作）。
         """
         from .mx_action_marks import (
             MARK_NONE,
@@ -8182,18 +8186,23 @@ def create_api_router(
     def mx_action_mark_delete(
         post_id: int,
         user_id: int | None = None,
+        target_name: str | None = None,
         user: dict = Depends(get_current_user),
     ):
-        """撤销操作标注：默认撤自己的；管理员可带 user_id 撤他人（审计）。"""
+        """撤销操作标注：默认撤自己的（带 target_name 只撤该标的，否则全撤）；
+        管理员可带 user_id 撤他人（审计）。"""
         if not db.get_post(post_id):
             raise HTTPException(status_code=404, detail="消息不存在")
         target_user = int(user_id) if (user_id and user.get("is_admin")) else int(user["id"])
-        removed = db.delete_mx_action_mark(post_id, target_user)
+        removed = db.delete_mx_action_mark(post_id, target_user, target_name)
         if not removed:
-            raise HTTPException(status_code=404, detail="该用户在此消息上没有标注")
+            raise HTTPException(
+                status_code=404,
+                detail="该用户在此消息上没有该标的的标注",
+            )
         if target_user != int(user["id"]):
             _audit(user, "mx_action_mark_delete",
-                   detail=f"post={post_id} user={target_user}")
+                   detail=f"post={post_id} user={target_user} target={target_name or '全部'}")
         return _mx_action_mark_payload(post_id, user)
 
     @router.get("/admin/mx-action-marks/config", dependencies=[Depends(require_admin)])
@@ -8222,7 +8231,11 @@ def create_api_router(
 
     @router.get("/admin/mx-action-marks", dependencies=[Depends(require_admin)])
     def admin_mx_action_marks(limit: int = 100):
-        """最近操作标注列表（管理端监督视角），含消息摘要与标注人。"""
+        """最近操作标注列表（管理端监督视角），含消息摘要与标注人。
+
+        生效按标的独立判定（一帖多标多生效）：行级 effective 标注该行
+        (target_name, action) 是否在生效集合中（ Voters 亦然）。
+        """
         from .mx_action_marks import get_mark_config
         from .mx_action_marks import resolve_effective_marks
 
@@ -8230,7 +8243,11 @@ def create_api_router(
         rows = db.list_mx_action_marks_recent(limit=limit)
         effective = resolve_effective_marks(rows, cfg)
         for r in rows:
-            r["effective"] = effective.get(int(r["post_id"]))
+            eff_rows = [e for e in effective.get(int(r["post_id"]), [])
+                        if e["target_name"] == str(r["target_name"])]
+            r["effective"] = eff_rows[0] if eff_rows else None
+            # 一帖多标时同帖其他标的的生效情况，供监督表展示完整语境
+            r["post_effective"] = effective.get(int(r["post_id"]), [])
         return {"items": rows, "config": cfg}
 
     @router.get("/admin/post-tag-reviews", dependencies=[Depends(require_admin)])

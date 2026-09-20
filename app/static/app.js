@@ -4002,17 +4002,20 @@ function postCard(post) {
     </div>`;
 }
 
-// 操作标注角标：已生效实心「人工:清仓 赛力斯」；标注中虚线「标注中 1/2」。
-// 所有人可见（生效与否影响预估持仓展示）；可标注者点开弹窗，无权者只读提示
+// 操作标注角标：生效逐条实心「人工:清仓 赛力斯」（多标的多条并列）；
+// 有标注未生效出虚线「标注中 1/2」。所有人可见（生效与否影响预估持仓展示）；
+// 可标注者点开弹窗，无权者只读提示
 function mxMarkChip(post) {
   const m = post.mx_mark;
   if (!m || post.platform !== "mx") return "";
-  if (m.effective) {
-    const eff = m.effective;
-    const label = eff.action === "none"
-      ? `人工:非操作 ${eff.target_name}` : `人工:${eff.action} ${eff.target_name}`;
-    return `<button type="button" class="cat am-chip is-effective" data-post-id="${post.id}"
-      onclick="openActionMarkModal(${post.id})" title="人工标注已生效，点击查看/修改">✍ ${escapeHtml(label)}</button>`;
+  const effList = m.effective || [];
+  if (effList.length) {
+    return effList.map((eff) => {
+      const label = eff.action === "none"
+        ? `人工:非操作 ${eff.target_name}` : `人工:${eff.action} ${eff.target_name}`;
+      return `<button type="button" class="cat am-chip is-effective" data-post-id="${post.id}"
+        onclick="openActionMarkModal(${post.id})" title="人工标注已生效，点击查看/修改">✍ ${escapeHtml(label)}</button>`;
+    }).join("");
   }
   if (m.total) {
     return `<button type="button" class="cat am-chip is-pending" data-post-id="${post.id}"
@@ -4368,6 +4371,8 @@ function refreshTagVoteChips(data) {
 // 授权用户/管理员对单条 MX 消息标注「某个股的某操作（或非操作）」，
 // 修正预估持仓/盈亏回放的漏判误判：管理员直判立即生效；
 // 授权用户满一致人数（后台可配）生效，分歧不生效等管理员定夺。
+// 弹窗展示消息的自动标签（posts.tags）与全部人工标注对照；
+// 一条消息可标多笔操作（如同时清仓两只票），同标的重提为改判。
 let _actionMarkData = null; // 当前弹窗数据（/api/posts/{id}/action-mark 响应）
 let _actionMarkPick = null; // 弹窗内当前选中的操作词（null=未选）
 
@@ -4395,9 +4400,8 @@ async function openActionMarkModal(postId, presetTarget) {
   try {
     const data = await api(`/api/posts/${postId}/action-mark`);
     _actionMarkData = data;
-    // 时间线入口预填个股；已有自己的标注时以标注为准
-    const preset = (data.my_mark && data.my_mark.target_name)
-      || (presetTarget && String(presetTarget).trim()) || "";
+    // 时间线入口预填个股；已有自己的同标的标注时以标注为准（表单预选该条操作）
+    const preset = (presetTarget && String(presetTarget).trim()) || "";
     data._target = preset;
     paintActionMarkModal(data);
   } catch (err) {
@@ -4429,10 +4433,12 @@ function paintActionMarkModal(data) {
   const isAdmin = !!data.is_admin;
   const cfg = data.config || {};
   const agreeN = cfg.agree_n ?? 2;
-  const my = data.my_mark;
-  const eff = data.effective;
-  // 打开/重绘时选中态：我的标注 > null
-  _actionMarkPick = my ? my.action : null;
+  const myMarks = data.my_marks || [];
+  const effList = data.effective || [];
+  // 打开/重绘时选中态：预填标的对应的我的标注（改判场景）> 第一条 > null
+  const presetTarget = String(data._target || "").trim();
+  const myPick = (myMarks.find((m) => m.target_name === presetTarget) || myMarks[0] || null);
+  _actionMarkPick = myPick ? myPick.action : null;
   const actions = Array.isArray(data.actions) ? data.actions : [];
   const actionBtn = (a) => {
     const on = _actionMarkPick === a ? " on" : "";
@@ -4444,23 +4450,52 @@ function paintActionMarkModal(data) {
     ? data.post.stock_tags.map((s) => `<button type="button" class="am-suggest"
         onclick="actionMarkFillTarget(this.textContent)">${escapeHtml(s)}</button>`).join("")
     : "";
-  const markRows = (data.marks || []).map((m) => `
-    <div class="am-mark-row">
+  // 自动标注区：消息当前标签（LLM 打标/观点回流写入 posts.tags），供人工对照
+  const autoTags = Array.isArray(data.auto_tags) ? data.auto_tags : [];
+  const autoBlock = autoTags.length
+    ? `<div class="am-auto">
+        <div class="am-marks-head">自动标注${data.llm_tagged ? "（LLM 已打标）" : "（消息当前标签）"}</div>
+        <div class="am-auto-tags">${autoTags.map((t) =>
+          `<span class="cat cat-tag">${escapeHtml(t)}</span>`).join("")}</div>
+      </div>`
+    : `<div class="am-auto">
+        <div class="am-marks-head">自动标注</div>
+        <p class="muted">暂无自动标签</p>
+      </div>`;
+  // 人工标注区：逐条展示（一帖多标）；我的标注可逐条撤销，管理员可撤任意一条
+  const effTargets = new Map(effList.map((e) => [`${e.target_name}|${e.action}`, e]));
+  const markRows = (data.marks || []).map((m) => {
+    const eff = effTargets.get(`${m.target_name}|${m.action}`);
+    const mine = !!m.is_mine;
+    // 撤他人（仅管理员）带 user_id；撤自己恒不带（DELETE 以登录态定位）
+    const delBtn = (mine || isAdmin)
+      ? `<button type="button" class="am-mark-del" title="撤销该标注"
+          aria-label="撤销${escapeHtml(m.username)}对${escapeHtml(m.target_name)}的标注"
+          onclick="deleteActionMark(${Number(data.post.id)}, ${JSON.stringify(String(m.target_name))}, ${mine ? 0 : Number(m.user_id || 0)})">×</button>`
+      : "";
+    return `
+    <div class="am-mark-row${eff ? " is-effective" : ""}">
       <b>${escapeHtml(m.username)}</b>${m.is_admin ? '<span class="am-mark-admin">管理员</span>' : ""}
       <span class="mxv-badge act">${m.action === "none" ? "非操作" : escapeHtml(m.action)}</span>
       <span class="muted">${escapeHtml(m.target_name)} · ${fmtDbTime(m.updated_at || "")}</span>
-    </div>`).join("");
+      ${eff ? '<span class="tag-pending-badge is-approved">已生效</span>' : ""}
+      ${delBtn}
+    </div>`;
+  }).join("");
+  const effSummary = effList.length
+    ? effList.map(_actionMarkStatusLabel).join("；")
+    : "";
   const who = data.post?.kol_name ? `${escapeHtml(data.post.kol_name)} · ` : "";
   const when = data.post?.published_at ? fmtPublished(data.post.published_at) : "";
   let ruleHint;
-  if (eff) {
-    ruleHint = _actionMarkStatusLabel(eff);
+  if (effList.length) {
+    ruleHint = `已生效 ${effList.length} 条：${effSummary}`;
   } else if (canMark && isAdmin) {
-    ruleHint = "管理员直判：保存后立即生效，不经过多人一致";
-  } else if (my) {
-    ruleHint = `你已标注「${my.action === "none" ? "非操作" : escapeHtml(my.action)}」，满 ${agreeN} 人标注一致即生效；意见不同视为分歧，暂不生效`;
+    ruleHint = "管理员直判：保存后立即生效，不经过多人一致；一条消息可标多笔操作（不同标的各自生效）";
+  } else if (myMarks.length) {
+    ruleHint = `你已标注 ${myMarks.length} 条，满 ${agreeN} 人同标同一「股票+操作」即生效；意见不同视为分歧，暂不生效`;
   } else if (canMark) {
-    ruleHint = `满 ${agreeN} 人标注「同一股票+同一操作」即生效；意见不同视为分歧，暂不生效`;
+    ruleHint = `满 ${agreeN} 人标注「同一股票+同一操作」即生效；一条消息可标多笔操作（不同标的各自生效）`;
   } else {
     ruleHint = "你没有标注权限，仅可查看（权限由管理员在后台配置）";
   }
@@ -4470,6 +4505,7 @@ function paintActionMarkModal(data) {
       <h3 class="mx-raw-title">操作标注</h3>
       <p class="mx-raw-meta">${who}${when}</p>
       <p class="tag-vote-excerpt muted">${escapeHtml(data.post?.excerpt || "")}</p>
+      ${autoBlock}
       ${canMark ? `
       <div class="am-form">
         <label class="am-label" for="am-target">个股（正式名）</label>
@@ -4484,11 +4520,11 @@ function paintActionMarkModal(data) {
           <button type="button" class="btn-normal" onclick="submitActionMark(${Number(data.post.id)})">
             保存标注${isAdmin ? "（直判生效）" : ""}
           </button>
-          ${my ? `<button type="button" class="btn-ghost danger" onclick="deleteActionMark(${Number(data.post.id)})">撤销我的标注</button>` : ""}
+          ${myMarks.length ? `<button type="button" class="btn-ghost danger" onclick="deleteActionMark(${Number(data.post.id)}, null, 0)">撤销我的全部标注</button>` : ""}
         </div>
       </div>` : ""}
       <div class="am-marks">
-        <div class="am-marks-head">当前标注（${(data.marks || []).length}）${eff ? " · " + _actionMarkStatusLabel(eff) : ""}</div>
+        <div class="am-marks-head">人工标注（${(data.marks || []).length}）${effSummary ? " · " + effSummary : ""}</div>
         ${markRows || '<p class="muted">暂无标注</p>'}
       </div>
       <p class="tag-vote-hint muted">${ruleHint}</p>
@@ -4527,7 +4563,8 @@ async function submitActionMark(postId) {
     _actionMarkData = data;
     paintActionMarkModal(data);
     refreshActionMarkChips(data);
-    if (data.effective) {
+    const eff = (data.effective || []).find((e) => e.target_name === target);
+    if (eff) {
       flash(`标注已生效：${target} ${action === "none" ? "非操作" : action}`);
     } else {
       flash(data.is_admin ? "已保存管理员标注" : "已保存标注，等待其他用户确认");
@@ -4537,14 +4574,20 @@ async function submitActionMark(postId) {
   }
 }
 
-async function deleteActionMark(postId) {
+async function deleteActionMark(postId, targetName, userId) {
+  // targetName=null 撤我在此帖的全部标注；指定标的只撤该条
+  // userId>0 且当前是管理员时撤他人该标的的标注
   try {
-    const data = await api(`/api/posts/${postId}/action-mark`, { method: "DELETE" });
+    const params = new URLSearchParams();
+    if (targetName) params.set("target_name", targetName);
+    if (userId) params.set("user_id", String(userId));
+    const qs = params.toString();
+    const data = await api(`/api/posts/${postId}/action-mark${qs ? "?" + qs : ""}`, { method: "DELETE" });
     data._target = "";
     _actionMarkData = data;
     paintActionMarkModal(data);
     refreshActionMarkChips(data);
-    flash("已撤销标注");
+    flash(targetName ? `已撤销标注：${targetName}` : "已撤销标注");
   } catch (err) {
     flash("撤销失败: " + err.message, "error");
   }
@@ -4553,13 +4596,15 @@ async function deleteActionMark(postId) {
 // 裁决后就地更新消息卡上的标注角标（下次刷新列表自然与数据一致）
 function refreshActionMarkChips(data) {
   if (!data || !data.post) return;
-  const eff = data.effective;
+  const effList = data.effective || [];
   document.querySelectorAll(`.am-chip[data-post-id="${Number(data.post.id)}"]`).forEach((chip) => {
-    if (eff) {
+    if (effList.length) {
       chip.classList.remove("is-pending");
       chip.classList.add("is-effective");
-      chip.title = "人工标注已生效";
-      chip.textContent = `人工:${eff.action === "none" ? "非操作" : eff.action} ${eff.target_name}`;
+      chip.title = "人工标注已生效，点击查看/修改";
+      const label = effList.map((e) =>
+        `${e.action === "none" ? "非操作" : e.action} ${e.target_name}`).join(" + ");
+      chip.textContent = `人工:${label}`;
     } else {
       chip.classList.remove("is-effective");
       chip.classList.add("is-pending");

@@ -1362,16 +1362,17 @@ def test_mx_kol_holdings_slider_drags_while_held_and_sorts(page: Page):
 
 
 def test_action_mark_modal_flow_and_chip_refresh(page: Page, static_origin: str):
-    """操作标注弹窗（app.js 全局函数 + 网络层桩）：打开 → 选操作 → 填个股 → 提交
-    POST body 断言 → 未生效反馈 → 达成一致后角标就地翻成已生效。
+    """操作标注弹窗（app.js 全局函数 + 网络层桩）：打开 → 自动标注对照 → 选操作
+    → 填个股 → 提交 POST body 断言 → 未生效反馈 → 达成一致后角标就地翻成已生效。
 
     回归口径：弹窗复用 tag-vote 外壳；POST body {target_name, action}；
+    effective/my_marks 为列表（一帖多标）；DELETE 带 target_name 逐条撤销；
     refreshActionMarkChips 按响应 effective 有无切换角标两态。
     app.js 的 api 是模块内 const，window 层覆盖不了——统一走 page.route 网络桩。"""
     page.clock.install(time=datetime(2026, 9, 20, 3, 0, tzinfo=UTC))
     # 完整引导 app.js：token + /api 全量路由拦截（me 带标注权限，feed 空列表）
     page.context.add_init_script("localStorage.setItem('dav_token', 'test-token')")
-    state = {"effective": None, "calls": [], "flashes": []}
+    state = {"effective": [], "calls": [], "flashes": []}
 
     def respond(route):
         path = urlsplit(route.request.url).path
@@ -1390,6 +1391,8 @@ def test_action_mark_modal_flow_and_chip_refresh(page: Page, static_origin: str)
                 "post": {"id": 77, "kol_id": 5, "kol_name": "测试大V",
                          "published_at": "2026-09-20 14:30:00",
                          "excerpt": "全部清仓了，落袋为安", "stock_tags": ["贵州茅台"]},
+                "auto_tags": ["清仓", "贵州茅台"],
+                "llm_tagged": True,
                 "marks": ([
                     {"username": "alice", "is_admin": False, "target_name": "贵州茅台",
                      "action": "清仓", "updated_at": "2026-09-20 15:00:00"},
@@ -1400,7 +1403,7 @@ def test_action_mark_modal_flow_and_chip_refresh(page: Page, static_origin: str)
                      "action": "清仓", "updated_at": "2026-09-20 15:00:00"},
                 ]),
                 "effective": eff,
-                "my_mark": {"target_name": "贵州茅台", "action": "清仓"},
+                "my_marks": [{"target_name": "贵州茅台", "action": "清仓"}],
                 "can_mark": True, "is_admin": False,
                 "config": {"agree_n": 2, "usernames": ["alice", "bob"]},
                 "actions": ["建仓", "加仓", "低吸", "减仓", "高抛", "清仓", "做T", "观察", "none"],
@@ -1418,11 +1421,13 @@ def test_action_mark_modal_flow_and_chip_refresh(page: Page, static_origin: str)
     }""")
     page.evaluate("openActionMarkModal(77)")
     page.wait_for_selector("#action-mark-mask")
-    # 弹窗骨架：摘要、个股建议、操作词按钮（含非操作）、我的标注预选
+    # 弹窗骨架：摘要、自动标注区（消息标签对照）、个股建议、操作词按钮、我的标注预选
     expect(page.locator("#action-mark-mask .tag-vote-excerpt")).to_contain_text("全部清仓了")
+    expect(page.locator("#action-mark-mask .am-auto-tags .cat-tag")).to_have_count(2)
+    expect(page.locator("#action-mark-mask .am-auto-tags .cat-tag").first).to_have_text("清仓")
     expect(page.locator("#action-mark-mask .am-suggest")).to_have_text("贵州茅台")
     expect(page.locator("#action-mark-mask .am-act-btn")).to_have_count(9)
-    expect(page.locator("#action-mark-mask .am-act-btn.on")).to_have_text("清仓")  # my_mark 预选
+    expect(page.locator("#action-mark-mask .am-act-btn.on")).to_have_text("清仓")  # my_marks 预选
     expect(page.locator("#action-mark-mask .am-mark-row")).to_have_count(1)
     # 点建议填个股 → 选清仓 → 提交
     page.locator("#action-mark-mask .am-suggest").click()
@@ -1434,18 +1439,86 @@ def test_action_mark_modal_flow_and_chip_refresh(page: Page, static_origin: str)
     post = next((c for c in state["calls"] if c["method"] == "POST"), None)
     assert post and post["path"] == "/api/posts/77/action-mark"
     assert post["body"] == {"target_name": "贵州茅台", "action": "清仓"}
-    # 达成一致后（响应带 effective）角标就地翻已生效
-    state["effective"] = {"target_name": "贵州茅台", "action": "清仓",
-                          "by_admin": False, "voters": ["alice", "bob"]}
+    # 达成一致后（响应带 effective 列表）角标就地翻已生效
+    state["effective"] = [{"target_name": "贵州茅台", "action": "清仓",
+                           "by_admin": False, "voters": ["alice", "bob"]}]
     page.evaluate("submitActionMark(77)")
     chip = page.locator('.am-chip[data-post-id="77"]')
     expect(chip).to_have_class(re.compile("is-effective"))
     expect(chip).to_contain_text("人工:清仓 贵州茅台")
-    # 撤销标注走 DELETE，角标回落标注中
-    state["effective"] = None
-    page.evaluate("deleteActionMark(77)")
+    # 生效行带「已生效」徽章（alice + bob 两行同标且都生效）
+    expect(page.locator("#action-mark-mask .am-mark-row .tag-pending-badge.is-approved")).to_have_count(2)
+    # 逐条撤销走 DELETE?target_name=，角标回落标注中
+    state["effective"] = []
+    page.evaluate("deleteActionMark(77, '贵州茅台', 0)")
     deleted = next((c for c in state["calls"] if c["method"] == "DELETE"), None)
     assert deleted and deleted["path"] == "/api/posts/77/action-mark"
     expect(chip).to_have_class(re.compile("is-pending"))
     page.evaluate("closeActionMarkModal()")
     expect(page.locator("#action-mark-mask")).to_have_count(0)
+
+
+def test_action_mark_modal_multi_target_marks(page: Page, static_origin: str):
+    """一帖多标：同帖多标的各自成行展示、各自生效（角标两条并列），
+    逐条撤销只撤指定标的。"""
+    page.clock.install(time=datetime(2026, 9, 20, 3, 0, tzinfo=UTC))
+    page.context.add_init_script("localStorage.setItem('dav_token', 'test-token')")
+    state = {"calls": []}
+
+    def respond(route):
+        path = urlsplit(route.request.url).path
+        data = []
+        if path == "/api/me":
+            data = {"id": 1, "username": "admin", "is_admin": True,
+                    "can_mx_action_mark": True, "timeline_platforms": []}
+        elif path == "/api/posts/88/action-mark":
+            state["calls"].append({"path": path, "method": route.request.method,
+                                   "query": urlsplit(route.request.url).query})
+            data = {
+                "post": {"id": 88, "kol_id": 5, "kol_name": "测试大V",
+                         "published_at": "2026-09-20 14:30:00",
+                         "excerpt": "赛力斯和比亚迪都清仓了", "stock_tags": ["赛力斯", "比亚迪"]},
+                "auto_tags": ["清仓", "赛力斯", "比亚迪"],
+                "llm_tagged": True,
+                "marks": [
+                    {"username": "admin", "is_admin": True, "target_name": "赛力斯",
+                     "action": "清仓", "updated_at": "2026-09-20 15:00:00"},
+                    {"username": "admin", "is_admin": True, "target_name": "比亚迪",
+                     "action": "清仓", "updated_at": "2026-09-20 15:00:30"},
+                ],
+                "effective": [
+                    {"target_name": "赛力斯", "action": "清仓", "by_admin": True, "voters": ["admin"]},
+                    {"target_name": "比亚迪", "action": "清仓", "by_admin": True, "voters": ["admin"]},
+                ],
+                "my_marks": [{"target_name": "赛力斯", "action": "清仓"},
+                             {"target_name": "比亚迪", "action": "清仓"}],
+                "can_mark": True, "is_admin": True,
+                "config": {"agree_n": 2, "usernames": []},
+                "actions": ["建仓", "加仓", "低吸", "减仓", "高抛", "清仓", "做T", "观察", "none"],
+            }
+        route.fulfill(json=data)
+
+    page.route("**/api/**", respond)
+    page.goto(static_origin)
+    page.wait_for_function("typeof openActionMarkModal === 'function'")
+    page.evaluate("openActionMarkModal(88)")
+    page.wait_for_selector("#action-mark-mask")
+    # 两条人工标注各自成行且都带已生效徽章
+    expect(page.locator("#action-mark-mask .am-mark-row")).to_have_count(2)
+    expect(page.locator("#action-mark-mask .am-mark-row .tag-pending-badge.is-approved")).to_have_count(2)
+    # 逐条撤销按钮存在（我的标注）
+    expect(page.locator("#action-mark-mask .am-mark-del")).to_have_count(2)
+    # 角标多生效并列：先造角标容器，DELETE 响应落地后就地写入两条生效文本
+    page.evaluate("""() => {
+      document.body.insertAdjacentHTML('beforeend',
+        '<button class="cat am-chip" data-post-id="88"></button>');
+    }""")
+    page.evaluate("deleteActionMark(88, '赛力斯', 0)")
+    chip = page.locator('.am-chip[data-post-id="88"]')
+    expect(chip).to_have_class(re.compile("is-effective"))
+    expect(chip).to_contain_text("人工:清仓 赛力斯 + 清仓 比亚迪")
+    # 逐条撤销：点比亚迪的 ×
+    page.locator("#action-mark-mask .am-mark-del").nth(1).click()
+    deleted = next((c for c in state["calls"] if c["method"] == "DELETE"), None)
+    assert deleted and "target_name=" in deleted["query"]
+    page.evaluate("closeActionMarkModal()")

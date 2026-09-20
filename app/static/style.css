@@ -1695,8 +1695,19 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
 .theme-dark .am-act-btn.on { background: rgba(122, 162, 255, .2); color: #9db9ff; }
 .am-marks { margin-top: 14px; }
 .am-marks-head { font-size: var(--text-xs); color: var(--color-text-muted); margin-bottom: 6px; }
+/* 自动标注区：消息当前标签（LLM/观点回流），供人工标注对照 */
+.am-auto { margin-top: 14px; }
+.am-auto-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .am-mark-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--text-xs); padding: 5px 0; }
 .am-mark-row + .am-mark-row { border-top: 1px dashed var(--color-border); }
+.am-mark-row.is-effective { background: rgba(64, 98, 213, .06); border-radius: var(--radius-sm, 6px); padding: 5px 4px; }
+/* 逐条撤销小按钮：仅我的标注与管理员可见 */
+.am-mark-del {
+  font-size: var(--text-xs); line-height: 16px; width: 20px; height: 20px; padding: 0;
+  border: 1px solid var(--color-border); border-radius: var(--radius-pill);
+  background: transparent; color: var(--color-text-muted); cursor: pointer;
+}
+.am-mark-del:hover { color: #c2452d; border-color: #c2452d; }
 .am-mark-admin {
   font-style: normal; font-size: var(--text-xs); line-height: 14px; padding: 0 4px;
   border-radius: var(--radius-pill); background: rgba(176, 127, 44, .16); color: #96690f;

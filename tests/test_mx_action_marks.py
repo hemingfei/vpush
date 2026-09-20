@@ -4,6 +4,7 @@
 - 管理员标注某消息为「清仓」→ 立即生效，持仓/盈亏立刻反映；
 - 授权用户（后台白名单）两人标一致 → 生效；分歧不生效；
 - 'none' 标注压制误判的自动信号；
+- 一条消息含多笔操作（如同时清仓两只票）→ 逐标的独立标注、独立生效；
 - 回放端点 /api/kols/{id}/mx-holdings 时间线出现 source=manual 事件。
 """
 from datetime import datetime, timedelta
@@ -35,7 +36,7 @@ def test_resolve_admin_mark_takes_effect_immediately():
     """管理员独裁：单个管理员标注即生效（无视一致人数）。"""
     marks = [_mk(("赛力斯", "清仓"), username="admin1", is_admin=True)]
     eff = mam.resolve_effective_marks(marks, CFG)
-    assert eff[1] == {"target_name": "赛力斯", "action": "清仓", "by_admin": True, "voters": ["admin1"]}
+    assert eff[1] == [{"target_name": "赛力斯", "action": "清仓", "by_admin": True, "voters": ["admin1"]}]
 
 
 def test_resolve_latest_admin_wins():
@@ -45,8 +46,8 @@ def test_resolve_latest_admin_wins():
         _mk(("赛力斯", "减仓"), username="a2", is_admin=True, updated_at="2026-01-02 10:00:00"),
     ]
     eff = mam.resolve_effective_marks(marks, CFG)
-    assert eff[1]["action"] == "减仓"
-    assert eff[1]["by_admin"] is True
+    assert eff[1][0]["action"] == "减仓"
+    assert eff[1][0]["by_admin"] is True
 
 
 def test_resolve_agree_n_users_effective():
@@ -55,14 +56,46 @@ def test_resolve_agree_n_users_effective():
     assert 1 not in mam.resolve_effective_marks(one, CFG)
     two = one + [_mk(("赛力斯", "清仓"), username="bob")]
     eff = mam.resolve_effective_marks(two, CFG)
-    assert eff[1]["action"] == "清仓"
-    assert eff[1]["by_admin"] is False
-    assert sorted(eff[1]["voters"]) == ["alice", "bob"]
+    assert eff[1][0]["action"] == "清仓"
+    assert eff[1][0]["by_admin"] is False
+    assert sorted(eff[1][0]["voters"]) == ["alice", "bob"]
+
+
+def test_resolve_multi_target_marks_independent():
+    """一帖多标：同一帖不同标的各自独立生效（清仓两只票互不影响）。"""
+    marks = [
+        _mk(("赛力斯", "清仓"), username="alice"),
+        _mk(("赛力斯", "清仓"), username="bob"),
+        _mk(("比亚迪", "清仓"), username="alice"),
+        # 比亚的第二票未达标
+    ]
+    eff = mam.resolve_effective_marks(marks, CFG)
+    assert eff[1] == [{"target_name": "赛力斯", "action": "清仓", "by_admin": False,
+                       "voters": ["alice", "bob"]}]
+    # 两票都达标 → 两条各自生效
+    marks.append(_mk(("比亚迪", "清仓"), username="bob"))
+    eff = mam.resolve_effective_marks(marks, CFG)
+    assert {e["target_name"] for e in eff[1]} == {"赛力斯", "比亚迪"}
+
+
+def test_resolve_one_target_conflict_other_target_unaffected():
+    """一帖多标：某标的存在分歧只压制该标的，另一标的的生效不受牵连。"""
+    marks = [
+        _mk(("赛力斯", "清仓"), username="alice"),
+        _mk(("赛力斯", "清仓"), username="bob"),
+        _mk(("比亚迪", "减仓"), username="alice"),
+        _mk(("比亚迪", "减仓"), username="bob"),
+        _mk(("比亚迪", "清仓"), username="carol"),
+        _mk(("比亚迪", "清仓"), username="dave"),
+    ]
+    cfg = {"usernames": ["alice", "bob", "carol", "dave"], "agree_n": 2}
+    eff = mam.resolve_effective_marks(marks, cfg)
+    # 赛力斯一致生效；比亚迪分歧（减仓 vs 清仓两组都达标）不生效
+    assert [e["target_name"] for e in eff[1]] == ["赛力斯"]
 
 
 def test_resolve_conflict_groups_not_effective():
-    """分歧：两组都达标（alice+bob 清仓 vs 白名单外不计数，换两人持反对意见）
-    ——构造两个达标组 → 不生效，等管理员定夺。"""
+    """分歧：同标的两操作组都达标 → 该标的生效，等管理员定夺。"""
     marks = [
         _mk(("赛力斯", "清仓"), username="alice"),
         _mk(("赛力斯", "清仓"), username="bob"),
@@ -81,7 +114,7 @@ def test_resolve_only_one_reached_group_effective():
         _mk(("赛力斯", "减仓"), username="carol"),
     ]
     eff = mam.resolve_effective_marks(marks, CFG)
-    assert eff[1]["action"] == "清仓"
+    assert eff[1][0]["action"] == "清仓"
 
 
 def test_resolve_revoked_user_not_counted():
@@ -97,7 +130,7 @@ def test_resolve_revoked_user_not_counted():
     # eve 不在白名单，其减仓票从不计数
     cfg2 = {"usernames": ["alice", "bob", "eve"], "agree_n": 2}
     eff = mam.resolve_effective_marks(marks, cfg2)
-    assert eff[1]["action"] == "清仓"
+    assert eff[1][0]["action"] == "清仓"
 
 
 def test_resolve_none_action_can_be_effective():
@@ -107,7 +140,7 @@ def test_resolve_none_action_can_be_effective():
         _mk(("赛力斯", "none"), username="bob"),
     ]
     eff = mam.resolve_effective_marks(marks, CFG)
-    assert eff[1]["action"] == "none"
+    assert eff[1][0]["action"] == "none"
 
 
 def test_config_validation_and_roundtrip():
@@ -183,7 +216,8 @@ def test_api_admin_mark_immediately_effective():
     resp = client.post(f"/api/posts/{p2}/action-mark", headers=admin,
                        json={"target_name": "赛力斯", "action": "清仓"})
     assert resp.status_code == 200, resp.text
-    assert resp.json()["effective"]["action"] == "清仓"
+    assert resp.json()["effective"] == [
+        {"target_name": "赛力斯", "action": "清仓", "by_admin": True, "voters": ["testadmin"]}]
     out = mkh.build_kol_holdings(db, kol)
     assert all(h["target_name"] != "赛力斯" for h in out["holdings"])
     manual = [e for e in out["timeline"] if e["source"] == "manual"]
@@ -208,12 +242,12 @@ def test_api_two_users_agree_effective():
     resp = client.post(f"/api/posts/{p}/action-mark", headers=alice,
                        json={"target_name": "贵州茅台", "action": "清仓"})
     assert resp.status_code == 200
-    assert resp.json()["effective"] is None
+    assert resp.json()["effective"] == []
     assert mkh.build_kol_holdings(db, kol)["holdings"]
     # bob 同标 → 生效，持仓剔除
     resp = client.post(f"/api/posts/{p}/action-mark", headers=bob,
                        json={"target_name": "贵州茅台", "action": "清仓"})
-    assert resp.json()["effective"]["action"] == "清仓"
+    assert resp.json()["effective"][0]["action"] == "清仓"
     out = mkh.build_kol_holdings(db, kol)
     assert all(h["target_name"] != "贵州茅台" for h in out["holdings"])
 
@@ -234,7 +268,7 @@ def test_api_none_mark_suppresses_false_positive():
     resp = client.post(f"/api/posts/{p}/action-mark", headers=admin,
                        json={"target_name": "比亚迪", "action": "none"})
     assert resp.status_code == 200
-    assert resp.json()["effective"]["action"] == "none"
+    assert resp.json()["effective"][0]["action"] == "none"
     out = mkh.build_kol_holdings(db, kol)
     assert out is not None  # 隆基表态仍在
     assert all(h["target_name"] != "比亚迪" for h in out["holdings"])
@@ -273,12 +307,12 @@ def test_api_validation_and_delete():
     assert resp.status_code == 200
     data = resp.json()
     assert data["can_mark"] is True and data["is_admin"] is False
-    assert data["my_mark"] == {"target_name": "贵州茅台", "action": "建仓"}
+    assert data["my_marks"] == [{"target_name": "贵州茅台", "action": "建仓"}]
     assert "清仓" in data["actions"] and "none" in data["actions"]
-    # DELETE 撤标
+    # DELETE 撤标（不带标的 = 全撤）
     resp = client.delete(f"/api/posts/{p}/action-mark", headers=alice)
     assert resp.status_code == 200
-    assert resp.json()["my_mark"] is None and resp.json()["marks"] == []
+    assert resp.json()["my_marks"] == [] and resp.json()["marks"] == []
     # 再删 404
     assert client.delete(f"/api/posts/{p}/action-mark", headers=alice).status_code == 404
     # 管理员撤他人标注
@@ -287,6 +321,76 @@ def test_api_validation_and_delete():
     resp = client.delete(f"/api/posts/{p}/action-mark?user_id="
                          f"{db.get_user_by_username_ci('mark_alice')['id']}", headers=admin)
     assert resp.status_code == 200
+
+
+def test_api_multi_target_mark_and_delete_one():
+    """一帖多标：同帖多标的各自保存/生效；DELETE 带标的只撤一条，其余保留。
+
+    marks 行带 user_id/is_mine（前端逐条撤销按钮的归属判断依据）。
+    """
+    client = make_client()
+    db = client.app.state.db
+    admin, alice, *_ = _setup_mark_env(client)
+    kol = db.add_kol("mx", "多标大V", "room1")
+    t = _today()
+    p = _seed_post(db, kol, "赛力斯和比亚迪都清仓了", f"{t} 14:00:00")
+    # 同帖两个标的
+    resp = client.post(f"/api/posts/{p}/action-mark", headers=admin,
+                       json={"target_name": "赛力斯", "action": "清仓"})
+    assert resp.status_code == 200
+    assert resp.json()["effective"] == [
+        {"target_name": "赛力斯", "action": "清仓", "by_admin": True, "voters": ["testadmin"]}]
+    resp = client.post(f"/api/posts/{p}/action-mark", headers=admin,
+                       json={"target_name": "比亚迪", "action": "清仓"})
+    assert resp.status_code == 200
+    data = resp.json()
+    # 两条都生效（管理员直判各自独立）
+    assert {e["target_name"] for e in data["effective"]} == {"赛力斯", "比亚迪"}
+    assert len(data["marks"]) == 2
+    assert data["my_marks"] == [{"target_name": "赛力斯", "action": "清仓"},
+                                {"target_name": "比亚迪", "action": "清仓"}]
+    # marks 行的归属标记：管理员视角全 is_mine；alice 视角全不是
+    assert all(m["is_mine"] for m in data["marks"])
+    other = client.get(f"/api/posts/{p}/action-mark", headers=alice).json()
+    assert other["marks"] and all(not m["is_mine"] for m in other["marks"])
+    assert all(int(m["user_id"]) == db.get_user_by_username_ci("testadmin")["id"]
+               for m in other["marks"])
+    # 回放：两条 manual 清仓事件都注入
+    _seed_opinion(db, kol, p, t, "14:05", "赛力斯", "bull", "建仓")
+    _seed_opinion(db, kol, p, t, "14:05", "比亚迪", "bull", "建仓")
+    out = mkh.build_kol_holdings(db, kol)
+    manual = [e for e in out["timeline"] if e["source"] == "manual"]
+    assert {e["target_name"] for e in manual} == {"赛力斯", "比亚迪"}
+    assert all(h["target_name"] not in ("赛力斯", "比亚迪") for h in out["holdings"])
+    # 带标的撤销：只撤赛力斯，比亚迪保留
+    resp = client.delete(f"/api/posts/{p}/action-mark?target_name=赛力斯", headers=admin)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["my_marks"] == [{"target_name": "比亚迪", "action": "清仓"}]
+    assert {e["target_name"] for e in data["effective"]} == {"比亚迪"}
+    # 撤不存在的标的 404
+    resp = client.delete(f"/api/posts/{p}/action-mark?target_name=隆基", headers=admin)
+    assert resp.status_code == 404
+
+
+def test_api_auto_tags_in_modal_payload():
+    """弹窗数据带 auto_tags（消息上的自动标签）与 llm_tagged，供人工对照。"""
+    client = make_client()
+    db = client.app.state.db
+    admin, *_ = _setup_mark_env(client)
+    kol = db.add_kol("mx", "自动标大V", "room1")
+    t = _today()
+    p = _seed_post(db, kol, "清仓赛力斯", f"{t} 14:00:00")
+    db.update_post_tags(p, ["清仓", "赛力斯"])
+    resp = client.get(f"/api/posts/{p}/action-mark", headers=admin)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["auto_tags"] == ["清仓", "赛力斯"]
+    assert data["llm_tagged"] is False  # update_post_tags 不置 LLM 标记
+    # 未打标消息 auto_tags 为空
+    p2 = _seed_post(db, kol, "没标签", f"{t} 15:00:00")
+    data = client.get(f"/api/posts/{p2}/action-mark", headers=admin).json()
+    assert data["auto_tags"] == []
 
 
 def test_api_universe_stock_name_accepted():
@@ -306,8 +410,8 @@ def test_api_universe_stock_name_accepted():
     resp = client.post(f"/api/posts/{p}/action-mark", headers=admin,
                        json={"target_name": "工业富联", "action": "建仓"})
     assert resp.status_code == 200, resp.text
-    assert resp.json()["my_mark"]["target_name"] == "工业富联"
-    assert resp.json()["effective"]["action"] == "建仓"
+    assert resp.json()["my_marks"][0]["target_name"] == "工业富联"
+    assert resp.json()["effective"][0]["action"] == "建仓"
     # 管理员排除项仍然拦截：排除后同名校注 400（口径含「−排除项」）
     db.set_stock_names(list(db.get_stock_names()) + ["工业富联"])
     db.set_stock_name_exclusions(["工业富联"])
@@ -338,7 +442,7 @@ def test_api_me_flag_and_feed_attach():
     feed = client.get("/api/my/feed", headers=nobody).json()
     row = next((x for x in feed if int(x["id"]) == int(p)), None)
     assert row is not None, "帖子未出现在 feed（订阅或可见性拦截？）"
-    assert row.get("mx_mark") and row["mx_mark"]["effective"]["action"] == "清仓"
+    assert row.get("mx_mark") and row["mx_mark"]["effective"][0]["action"] == "清仓"
 
 
 def test_api_remark_updates_effective():
@@ -353,10 +457,10 @@ def test_api_remark_updates_effective():
                 json={"target_name": "贵州茅台", "action": "清仓"})
     resp = client.post(f"/api/posts/{p}/action-mark", headers=bob,
                        json={"target_name": "贵州茅台", "action": "减仓"})
-    assert resp.json()["effective"] is None  # 分歧
+    assert resp.json()["effective"] == []  # 分歧
     resp = client.post(f"/api/posts/{p}/action-mark", headers=bob,
                        json={"target_name": "贵州茅台", "action": "清仓"})
-    assert resp.json()["effective"]["action"] == "清仓"
+    assert resp.json()["effective"][0]["action"] == "清仓"
 
 
 def test_manual_event_reopens_after_clear():

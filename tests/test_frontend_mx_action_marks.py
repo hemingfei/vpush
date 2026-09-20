@@ -32,6 +32,22 @@ def test_action_mark_modal_calls_api_contract():
     # 生效提示语按角色区分
     assert "直判生效" in APP_JS
     assert "等待其他用户确认" in APP_JS
+    # DELETE 逐条撤销：target_name 进查询串（null = 全撤）
+    assert 'params.set("target_name", targetName)' in APP_JS
+
+
+def test_action_mark_modal_shows_auto_and_multi_marks():
+    """弹窗展示自动标注（posts.tags）与多条人工标注，支持逐条撤销。"""
+    assert ">自动标注" in APP_JS  # 自动标注区标题
+    assert "data.auto_tags" in APP_JS and "data.llm_tagged" in APP_JS
+    # 多条人工标注（my_marks 列表）与逐条撤销按钮
+    assert "data.my_marks" in APP_JS
+    assert 'class="am-mark-del"' in APP_JS
+    assert "deleteActionMark(${Number(data.post.id)}, ${JSON.stringify(String(m.target_name))}" in APP_JS
+    # 撤销按钮全撤入口（targetName=null）
+    assert "deleteActionMark(${Number(data.post.id)}, null, 0)" in APP_JS
+    # 生效行内「已生效」徽章
+    assert 'tag-pending-badge is-approved' in APP_JS
 
 
 def test_post_card_mark_entry_and_chip():
@@ -44,6 +60,7 @@ def test_post_card_mark_entry_and_chip():
     assert "人工:" in chip
     assert "标注中" in chip
     assert chip.index("m.effective") < chip.index("m.total")  # 生效优先展示
+    assert "effList.map" in chip  # 多生效逐条渲染
 
 
 def test_me_flag_consumed_in_app():
@@ -84,7 +101,8 @@ def test_admin_panel_config_and_recent_marks():
 def test_mark_styles_present():
     """CSS：卡片角标两态 + 弹窗表单 + 时间线人工徽章样式齐全。"""
     for cls in (".am-chip.is-effective", ".am-chip.is-pending", ".am-target",
-                ".am-act-btn.on", ".am-mark-row", ".am-suggest"):
+                ".am-act-btn.on", ".am-mark-row", ".am-suggest",
+                ".am-auto", ".am-auto-tags", ".am-mark-del", ".am-mark-row.is-effective"):
         assert cls in STYLE_CSS, f"style.css 缺 {cls}"
     for cls in (".mxc-src-manual", ".mxc-mark-btn", ".mxc-manual-badge"):
         assert cls in MXC_CSS, f"mx-kol-holdings.css 缺 {cls}"
