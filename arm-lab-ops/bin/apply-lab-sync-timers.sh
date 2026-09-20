@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# Host helper invoked by the ARM lab ops panel (confirm:true) or run by hand.
-# Writes systemd drop-ins so IMA + CICC lab sync timers share one OnCalendar.
+# Host helper invoked by the ARM ops panel (confirm:true) or run by hand.
+# Writes a systemd drop-in for the CICC incremental timer only.
+# IMA lab timer stays disabled: vpush collects IMA via HTTP /pull.
 #
 #   sudo /opt/vpush-ima-lab/bin/apply-lab-sync-timers.sh 03:00 Asia/Shanghai
 #
 # Safe: clock must be HH:MM; timezone is a conservative token.
+# To also rewrite IMA (not recommended): ARM_OPS_APPLY_IMA_TIMER=1
 set -euo pipefail
 
 CLOCK="${1:-}"
 TZ_NAME="${2:-Asia/Shanghai}"
 IMA_UNIT="${ARM_OPS_TIMER_UNIT:-vpush-ima-lab-sync.timer}"
 CICC_UNIT="${ARM_OPS_CICC_TIMER_UNIT:-vpush-cicc-lab-sync.timer}"
+APPLY_IMA="${ARM_OPS_APPLY_IMA_TIMER:-0}"
 
 if [[ ! "$CLOCK" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
   echo "usage: $0 HH:MM [Asia/Shanghai]" >&2
@@ -37,8 +40,12 @@ OnCalendar=*-*-* ${CLOCK}:00 ${TZ_NAME}
 EOF
 }
 
-write_dropin "$IMA_UNIT"
 write_dropin "$CICC_UNIT"
+units=("$CICC_UNIT")
+if [[ "$APPLY_IMA" == "1" ]]; then
+  write_dropin "$IMA_UNIT"
+  units+=("$IMA_UNIT")
+fi
 systemctl daemon-reload
-systemctl restart "$IMA_UNIT" "$CICC_UNIT"
-echo "applied OnCalendar=*-*-* ${CLOCK}:00 ${TZ_NAME} to $IMA_UNIT $CICC_UNIT"
+systemctl restart "${units[@]}"
+echo "applied OnCalendar=*-*-* ${CLOCK}:00 ${TZ_NAME} to ${units[*]}"

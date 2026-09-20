@@ -140,6 +140,7 @@ def create_app() -> FastAPI:
                 "ima_groups": IMA_GROUP_ALLOWLIST,
                 "sync_limit_default": SYNC_LIMIT_DEFAULT,
                 "sync_limit_max": SYNC_LIMIT_MAX,
+                "cicc_incr_days": (status.get("cicc") or {}).get("incr_days") or 3,
             },
         )
 

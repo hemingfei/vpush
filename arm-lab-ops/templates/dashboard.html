@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ARM 实验室运维</title>
+  <title>ARM 中间层</title>
   <link rel="stylesheet" href="/static/ops.css">
 </head>
 <body class="paper">
   <div class="shell">
   <header class="topbar">
     <div>
-      <p class="eyebrow">Oracle-SJ-ARM · phase 3</p>
-      <h1>实验室运维</h1>
+      <h1>ARM 中间层</h1>
+      <p class="lede">Oracle-SJ-ARM：采集与热缓存，vpush 只走 HTTP。115 是冷备份。</p>
     </div>
     <form method="post" action="/logout">
       <button type="submit" class="btn btn-ghost">退出</button>
@@ -19,105 +19,128 @@
   </header>
 
   <main class="board">
+    <section class="card card-wide" id="pipeline-card">
+      <h2>管线</h2>
+      <ol class="pipeline">
+        <li id="pipe-ima" data-state="off">
+          <span class="k">IMA</span>
+          <span class="v" id="pipe-ima-v">vpush → /pull</span>
+          <span class="s" id="pipe-ima-s">本机实验室 timer 保持停用，避免双采</span>
+        </li>
+        <li id="pipe-cicc" data-state="off">
+          <span class="k">中金</span>
+          <span class="v" id="pipe-cicc-v">本机增量</span>
+          <span class="s" id="pipe-cicc-s">日跑 timer · --days</span>
+        </li>
+        <li id="pipe-hot" data-state="off">
+          <span class="k">热缓存</span>
+          <span class="v" id="pipe-hot-v">先入 hot</span>
+          <span class="s" id="pipe-hot-s">115 后台上传，不挡展示</span>
+        </li>
+        <li id="pipe-pull" data-state="off">
+          <span class="k">对 vpush</span>
+          <span class="v" id="pipe-pull-v">/pull · /file · /list</span>
+          <span class="s" id="pipe-pull-s">导出树供 miss 拉取</span>
+        </li>
+      </ol>
+    </section>
+
     <section class="card" id="cache-card">
       <h2>缓存盘</h2>
       <p class="meta" id="cache-root">{{ status.cache.root if status.cache is defined else "" }}</p>
       <div class="waterline" id="waterline" hidden>
         <div class="waterline-fill" id="waterline-fill"></div>
       </div>
-      <p class="meta" id="waterline-label">—</p>
+      <p class="meta" id="waterline-label">-</p>
       <dl class="metrics" id="cache-metrics">
-        <div><dt>盘已用</dt><dd id="disk-used">—</dd></div>
-        <div><dt>staging</dt><dd id="st-used">—</dd></div>
-        <div><dt>hot</dt><dd id="hot-used">—</dd></div>
-        <div><dt>failed</dt><dd id="fail-used">—</dd></div>
+        <div><dt>盘已用</dt><dd id="disk-used">-</dd></div>
+        <div><dt>staging</dt><dd id="st-used">-</dd></div>
+        <div><dt>hot</dt><dd id="hot-used">-</dd></div>
+        <div><dt>failed</dt><dd id="fail-used">-</dd></div>
       </dl>
     </section>
 
-    <section class="card" id="puller-card">
-      <h2>Puller</h2>
-      <p class="meta" id="puller-source">—</p>
-      <p id="puller-timer">—</p>
-      <p id="puller-uploads">—</p>
-      <p id="puller-docker">—</p>
-      <pre class="log" id="puller-log" hidden></pre>
+    <section class="card" id="export-card">
+      <h2>导出与 HTTP</h2>
+      <p class="meta" id="export-root">-</p>
+      <dl class="metrics">
+        <div><dt>中金导出</dt><dd id="export-cicc">-</dd></div>
+        <div><dt>pull 监听</dt><dd id="pull-health">-</dd></div>
+      </dl>
+      <p class="note" id="export-note">vpush 按小时 /list local/cicc-research，缺页走 /file。不挂生产 NFS。</p>
     </section>
 
-    <section class="card" id="sync-card">
-      <h2>IMA 同步摘要</h2>
-      <p class="meta" id="sync-meta">—</p>
+    <section class="card" id="ima-card">
+      <h2>IMA 凭据 <span class="pill pill-off" id="ima-timer-pill">timer 停用</span></h2>
+      <p id="ima-meta">-</p>
+      <p class="meta" id="ima-timer">-</p>
+      <p class="note">本面板不做 IMA 扫码。请在 Mac 上用 <code>ima_phone_sync</code> 换票，再把 <code>ima-pure.json</code> 放到 secrets。增量由生产 <code>sync_once</code> 经 ARM <code>/pull</code> 写入，不要在这里再跑实验室采集。</p>
+      <p class="meta" id="sync-meta">-</p>
       <dl class="metrics" id="sync-metrics">
-        <div><dt>downloaded</dt><dd id="sync-down">—</dd></div>
-        <div><dt>skipped</dt><dd id="sync-skip">—</dd></div>
-        <div><dt>failed</dt><dd id="sync-fail">—</dd></div>
-        <div><dt>timer next</dt><dd id="sync-next">—</dd></div>
+        <div><dt>downloaded</dt><dd id="sync-down">-</dd></div>
+        <div><dt>skipped</dt><dd id="sync-skip">-</dd></div>
+        <div><dt>failed</dt><dd id="sync-fail">-</dd></div>
+        <div><dt>timer next</dt><dd id="sync-next">-</dd></div>
       </dl>
-      <p id="sync-groups">—</p>
+      <p id="sync-groups">-</p>
       <p class="note" id="sync-error" hidden></p>
       <pre class="log" id="sync-journal" hidden></pre>
     </section>
 
     <section class="card" id="trigger-card">
-      <h2>限量触发</h2>
-      <p class="note">IMA 仍不做扫码。dry-run 只列；apply 须勾选确认，limit ≤ {{ sync_limit_max }}。不传 secrets 到命令行。</p>
-      <p class="meta" id="cicc-meta">—</p>
+      <h2>中金增量</h2>
+      <p class="note">走 <code>cicc_report_collector.py --arm-middleware --days</code>。dry-run 只列；apply 须确认。不传 Cookie 到命令行。</p>
+      <p class="meta" id="cicc-meta">-</p>
+      <p class="meta" id="cicc-sync-meta">-</p>
       <div class="trigger-grid">
         <label class="field compact">
-          <span>IMA group</span>
-          <select id="ima-group">
-            {% for gid in ima_groups %}
-            <option value="{{ gid }}">{{ gid }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label class="field compact">
-          <span>limit</span>
-          <input type="number" id="sync-limit" min="1" max="{{ sync_limit_max }}" value="{{ sync_limit_default }}">
+          <span>增量天数（1–14）</span>
+          <input type="number" id="cicc-days" min="1" max="14" value="{{ cicc_incr_days }}">
         </label>
       </div>
       <div class="qr-row">
-        <button type="button" class="btn" id="ima-dry">IMA dry-run</button>
-        <button type="button" class="btn btn-primary" id="ima-apply" disabled>IMA apply</button>
         <button type="button" class="btn" id="cicc-dry">CICC dry-run</button>
         <button type="button" class="btn btn-primary" id="cicc-apply" disabled>CICC apply</button>
       </div>
       <label class="confirm">
         <input type="checkbox" id="apply-confirm">
-        <span>确认 apply（会下载到 staging；115 仍由 puller）</span>
+        <span>确认 apply（写入 staging；puller 先入热，115 后台）</span>
       </label>
       <p class="hint" id="job-hint">上次任务输出见下方。接口不回 Cookie / token。</p>
       <p class="banner" id="job-status" hidden></p>
       <pre class="log" id="job-log" hidden></pre>
     </section>
 
+    <section class="card" id="puller-card">
+      <h2>Puller</h2>
+      <p class="meta" id="puller-source">-</p>
+      <p id="puller-policy">-</p>
+      <p id="puller-timer">-</p>
+      <p id="puller-uploads">-</p>
+      <p id="puller-docker">-</p>
+      <pre class="log" id="puller-log" hidden></pre>
+    </section>
+
     <section class="card card-wide" id="settings-card">
       <h2>实验室旋钮</h2>
-      <p class="note">写入 <code>$CACHE_ROOT/ops-lab-settings.json</code>（无 secrets）。IMA/CICC 宿主机 wrapper 读 LIMIT；puller 读 batch。改时钟会尽量写 systemd drop-in；容器里通常要在宿主机执行下方命令。</p>
+      <p class="note">写入 <code>$CACHE_ROOT/ops-lab-settings.json</code>（无 secrets）。中金 wrapper 读 <code>cicc_incr_days</code>；puller 读 <code>PULLER_BATCH_SIZE</code>。改每日同步时钟只动中金 timer，不会重启已停用的 IMA 实验室 timer。</p>
       <div class="settings-grid">
         <label class="field compact">
           <span>每日同步时钟（Asia/Shanghai）</span>
           <input type="time" id="set-clock" value="03:00" required>
         </label>
         <label class="field compact">
-          <span>IMA 每组 limit（1–20）</span>
-          <input type="number" id="set-ima-limit" min="1" max="20" value="10">
-        </label>
-        <label class="field compact">
-          <span>CICC limit（1–20）</span>
-          <input type="number" id="set-cicc-limit" min="1" max="20" value="10">
+          <span>中金增量天数（1–14）</span>
+          <input type="number" id="set-cicc-days" min="1" max="14" value="3">
         </label>
         <label class="field compact">
           <span>PULLER_BATCH_SIZE（1–200）</span>
           <input type="number" id="set-batch" min="1" max="200" value="40">
         </label>
       </div>
-      <label class="confirm">
-        <input type="checkbox" id="set-parallel">
-        <span>IMA 多组并行（wrapper 后台跑各组）</span>
-      </label>
       <dl class="metrics" id="settings-timers">
-        <div><dt>IMA timer next</dt><dd id="set-ima-next">—</dd></div>
-        <div><dt>CICC timer next</dt><dd id="set-cicc-next">—</dd></div>
+        <div><dt>IMA timer next</dt><dd id="set-ima-next">-</dd></div>
+        <div><dt>CICC timer next</dt><dd id="set-cicc-next">-</dd></div>
       </dl>
       <p class="meta" id="settings-apply-hint">保存后若无法改 timer，会显示宿主机命令。</p>
       <div class="qr-row">
@@ -125,7 +148,7 @@
       </div>
       <label class="confirm">
         <input type="checkbox" id="settings-confirm">
-        <span>确认写入 settings / puller env，并尝试更新两个 systemd timer</span>
+        <span>确认写入 settings / puller env，并尝试更新中金 systemd timer</span>
       </label>
       <p class="banner" id="settings-status" hidden></p>
       <pre class="log" id="settings-host-cmd" hidden></pre>
@@ -133,7 +156,7 @@
 
     <section class="card card-wide" id="failed-card">
       <h2>失败队列</h2>
-      <p class="meta" id="failed-meta">—</p>
+      <p class="meta" id="failed-meta">-</p>
       <div class="table-wrap">
         <table class="files" id="failed-table">
           <thead>
@@ -153,15 +176,9 @@
       <p class="banner" id="requeue-status" hidden></p>
     </section>
 
-    <section class="card" id="ima-card">
-      <h2>IMA 凭据</h2>
-      <p id="ima-meta">—</p>
-      <p class="note">本面板不做 IMA 扫码。请在 Mac 上用 <code>ima_phone_sync</code> 换票，再把 <code>ima-pure.json</code> 放到 secrets。</p>
-    </section>
-
     <section class="card" id="p115-card">
       <h2>115 Cookie</h2>
-      <p id="p115-meta">—</p>
+      <p id="p115-meta">-</p>
       <form id="qr-form" class="qr-row">
         <label class="field compact">
           <span>设备</span>
@@ -175,7 +192,7 @@
       </form>
       <p class="hint" id="qr-hint">扫码成功只写 <code>/secrets/115-cookies.txt</code>（0600），接口不回传 Cookie。</p>
       <p class="banner" id="qr-status" hidden></p>
-      <img id="qr-img" alt="115 登录二维码" hidden>
+      <div id="qr-img-slot"></div>
     </section>
 
     <section class="card" id="openlist-card">
@@ -189,7 +206,7 @@
     const statusBoot = {{ status_json | safe }};
 
     function fmtBytes(n) {
-      if (n == null || n === "") return "—";
+      if (n == null || n === "") return "-";
       const units = ["B", "KB", "MB", "GB", "TB"];
       let v = Number(n);
       let i = 0;
@@ -198,10 +215,19 @@
     }
 
     function bucket(b) {
-      if (!b) return "—";
+      if (!b) return "-";
       if (!b.exists) return "无目录";
       const mark = b.truncated ? " · 已截断" : "";
       return (b.files || 0) + " 个 · " + fmtBytes(b.bytes) + mark;
+    }
+
+    function setPipe(id, state, value, sub) {
+      const li = document.getElementById("pipe-" + id);
+      const v = document.getElementById("pipe-" + id + "-v");
+      const s = document.getElementById("pipe-" + id + "-s");
+      if (li) li.dataset.state = state || "off";
+      if (v && value) v.textContent = value;
+      if (s && sub) s.textContent = sub;
     }
 
     function render(s) {
@@ -211,7 +237,7 @@
       const disk = cache.disk;
       document.getElementById("disk-used").textContent = disk
         ? fmtBytes(disk.used_bytes) + " / " + fmtBytes(disk.total_bytes) + "（" + disk.used_pct + "%）"
-        : "—";
+        : "-";
       document.getElementById("st-used").textContent = bucket(cache.staging);
       document.getElementById("hot-used").textContent = bucket(cache.hot);
       document.getElementById("fail-used").textContent = bucket(cache.failed);
@@ -227,24 +253,36 @@
           "水位 " + fmtBytes(water.used_bytes) + " · 告警 " + (water.warn_gb || 30) + "G · 强清 " + (water.force_gb || 35) + "G · " + (water.level || "ok");
       } else {
         bar.hidden = true;
-        document.getElementById("waterline-label").textContent = "—";
+        document.getElementById("waterline-label").textContent = "-";
       }
 
+      const exp = s.export || {};
+      document.getElementById("export-root").textContent = exp.root || "";
+      document.getElementById("export-cicc").textContent = bucket(exp.cicc_research);
+      const pull = s.pull || {};
+      document.getElementById("pull-health").textContent = pull.ok
+        ? "健康 · " + (pull.status || "ok")
+        : ("不可达 · " + (pull.status || "-"));
+
       const puller = s.puller || {};
+      const policy = puller.policy || {};
       document.getElementById("puller-source").textContent = "来源 " + (puller.source || "none");
+      document.getElementById("puller-policy").textContent = policy.keep_hot === false
+        ? "策略：未开 keep_hot（115 失败会挡住热缓存）"
+        : "策略：先入 hot，115 后台 · batch " + (policy.batch_size || "-");
       const timer = puller.timer || {};
       const ciccTimer = puller.cicc_timer || {};
-      let timerText = (timer.unit || "timer") + " · " + (timer.active || "unknown");
+      let timerText = "IMA " + (timer.unit || "timer") + " · " + (timer.enabled || timer.active || "unknown");
       if (timer.next) timerText += " · next " + timer.next;
-      if (ciccTimer.next) timerText += " · cicc " + ciccTimer.next;
+      if (ciccTimer.next) timerText += " · 中金 " + (ciccTimer.enabled || ciccTimer.active || "") + " · " + ciccTimer.next;
       document.getElementById("puller-timer").textContent = timerText;
       const imaNext = document.getElementById("set-ima-next");
       const ciccNext = document.getElementById("set-cicc-next");
-      if (imaNext) imaNext.textContent = timer.next || "—";
-      if (ciccNext) ciccNext.textContent = ciccTimer.next || "—";
+      if (imaNext) imaNext.textContent = timer.next || timer.enabled || "-";
+      if (ciccNext) ciccNext.textContent = ciccTimer.next || ciccTimer.enabled || "-";
       const uploads = puller.uploads || {};
       document.getElementById("puller-uploads").textContent =
-        "上传 ok " + (uploads.ok || 0) + " / fail " + (uploads.fail || 0) +
+        "115 上传 ok " + (uploads.ok || 0) + " / fail " + (uploads.fail || 0) +
         (uploads.source && uploads.source !== "none" ? " · " + uploads.source : "");
       const boxes = (puller.docker && puller.docker.containers) || [];
       document.getElementById("puller-docker").textContent = boxes.length
@@ -261,28 +299,45 @@
 
       const ima = s.ima || {};
       document.getElementById("ima-meta").textContent = ima.present
-        ? "在场 · mtime " + (ima.mtime || "—") + " · uid_len " + (ima.uid_len || 0)
+        ? "在场 · mtime " + (ima.mtime || "-") + " · uid_len " + (ima.uid_len || 0)
         : "未找到 ima-pure.json";
+      const imaTimer = ima.timer || timer;
+      const imaLive = (s.roles && s.roles.ima_dual_collect) || imaTimer.active === "active";
+      const imaPill = document.getElementById("ima-timer-pill");
+      imaPill.textContent = imaLive ? "timer 仍在跑" : "timer 停用";
+      imaPill.className = "pill " + (imaLive ? "pill-warn" : "pill-off");
+      document.getElementById("ima-timer").textContent =
+        (imaTimer.unit || "vpush-ima-lab-sync.timer") + " · " +
+        (imaTimer.enabled || "-") + " / " + (imaTimer.active || "-");
 
       const p115 = s.p115 || {};
       document.getElementById("p115-meta").textContent = p115.present
-        ? "在场 · mtime " + (p115.mtime || "—") + " · length " + (p115.length || 0)
+        ? "在场 · mtime " + (p115.mtime || "-") + " · length " + (p115.length || 0)
         : "未找到 115-cookies.txt";
 
       const cicc = s.cicc || {};
       document.getElementById("cicc-meta").textContent = cicc.present
-        ? "CICC Cookie 在场 · mtime " + (cicc.mtime || "—") + " · length " + (cicc.length || 0)
+        ? "CICC Cookie 在场 · mtime " + (cicc.mtime || "-") + " · length " + (cicc.length || 0)
         : "CICC Cookie 未找到（dry-run/apply 会 400）";
+      const ciccSync = s.cicc_sync || {};
+      document.getElementById("cicc-sync-meta").textContent = ciccSync.log
+        ? (ciccSync.log + " · last " + (ciccSync.last_run || ciccSync.mtime || "-") +
+          (ciccSync.days != null ? " · days " + ciccSync.days : "") +
+          (ciccSync.returncode != null ? " · rc " + ciccSync.returncode : ""))
+        : "没有 cicc-host-sync 日志";
+      if (cicc.incr_days && !document.getElementById("cicc-days").dataset.touched) {
+        document.getElementById("cicc-days").value = cicc.incr_days;
+      }
 
       const sync = s.sync || {};
       const totals = sync.totals || {};
       document.getElementById("sync-meta").textContent = sync.log
-        ? (sync.log + " · last " + (sync.last_run || sync.mtime || "—"))
-        : "没有 ima-lab-sync-*.log";
-      document.getElementById("sync-down").textContent = totals.downloaded == null ? "—" : String(totals.downloaded);
-      document.getElementById("sync-skip").textContent = totals.skipped == null ? "—" : String(totals.skipped);
-      document.getElementById("sync-fail").textContent = totals.failed == null ? "—" : String(totals.failed);
-      document.getElementById("sync-next").textContent = (timer.next || "—");
+        ? (sync.log + " · last " + (sync.last_run || sync.mtime || "-"))
+        : "没有 IMA host / lab sync 日志（正常：生产经 /pull 写入）";
+      document.getElementById("sync-down").textContent = totals.downloaded == null ? "-" : String(totals.downloaded);
+      document.getElementById("sync-skip").textContent = totals.skipped == null ? "-" : String(totals.skipped);
+      document.getElementById("sync-fail").textContent = totals.failed == null ? "-" : String(totals.failed);
+      document.getElementById("sync-next").textContent = imaTimer.next || imaTimer.enabled || "disabled";
       const groups = sync.groups || {};
       const groupKeys = Object.keys(groups);
       document.getElementById("sync-groups").textContent = groupKeys.length
@@ -313,7 +368,7 @@
       if (lastJob && (lastJob.stdout || lastJob.stderr || lastJob.error)) {
         jobPre.hidden = false;
         jobPre.textContent = [
-          "# " + (lastJob.action || "job") + " rc=" + (lastJob.returncode == null ? "—" : lastJob.returncode),
+          "# " + (lastJob.action || "job") + " rc=" + (lastJob.returncode == null ? "-" : lastJob.returncode),
           lastJob.stdout || "",
           lastJob.stderr || "",
           lastJob.error || "",
@@ -335,6 +390,31 @@
       } else {
         slot.textContent = "未配置 OPENLIST_PUBLIC_URL";
       }
+
+      setPipe(
+        "ima",
+        imaLive ? "warn" : "ok",
+        imaLive ? "实验室 timer 仍在跑" : "vpush → /pull",
+        ima.present ? "凭据在场 · 勿双采" : "缺 ima-pure.json",
+      );
+      setPipe(
+        "cicc",
+        cicc.present && ciccTimer.active === "active" ? "ok" : (cicc.present ? "ok" : "warn"),
+        "本机增量 " + (cicc.incr_days || 3) + " 天",
+        cicc.present ? ((ciccTimer.next || ciccTimer.active || "timer") + "") : "缺 Cookie",
+      );
+      setPipe(
+        "hot",
+        policy.keep_hot === false ? "warn" : "ok",
+        policy.keep_hot === false ? "未开 keep_hot" : "先入 hot",
+        bucket(cache.hot),
+      );
+      setPipe(
+        "pull",
+        pull.ok ? "ok" : "warn",
+        pull.ok ? "/pull 健康" : "pull 不可达",
+        bucket(exp.cicc_research),
+      );
     }
 
     async function refresh() {
@@ -347,8 +427,27 @@
     }
 
     const qrStatus = document.getElementById("qr-status");
-    const qrImg = document.getElementById("qr-img");
+    const qrSlot = document.getElementById("qr-img-slot");
     let qrTimer = null;
+
+    function qrImage() {
+      return qrSlot.querySelector("img");
+    }
+
+    function hideQrImage() {
+      qrSlot.replaceChildren();
+    }
+
+    function showQrImage(src) {
+      let img = qrImage();
+      if (!img) {
+        img = document.createElement("img");
+        img.id = "qr-img";
+        img.alt = "115 登录二维码";
+        qrSlot.appendChild(img);
+      }
+      img.src = src;
+    }
 
     function showQr(msg, kind) {
       qrStatus.hidden = false;
@@ -372,7 +471,7 @@
       clearInterval(qrTimer);
       qrTimer = null;
       if (data.ok && data.status === "ok") {
-        qrImg.hidden = true;
+        hideQrImage();
         showQr("已写入 Cookie，长度 " + data.cookie_len, "banner-ok");
         refresh();
         return;
@@ -393,12 +492,11 @@
       });
       const data = await r.json();
       if (!data.ok) {
-        qrImg.hidden = true;
+        hideQrImage();
         showQr(data.error || "无法开始扫码", "banner-warn");
         return;
       }
-      qrImg.src = data.qr_png;
-      qrImg.hidden = false;
+      showQrImage(data.qr_png);
       showQr("用 115 App 扫码（设备 " + data.device_type + "）", "");
       qrTimer = setInterval(() => pollQr(data.session_id), 1500);
     });
@@ -423,7 +521,7 @@
         const sizeTd = document.createElement("td");
         sizeTd.textContent = fmtBytes(item.size);
         const mtimeTd = document.createElement("td");
-        mtimeTd.textContent = item.mtime || "—";
+        mtimeTd.textContent = item.mtime || "-";
         tr.appendChild(checkTd);
         tr.appendChild(pathTd);
         tr.appendChild(sizeTd);
@@ -454,51 +552,45 @@
       return data;
     }
 
-    function syncLimit() {
-      const n = Number(document.getElementById("sync-limit").value || 3);
-      return n;
-    }
-
     function wireConfirm(box, buttons) {
       const sync = () => buttons.forEach((btn) => { btn.disabled = !box.checked; });
       box.addEventListener("change", sync);
       sync();
     }
 
+    document.getElementById("cicc-days").addEventListener("input", () => {
+      document.getElementById("cicc-days").dataset.touched = "1";
+    });
+
     const applyBox = document.getElementById("apply-confirm");
-    const imaApply = document.getElementById("ima-apply");
-    const ciccApply = document.getElementById("cicc-apply");
-    wireConfirm(applyBox, [imaApply, ciccApply]);
+    wireConfirm(applyBox, [document.getElementById("cicc-apply")]);
     const requeueBox = document.getElementById("requeue-confirm");
     wireConfirm(requeueBox, [
       document.getElementById("requeue-selected"),
       document.getElementById("requeue-all"),
     ]);
 
-    async function runSync(kind, apply) {
+    async function runCicc(apply) {
       const jobStatus = document.getElementById("job-status");
       const jobLog = document.getElementById("job-log");
       showBanner(jobStatus, apply ? "正在 apply…" : "正在 dry-run…", "");
-      const body = { limit: syncLimit() };
-      if (kind === "ima") body.group = document.getElementById("ima-group").value;
+      const body = { days: Number(document.getElementById("cicc-days").value || 3) };
       if (apply) body.confirm = true;
-      const url = apply ? "/api/sync/" + kind + "/apply" : "/api/sync/" + kind + "/dry-run";
+      const url = apply ? "/api/sync/cicc/apply" : "/api/sync/cicc/dry-run";
       const data = await postJson(url, body);
       const snippet = [data.stdout, data.stderr, data.error].filter(Boolean).join("\n");
       jobLog.hidden = !snippet;
       jobLog.textContent = snippet || "";
       showBanner(
         jobStatus,
-        data.ok ? (data.action || kind) + " 完成" : (data.error || "失败"),
+        data.ok ? (data.action || "cicc") + " 完成" : (data.error || "失败"),
         data.ok ? "banner-ok" : "banner-warn",
       );
       refresh();
     }
 
-    document.getElementById("ima-dry").addEventListener("click", () => runSync("ima", false));
-    document.getElementById("ima-apply").addEventListener("click", () => runSync("ima", true));
-    document.getElementById("cicc-dry").addEventListener("click", () => runSync("cicc", false));
-    document.getElementById("cicc-apply").addEventListener("click", () => runSync("cicc", true));
+    document.getElementById("cicc-dry").addEventListener("click", () => runCicc(false));
+    document.getElementById("cicc-apply").addEventListener("click", () => runCicc(true));
 
     async function runRequeue(all) {
       const status = document.getElementById("requeue-status");
@@ -532,17 +624,18 @@
       if (!payload || !payload.settings) return;
       const s = payload.settings;
       document.getElementById("set-clock").value = s.daily_sync_clock || "03:00";
-      document.getElementById("set-ima-limit").value = s.ima_limit_per_group;
-      document.getElementById("set-cicc-limit").value = s.cicc_limit;
+      document.getElementById("set-cicc-days").value = s.cicc_incr_days || 3;
       document.getElementById("set-batch").value = s.puller_batch_size;
-      document.getElementById("set-parallel").checked = !!s.ima_groups_parallel;
+      if (!document.getElementById("cicc-days").dataset.touched) {
+        document.getElementById("cicc-days").value = s.cicc_incr_days || 3;
+      }
       const timers = payload.timers || {};
-      document.getElementById("set-ima-next").textContent = (timers.ima && timers.ima.next) || "—";
-      document.getElementById("set-cicc-next").textContent = (timers.cicc && timers.cicc.next) || "—";
+      document.getElementById("set-ima-next").textContent = (timers.ima && (timers.ima.next || timers.ima.enabled)) || "-";
+      document.getElementById("set-cicc-next").textContent = (timers.cicc && (timers.cicc.next || timers.cicc.enabled)) || "-";
       const apply = payload.apply || {};
       const hint = document.getElementById("settings-apply-hint");
       if (apply.applied) {
-        hint.textContent = "上次保存已自动改写 timer OnCalendar。";
+        hint.textContent = "上次保存已自动改写中金 timer OnCalendar。IMA timer 未动。";
       } else if (apply.host_command) {
         hint.textContent = "自动改 timer 不可用时，在宿主机执行下方命令。";
       }
@@ -571,17 +664,15 @@
       const data = await postJson("/api/settings", {
         confirm: true,
         daily_sync_clock: document.getElementById("set-clock").value,
-        ima_limit_per_group: Number(document.getElementById("set-ima-limit").value),
-        cicc_limit: Number(document.getElementById("set-cicc-limit").value),
+        cicc_incr_days: Number(document.getElementById("set-cicc-days").value),
         puller_batch_size: Number(document.getElementById("set-batch").value),
-        ima_groups_parallel: document.getElementById("set-parallel").checked,
       });
       fillSettings(data);
       const apply = data.apply || {};
       showBanner(
         status,
         data.ok
-          ? (apply.applied ? "已保存，timer 已改写" : "已保存。timer 需在宿主机 apply")
+          ? (apply.applied ? "已保存，中金 timer 已改写" : "已保存。timer 需在宿主机 apply")
           : (data.error || "保存失败"),
         data.ok ? (apply.applied ? "banner-ok" : "") : "banner-warn",
       );

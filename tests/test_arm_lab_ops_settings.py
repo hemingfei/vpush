@@ -73,6 +73,11 @@ def test_clock_and_limit_validation():
         parse_limit(21, field="ima_limit_per_group")
     with pytest.raises(ActionError, match="integer"):
         parse_limit("nope", field="cicc_limit")
+    from ops_lab_knobs import parse_days
+    assert parse_days(3) == 3
+    assert parse_days(14) == 14
+    with pytest.raises(ActionError, match="between 1 and 14"):
+        parse_days(0)
     assert parse_batch(40) == 40
     assert parse_batch(1) == 1
     assert parse_batch(200) == 200
@@ -259,6 +264,7 @@ def test_dashboard_has_settings_section(client):
     assert "/api/settings" in html
     assert "PULLER_BATCH_SIZE" in html
     assert "每日同步时钟" in html
+    assert "cicc_incr_days" in html or "中金增量天数" in html
 
 
 def test_wrappers_read_settings_file():
@@ -276,5 +282,8 @@ def test_wrappers_read_settings_file():
     assert "OnCalendar=" in helper
     assert "vpush-ima-lab-sync.timer" in helper
     assert "vpush-cicc-lab-sync.timer" in helper
+    nfsd = (root.parent / "systemd" / "nfsd-tailscale.conf").read_text(encoding="utf-8")
+    assert "host=100.112.25.21" in nfsd
+    assert nfsd.strip().endswith("host=100.112.25.21")
     assert "cookie" not in ima.lower()
     assert "password" not in ima.lower()

@@ -3,14 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ARM 实验室运维 · 登录</title>
+  <title>ARM 中间层 · 登录</title>
   <link rel="stylesheet" href="/static/ops.css">
 </head>
 <body class="paper">
   <main class="login-board">
-    <p class="eyebrow">Oracle-SJ-ARM</p>
-    <h1>实验室运维</h1>
-    <p class="lede">中间层状态与 115 扫码。不是阅读台，也不是生产 vpush 后台。</p>
+    <h1>ARM 中间层</h1>
+    <p class="lede">看采集、热缓存、115 与对 vpush 的 HTTP。不是阅读台，也不是生产后台。</p>
     {% if error %}
     <p class="banner banner-warn" role="alert">{{ error }}</p>
     {% endif %}

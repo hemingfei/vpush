@@ -97,12 +97,11 @@ def test_status_redacts_ima_refresh_token_and_cookie_body(lab_env):
     assert "cookie-secret" not in dumped
     assert "must-not-leak" not in dumped
     assert "seid-secret" not in dumped
-    assert payload["ima"] == {
-        "present": True,
-        "mtime": payload["ima"]["mtime"],
-        "uid_len": len("user-123456"),
-        "note": payload["ima"]["note"],
-    }
+    assert payload["ima"]["present"] is True
+    assert payload["ima"]["uid_len"] == len("user-123456")
+    assert "refresh_token" not in payload["ima"]
+    assert payload["roles"]["ima_collect"] == "vpush_pull"
+    assert payload["roles"]["cicc_collect"] == "arm_incr"
     assert "refresh_token" not in payload["ima"]
     assert payload["p115"]["present"] is True
     assert payload["p115"]["length"] == len("UID=cookie-secret; CID=cid-secret; SEID=seid-secret")
@@ -362,8 +361,10 @@ def test_dashboard_phase2_has_confirmed_apply(client):
     html = client.get("/").text
     assert "ima_phone_sync" in html
     assert "开始扫码" in html
-    assert "IMA apply" in html
+    assert "IMA apply" not in html
     assert "CICC apply" in html
+    assert "勿在此双采" in html or "不要在这里再跑实验室采集" in html
+    assert 'id="pipeline-card"' in html
     assert 'id="apply-confirm"' in html
     assert 'id="requeue-confirm"' in html
     assert "/api/115/qr/ima" not in html

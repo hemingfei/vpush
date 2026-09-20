@@ -13,6 +13,13 @@ LOG_DIR="${CACHE_ROOT}/logs"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 LOG="${LOG_DIR}/cicc-host-sync-${STAMP}.log"
 DAYS="${CICC_INCR_DAYS:-3}"
+SETTINGS="${CACHE_ROOT}/ops-lab-settings.json"
+if [[ -f "$SETTINGS" ]]; then
+  parsed="$("$PYTHON" -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(int(d.get("cicc_incr_days") or 3))' "$SETTINGS" 2>/dev/null || true)"
+  if [[ "$parsed" =~ ^[1-9][0-9]*$ ]]; then
+    DAYS="$parsed"
+  fi
+fi
 
 umask 077
 mkdir -p "${LOG_DIR}"

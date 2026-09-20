@@ -1,5 +1,6 @@
 # Lab/prod export for ARM incremental tree. Copy onto Oracle-SJ-ARM /etc/exports.d/
 # or merge into /etc/exports. Do NOT export 0.0.0.0/0.
+# Also install systemd/nfsd-tailscale.conf so nfsd itself is not on the public NIC.
 #
 # Clients: Tailscale CGNAT only. Production DMIT has no Tailscale yet — do not
 # remount vpush until a path exists (Tailscale on DMIT, or a new WG peer; the

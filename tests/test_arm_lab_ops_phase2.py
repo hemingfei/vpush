@@ -28,6 +28,7 @@ from ops_app import create_app  # noqa: E402
 from ops_status import (  # noqa: E402
     cache_waterline,
     collect_status,
+    parse_cicc_sync_log,
     parse_ima_sync_log,
     puller_upload_counts,
     redact,
@@ -48,7 +49,7 @@ def lab_env(tmp_path, monkeypatch):
     secrets.mkdir()
     scripts.mkdir()
     (scripts / "ima_arm_lab_sync.py").write_text("# fake ima\n", encoding="utf-8")
-    (scripts / "cicc_arm_lab_sync.py").write_text("# fake cicc\n", encoding="utf-8")
+    (scripts / "cicc_report_collector.py").write_text("# fake cicc\n", encoding="utf-8")
     secrets.joinpath("ima-pure.json").write_text(
         json.dumps({"uid": "user-123456", "refresh_token": "super-secret-refresh"}),
         encoding="utf-8",
@@ -191,6 +192,21 @@ def test_parse_ima_sync_log_redacts_and_groups(tmp_path):
     assert "UID=<redacted>" in dumped
 
 
+def test_parse_cicc_host_sync_log(tmp_path):
+    log = tmp_path / "cicc-host-sync-20260920.log"
+    log.write_text(
+        "start 2026-09-20T12:00:00+08:00 days=3 dry_run=0\n"
+        "downloaded ok UID=cookie-secret\n"
+        "done rc=0 2026-09-20T12:01:00+08:00\n",
+        encoding="utf-8",
+    )
+    summary = parse_cicc_sync_log(log)
+    assert summary["days"] == 3
+    assert summary["dry_run"] is False
+    assert summary["returncode"] == 0
+    assert "cookie-secret" not in json.dumps(summary)
+
+
 def test_status_includes_sync_waterline_failed_queue(lab_env):
     cache, _secrets, _scripts = lab_env
     (cache / "logs" / "ima-lab-sync-20260919.log").write_text(
@@ -217,6 +233,9 @@ def test_status_includes_sync_waterline_failed_queue(lab_env):
     assert payload["puller"]["uploads"]["ok"] == 1
     assert payload["puller"]["uploads"]["fail"] == 1
     assert payload["cicc"]["present"] is True
+    assert payload["roles"]["vpush_link"] == "http_pull"
+    assert payload["puller"]["policy"]["keep_hot"] is True
+    assert "export" in payload
     assert "secret-cicc" not in dumped
 
 
@@ -251,50 +270,11 @@ class _Proc:
         self.stderr = stderr
 
 
-def test_ima_apply_requires_confirm_and_caps_limit(lab_env, monkeypatch):
-    cache, _secrets, scripts = lab_env
-    seen = {}
-
-    def fake_run(argv, **kwargs):
-        seen["argv"] = argv
-        seen["env"] = kwargs.get("env") or {}
-        return _Proc(0, "dry-run 1 个文件 UID=cookie-secret\n", "")
-
-    monkeypatch.setattr("ops_actions.subprocess.run", fake_run)
-    with pytest.raises(ActionError, match="confirm required"):
-        ima_sync({"limit": 9, "group": "legacy"}, dry_run=False)
-    result = ima_sync({"confirm": True, "limit": 99, "group": "legacy"}, dry_run=False)
-    assert result["ok"] is True
-    assert result["limit"] == 5
-    argv = seen["argv"]
-    assert "--secrets" not in argv
-    assert "super-secret-refresh" not in " ".join(argv)
-    assert "--limit" in argv and "5" in argv
-    assert "--apply" in argv
-    assert "--enable" in argv
-    env = seen["env"]
-    assert env["IMA_PURE_SECRETS_FILE"].endswith("ima-pure.json")
-    assert "VPUSH_ARM_MIDDLEWARE" not in env
-    assert "cookie-secret" not in json.dumps(result)
-    assert "UID=<redacted>" in (result.get("stdout") or "")
-    last = json.loads((cache / "logs" / "ops-last-job.json").read_text(encoding="utf-8"))
-    assert "cookie-secret" not in json.dumps(last)
-    assert scripts.is_dir()
-
-
-def test_ima_dry_run_and_bad_group(lab_env, monkeypatch):
-    seen = {}
-
-    def fake_run(argv, **kwargs):
-        seen["argv"] = argv
-        return _Proc(0, "WOULD SYNC media_id=1\n", "")
-
-    monkeypatch.setattr("ops_actions.subprocess.run", fake_run)
-    result = ima_sync({"limit": 2, "group": "7476629605476515"}, dry_run=True)
-    assert result["ok"] is True
-    assert "--dry-run" in seen["argv"]
-    with pytest.raises(ActionError, match="not allowed"):
-        ima_sync({"group": "evil", "limit": 1}, dry_run=True)
+def test_ima_sync_refuses_dual_collect(lab_env):
+    with pytest.raises(ActionError, match="勿在此双采"):
+        ima_sync({"confirm": True, "limit": 2, "group": "legacy"}, dry_run=False)
+    with pytest.raises(ActionError, match="勿在此双采"):
+        ima_sync({"limit": 2, "group": "legacy"}, dry_run=True)
 
 
 def test_cicc_missing_cookie_is_400(lab_env, monkeypatch):
@@ -313,11 +293,16 @@ def test_cicc_apply_mocked(lab_env, monkeypatch):
         return _Proc(0, "apply downloaded=1 skipped=0 failed=0\n", "")
 
     monkeypatch.setattr("ops_actions.subprocess.run", fake_run)
-    result = cicc_sync({"confirm": True, "limit": 3}, dry_run=False)
+    result = cicc_sync({"confirm": True, "days": 3}, dry_run=False)
     assert result["ok"] is True
+    assert result["days"] == 3
     assert "--cookie-file" not in seen["argv"]
     assert seen["env"]["VPUSH_CICC_COOKIE_FILE"].endswith("cicc-cookies.txt")
-    assert "--apply" in seen["argv"]
+    assert "--arm-middleware" in seen["argv"]
+    assert "--days" in seen["argv"]
+    assert "3" in seen["argv"]
+    assert "--dry-run" not in seen["argv"]
+    assert "cicc_report_collector.py" in " ".join(seen["argv"])
 
 
 def test_api_sync_endpoints_mocked(client, lab_env, monkeypatch):
@@ -326,20 +311,22 @@ def test_api_sync_endpoints_mocked(client, lab_env, monkeypatch):
 
     monkeypatch.setattr("ops_actions.subprocess.run", fake_run)
     assert _login(client).status_code == 303
-    dry = client.post("/api/sync/ima/dry-run", json={"limit": 2, "group": "legacy"})
+    refused = client.post("/api/sync/ima/dry-run", json={"limit": 2, "group": "legacy"})
+    assert refused.status_code == 409
+    dry = client.post("/api/sync/cicc/dry-run", json={"days": 2})
     assert dry.status_code == 200
     body = dry.json()
     assert body["ok"] is True
     assert "super-secret-refresh" not in json.dumps(body)
-    denied = client.post("/api/sync/ima/apply", json={"limit": 2, "group": "legacy"})
+    denied = client.post("/api/sync/cicc/apply", json={"days": 2})
     assert denied.status_code == 400
     apply = client.post(
-        "/api/sync/ima/apply",
-        json={"confirm": True, "limit": 2, "group": "legacy"},
+        "/api/sync/cicc/apply",
+        json={"confirm": True, "days": 2},
     )
     assert apply.status_code == 200
     status = client.get("/api/status").json()
-    assert status["last_job"]["action"] in {"ima-dry-run", "ima-apply"}
+    assert status["last_job"]["action"] in {"cicc-dry-run", "cicc-apply"}
     assert "super-secret-refresh" not in json.dumps(status)
 
 

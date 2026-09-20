@@ -16,6 +16,9 @@ from typing import Any
 
 from ops_actions import ActionError, append_audit, require_confirm
 from ops_settings import (
+    CICC_INCR_DAYS_DEFAULT,
+    CICC_INCR_DAYS_MAX,
+    CICC_INCR_DAYS_MIN,
     DEFAULT_CICC_TIMER_UNIT,
     DEFAULT_DAILY_SYNC_CLOCK,
     DEFAULT_IMA_GROUPS_PARALLEL,
@@ -47,6 +50,7 @@ DEFAULTS: dict[str, Any] = {
     "timezone": DEFAULT_SYNC_TIMEZONE,
     "ima_limit_per_group": LAB_SYNC_LIMIT_DEFAULT,
     "cicc_limit": LAB_SYNC_LIMIT_DEFAULT,
+    "cicc_incr_days": CICC_INCR_DAYS_DEFAULT,
     "ima_groups_parallel": DEFAULT_IMA_GROUPS_PARALLEL,
     "puller_batch_size": PULLER_BATCH_DEFAULT,
 }
@@ -102,6 +106,21 @@ def parse_batch(raw: Any, *, default: int = PULLER_BATCH_DEFAULT) -> int:
     return value
 
 
+def parse_days(raw: Any, *, default: int = CICC_INCR_DAYS_DEFAULT) -> int:
+    if raw is None or raw == "":
+        value = default
+    else:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ActionError("cicc_incr_days must be an integer") from exc
+    if value < CICC_INCR_DAYS_MIN or value > CICC_INCR_DAYS_MAX:
+        raise ActionError(
+            f"cicc_incr_days must be between {CICC_INCR_DAYS_MIN} and {CICC_INCR_DAYS_MAX}"
+        )
+    return value
+
+
 def parse_bool(raw: Any, *, default: bool = DEFAULT_IMA_GROUPS_PARALLEL) -> bool:
     if raw is None or raw == "":
         return default
@@ -135,6 +154,9 @@ def validate_settings(body: dict[str, Any] | None, *, base: dict[str, Any] | Non
         ),
         "ima_groups_parallel": parse_bool(
             payload.get("ima_groups_parallel", current["ima_groups_parallel"])
+        ),
+        "cicc_incr_days": parse_days(
+            payload.get("cicc_incr_days", current.get("cicc_incr_days", CICC_INCR_DAYS_DEFAULT))
         ),
         "puller_batch_size": parse_batch(
             payload.get("puller_batch_size", current["puller_batch_size"])
@@ -252,7 +274,7 @@ def apply_sync_timers(
     *,
     runner=None,
 ) -> dict[str, Any]:
-    """Rewrite IMA+CICC timer OnCalendar. Best-effort; never raises for host limits."""
+    """Rewrite CICC timer OnCalendar only. Never restart the IMA lab timer."""
     clock = settings["daily_sync_clock"]
     tz = settings.get("timezone") or DEFAULT_SYNC_TIMEZONE
     ima = timer_unit()
@@ -260,6 +282,8 @@ def apply_sync_timers(
     host_cmd = host_apply_command(settings)
     run = runner or subprocess.run
     helper = timer_helper_path()
+    units = [cicc]
+    skipped = [ima]
 
     if helper.is_file() and os.access(helper, os.X_OK):
         try:
@@ -276,7 +300,8 @@ def apply_sync_timers(
                 "method": "helper",
                 "detail": type(exc).__name__,
                 "host_command": host_cmd,
-                "units": [ima, cicc],
+                "units": units,
+                "skipped": skipped,
             }
         if proc.returncode == 0:
             return {
@@ -284,7 +309,8 @@ def apply_sync_timers(
                 "method": "helper",
                 "detail": None,
                 "host_command": host_cmd,
-                "units": [ima, cicc],
+                "units": units,
+                "skipped": skipped,
             }
         err = (proc.stderr or proc.stdout or "helper failed").splitlines()
         return {
@@ -292,7 +318,8 @@ def apply_sync_timers(
             "method": "helper",
             "detail": (err[0] if err else "helper failed")[:160],
             "host_command": host_cmd,
-            "units": [ima, cicc],
+            "units": units,
+            "skipped": skipped,
         }
 
     if not _systemctl_available(runner=run):
@@ -301,13 +328,13 @@ def apply_sync_timers(
             "method": "host-command",
             "detail": "systemctl not available from this process (typical in docker)",
             "host_command": host_cmd,
-            "units": [ima, cicc],
+            "units": units,
+            "skipped": skipped,
         }
 
     written: list[str] = []
     try:
-        for unit in (ima, cicc):
-            written.append(str(_write_timer_dropin(unit, clock, tz)))
+        written.append(str(_write_timer_dropin(cicc, clock, tz)))
         reload = run(
             ["systemctl", "daemon-reload"],
             capture_output=True,
@@ -318,7 +345,7 @@ def apply_sync_timers(
         if reload.returncode != 0:
             raise OSError((reload.stderr or "daemon-reload failed").strip()[:160])
         restart = run(
-            ["systemctl", "restart", ima, cicc],
+            ["systemctl", "restart", cicc],
             capture_output=True,
             text=True,
             timeout=15,
@@ -332,7 +359,8 @@ def apply_sync_timers(
             "method": "dropin",
             "detail": f"{type(exc).__name__}: {exc}"[:160],
             "host_command": host_cmd,
-            "units": [ima, cicc],
+            "units": units,
+            "skipped": skipped,
             "dropins": written,
         }
     return {
@@ -340,7 +368,8 @@ def apply_sync_timers(
         "method": "dropin",
         "detail": None,
         "host_command": host_cmd,
-        "units": [ima, cicc],
+        "units": units,
+        "skipped": skipped,
         "dropins": written,
     }
 
@@ -362,7 +391,8 @@ def settings_public(settings: dict[str, Any], apply_info: dict[str, Any] | None 
         "method": None,
         "detail": None,
         "host_command": host_apply_command(settings),
-        "units": [timer_unit(), cicc_timer_unit()],
+        "units": [cicc_timer_unit()],
+        "skipped": [timer_unit()],
     }
     return {
         "ok": True,
@@ -394,6 +424,7 @@ def save_settings(body: dict[str, Any] | None, *, runner=None) -> dict[str, Any]
             "timezone": settings["timezone"],
             "ima_limit": settings["ima_limit_per_group"],
             "cicc_limit": settings["cicc_limit"],
+            "cicc_incr_days": settings["cicc_incr_days"],
             "parallel": settings["ima_groups_parallel"],
             "batch": settings["puller_batch_size"],
             "timers_applied": apply_info.get("applied") is True,
@@ -425,6 +456,7 @@ __all__ = [
     "parse_batch",
     "parse_bool",
     "parse_clock",
+    "parse_days",
     "parse_limit",
     "save_settings",
     "settings_public",
