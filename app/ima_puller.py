@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 import urllib.error
 import urllib.request
@@ -10,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 try:  # fcntl 仅 POSIX 存在；Windows 用 msvcrt 锁首字节实现同等进程互斥
     import fcntl
@@ -31,6 +32,9 @@ RANGE_PARTS = 4
 
 
 LOCK_NAME = ".vpush-pdf.lock"
+FILE_SUFFIXES = (".pdf", ".txt", ".json")
+LOCAL_LIBRARY_PREFIX_RE = re.compile(r"^local/[a-z0-9][a-z0-9-]{0,46}$")
+LIST_LIMIT = 500
 
 
 @contextmanager
@@ -56,10 +60,55 @@ def allowed_url(url: str) -> bool:
     return parsed.scheme == "https" and host.endswith(".ima.qq.com")
 
 
-def safe_dest(root: Path, dest: str) -> Path:
+def safe_archive_prefix(root: Path, prefix: str) -> Path:
+    text = str(prefix or "").replace("\\", "/").strip("/")
+    if not LOCAL_LIBRARY_PREFIX_RE.fullmatch(text):
+        raise ValueError("prefix must be local/<slug>")
+    root = root.resolve()
+    candidate = (root / text).resolve()
+    if candidate == root or not candidate.is_relative_to(root):
+        raise ValueError("prefix escapes archive root")
+    if candidate.exists() and candidate.is_symlink():
+        raise ValueError("archive directory must not be a symlink")
+    return candidate
+
+
+def list_local_library(root: Path, prefix: str, *, limit: int = LIST_LIMIT) -> list[dict[str, int | str]]:
+    base = safe_archive_prefix(root, prefix)
+    if not base.is_dir():
+        return []
+    root = root.resolve()
+    found: list[dict[str, int | str]] = []
+    for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+        dirnames[:] = sorted(
+            name
+            for name in dirnames
+            if not name.startswith(".") and not (Path(dirpath) / name).is_symlink()
+        )
+        for name in sorted(filenames):
+            if name.startswith(".") or not name.lower().endswith(FILE_SUFFIXES):
+                continue
+            full = Path(dirpath) / name
+            if full.is_symlink() or not full.is_file():
+                continue
+            dest = str(full.relative_to(root)).replace("\\", "/")
+            found.append({"dest": dest, "size": int(full.stat().st_size)})
+            if len(found) >= limit:
+                return found
+    return found
+
+
+def safe_archive_rel(
+    root: Path,
+    dest: str,
+    suffixes: tuple[str, ...] = FILE_SUFFIXES,
+) -> Path:
     text = str(dest or "").replace("\\", "/").lstrip("/")
-    if not text.endswith(".pdf") or text.endswith("/.pdf"):
-        raise ValueError("dest must be a .pdf path")
+    lower = text.lower()
+    if any(lower.endswith("/" + suffix.lstrip(".")) for suffix in suffixes):
+        raise ValueError("dest must be an archive file")
+    if not any(lower.endswith(suffix) for suffix in suffixes):
+        raise ValueError("dest must be an archive file")
     root = root.resolve()
     current = root
     for part in Path(text).parts[:-1]:
@@ -72,6 +121,10 @@ def safe_dest(root: Path, dest: str) -> Path:
     if candidate.parent.exists() and candidate.parent.is_symlink():
         raise ValueError("archive directory must not be a symlink")
     return candidate
+
+
+def safe_dest(root: Path, dest: str) -> Path:
+    return safe_archive_rel(root, dest, suffixes=(".pdf",))
 
 
 def _http_open(request: urllib.request.Request):
@@ -218,10 +271,56 @@ def make_handler(root: Path, token: str):
             self.wfile.write(body)
 
         def do_GET(self) -> None:
-            if self.path.split("?", 1)[0] != "/healthz":
+            parsed = urlparse(self.path)
+            if parsed.path == "/healthz":
+                self._send(200, b"ok")
+                return
+            if parsed.path == "/list":
+                if self.headers.get("Authorization") != f"Bearer {token}":
+                    self._send(401, b"auth")
+                    return
+                prefix = (parse_qs(parsed.query).get("prefix") or [""])[0]
+                try:
+                    files = list_local_library(root, prefix)
+                except ValueError:
+                    self._send(400, b"prefix")
+                    return
+                body = json.dumps({"files": files}, ensure_ascii=False).encode()
+                self._send(200, body, "application/json")
+                return
+            if parsed.path != "/file":
                 self._send(404, b"no")
                 return
-            self._send(200, b"ok")
+            if self.headers.get("Authorization") != f"Bearer {token}":
+                self._send(401, b"auth")
+                return
+            dest = (parse_qs(parsed.query).get("dest") or [""])[0]
+            try:
+                path = safe_archive_rel(root, dest)
+            except ValueError:
+                self._send(400, b"dest")
+                return
+            if not path.is_file():
+                self._send(404, b"missing")
+                return
+            size = path.stat().st_size
+            suffix = path.suffix.lower()
+            if suffix == ".pdf":
+                content_type = "application/pdf"
+            elif suffix == ".json":
+                content_type = "application/json"
+            else:
+                content_type = "text/plain; charset=utf-8"
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            with path.open("rb") as source:
+                while True:
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
 
         def do_POST(self) -> None:
             if self.path.split("?", 1)[0] != "/pull":

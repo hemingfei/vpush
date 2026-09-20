@@ -98,8 +98,42 @@ maybe_recover_mount() {
   mountpoint -q "$ARCHIVE_MOUNT"
 }
 
+archive_mount_is_nfs() {
+  local target="${1%/}"
+  [ -n "$target" ] || return 1
+  awk -v t="$target" '
+    {
+      mp=$2
+      gsub(/\\040/, " ", mp)
+      sub(/\/$/, "", mp)
+      if (mp == "" ) mp = "/"
+      if (mp == t && $3 ~ /^nfs/) found=1
+    }
+    END { exit !found }
+  ' /proc/mounts 2>/dev/null
+}
+
+# Default: never remount and never stat a remote NFS tree. A hung storage
+# or ARM mount is what previously took the production host into D-state.
+# Opt in only with IMA_ALLOW_NFS_REMOUNT=1 (legacy rollback).
+ALLOW_NFS_REMOUNT="${IMA_ALLOW_NFS_REMOUNT:-0}"
+SKIP_REMOTE_HEALTH=0
+
 # Probe path: always continue to publish JSON.
-if ! wg_handshake_ok; then
+if [ "$ALLOW_NFS_REMOUNT" != "1" ]; then
+  if archive_mount_is_nfs "$ARCHIVE_MOUNT"; then
+    REASON="unavailable"
+    SKIP_REMOTE_HEALTH=1
+  elif [ -f "$REMOTE_MARKER" ]; then
+    AVAILABLE=true
+    WRITABLE=true
+    REASON=""
+    SKIP_REMOTE_HEALTH=1
+  else
+    REASON="unavailable"
+    SKIP_REMOTE_HEALTH=1
+  fi
+elif ! wg_handshake_ok; then
   REASON="unavailable"
 elif ! nfs_port_ok; then
   REASON="unavailable"
@@ -202,7 +236,8 @@ except Exception:
 with open(sys.argv[9],"w",encoding="utf-8") as fh:
  json.dump(out, fh, separators=(",",":"))
 ' "$CHECKED_AT" "$AVAILABLE" "$WRITABLE" "$USED_PERCENT" "$INODE_PERCENT" \
-  "$MONTHLY_TX_BYTES" "$CAPACITY_BLOCKED" "$BOUNDED_REASON" "$TMP_FILE" "$REMOTE_HEALTH"
+  "$MONTHLY_TX_BYTES" "$CAPACITY_BLOCKED" "$BOUNDED_REASON" "$TMP_FILE" \
+  "$( [ "$SKIP_REMOTE_HEALTH" = "1" ] && printf '%s' "" || printf '%s' "$REMOTE_HEALTH" )"
 
 chown 99:100 "$TMP_FILE"
 chmod 0640 "$TMP_FILE"

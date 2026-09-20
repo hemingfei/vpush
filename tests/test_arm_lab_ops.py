@@ -97,12 +97,11 @@ def test_status_redacts_ima_refresh_token_and_cookie_body(lab_env):
     assert "cookie-secret" not in dumped
     assert "must-not-leak" not in dumped
     assert "seid-secret" not in dumped
-    assert payload["ima"] == {
-        "present": True,
-        "mtime": payload["ima"]["mtime"],
-        "uid_len": len("user-123456"),
-        "note": payload["ima"]["note"],
-    }
+    assert payload["ima"]["present"] is True
+    assert payload["ima"]["uid_len"] == len("user-123456")
+    assert "refresh_token" not in payload["ima"]
+    assert payload["roles"]["ima_collect"] == "vpush_pull"
+    assert payload["roles"]["cicc_collect"] == "arm_incr"
     assert "refresh_token" not in payload["ima"]
     assert payload["p115"]["present"] is True
     assert payload["p115"]["length"] == len("UID=cookie-secret; CID=cid-secret; SEID=seid-secret")
@@ -114,6 +113,8 @@ def test_status_redacts_ima_refresh_token_and_cookie_body(lab_env):
     assert health["ok"] is True
     assert "refresh_token" not in health
     assert "cookie" not in health
+    assert payload["puller"]["unit"]["unit"] == "vpush-ima-lab-puller.service"
+    assert payload["puller"]["docker"]["containers"] == []
 
 
 def test_ima_and_cookie_helpers_omit_bodies(tmp_path):
@@ -143,6 +144,8 @@ def test_auth_required_for_status_and_qr(client):
     login_html = client.get("/login").text
     assert "Tailscale" in login_html
     assert "0.0.0.0:8055" in login_html
+    assert 'class="login-shell"' in login_html
+    assert 'id="auth-view"' in login_html
     assert client.get("/api/status").status_code == 401
     assert client.post("/api/115/qr/start", json={"device_type": "harmony"}).status_code == 401
     assert client.get("/api/115/qr/status", params={"session_id": "x"}).status_code == 401
@@ -270,6 +273,7 @@ def test_qr_start_rate_limit(monkeypatch, lab_env):
 
 def test_compose_snippet_matches_live_lab_contract():
     text = (OPS_DIR / "docker-compose.snippet.yml").read_text(encoding="utf-8")
+    assert "Leftover" in text
     assert "VPUSH_PYTHON: /opt/vpush-ima-lab/venv/bin/python" in text
     assert "VPUSH_SCRIPTS_ROOT: /opt/vpush-ima-lab/src/scripts" in text
     assert "VPUSH_CICC_COOKIE_FILE: /secrets/cicc-cookies.txt" in text
@@ -362,8 +366,10 @@ def test_dashboard_phase2_has_confirmed_apply(client):
     html = client.get("/").text
     assert "ima_phone_sync" in html
     assert "开始扫码" in html
-    assert "IMA apply" in html
+    assert "IMA apply" not in html
     assert "CICC apply" in html
+    assert "勿在此双采" in html or "不要在这里再跑实验室采集" in html
+    assert 'id="pipeline-card"' in html
     assert 'id="apply-confirm"' in html
     assert 'id="requeue-confirm"' in html
     assert "/api/115/qr/ima" not in html
@@ -371,3 +377,8 @@ def test_dashboard_phase2_has_confirmed_apply(client):
     assert 'id="ima-qr"' not in html
     assert 'id="settings-card"' in html
     assert 'id="settings-confirm"' in html
+    assert 'id="app-view"' in html
+    assert 'id="sidebar-nav"' in html
+    assert 'id="bottom-nav"' in html
+    assert "/static/style.css" in html
+    assert "/static/vendor/design-tokens.css" in html

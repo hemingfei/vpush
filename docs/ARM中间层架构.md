@@ -1,55 +1,77 @@
-# V Push：ARM 中间层架构 v3（中间层终态，不迁移读源）
+# V Push：ARM 中间层（采集 + 对接 vpush）
 
-**状态：** 2026-09-20 定稿 · 尚未提交实施变更（本次只改 ARM 实验机与文档）
-**历史：** v1 = 存储故障期桥接（`ARM中间层架构-v1-20260919.md`）；v2 = 权威树迁 ARM 块卷（**已取消**，见 git 历史 24730837）
+**状态：** 2026-09-20 Kale 口径（以此为准）
+**作废：** v3「ARM 只做备份」；「生产继续挂存储机、ARM 回写存储 NFS」。
 
-## 0. 决策记录
+## 0. 一句话
 
-- **2026-09-20，Kale：** 付费账户，不挂 OCI 块卷，只用自带 40G 盘；**ARM 只做中间层**。v2 的「权威树迁 ARM / 生产只挂 ARM 导出」连同回填、NFS 导出、切换窗口全部取消。
-- 生产读源与采集主通道**保持现状**（存储机），生产零改动。
+**ARM = 采集 + 中间层。vpush 只连 ARM。**
+存储机和 115 是冷备份，不是现网读源，也不是采集主通道。
 
-## 1. 实测基线（2026-09-19/20）
+## 1. 分层
 
-- **存储机 dedirock-828467392：采集链路完全存活。** cicc dispatch/status 每分钟、incremental 每小时、pdf-daily 每天、dedup 每周、compress-hourly 每小时、ima-storage-health 每 5 分钟；8743 puller active（只绑 10.80.0.2）；近 7 天新增 1055 个文件。
-- 生产：挂 `10.80.0.2:/srv/vpush-ima`（118G，1008G 盘），零改动需求。
-- ARM：单盘 46.6G（用 4.8G）；cache 现 20M；115 账本仅 **19 条**（lab 时代经手量）——**115 无全库副本，存储树为物理单点**。
-
-## 2. 终态角色
-
-| 角色 | 谁 | 说明 |
+| 层 | 谁 | 干什么 |
 |---|---|---|
-| 生产读源 + 采集主通道 | 存储机 | cicc 定时器 + 8743 puller 照旧，**零改动** |
-| 采集（灾备/补采） | ARM lab sync | timer disabled + `DRY_RUN=1` 双保险；手动限量命令见 v1 交接 §6.2；平时不开，避免与存储机重复采集 |
-| 115 备份通道 | ARM | puller_loop 容器（staging→115+hot，skip uploaded）+ cache_gc 水位（warn 30G / force 35G） |
-| lab 视图 | OpenList `/lab-hot` + Ops :8055（Tailscale） | 只读浏览，不暴露 115 |
-| 115 | 仅异步备份 | 永不进阅读路径；Cookie 失效不挡阅读 |
+| 现网 | **vpush → 只连 ARM** | 展示、下载、IMA pull、中金命令，都不直接碰存储机 / 115 |
+| 工作机 | **ARM** | 采集（**只增量**）、热缓存、NFS/门面给 vpush |
+| 冷备份 | 存储机 NFS、115、OpenList 其他池 | ARM **定期把增量推出去**；ARM **不回拉旧日期** |
 
 ```
-存储机树（权威，自采自写）
-   │（P2 可选：增量镜像 rsync → ARM staging）
-   ▼
-ARM puller_loop ──► 115 /vpush/...（低频、断点、skip uploaded）
-   └──► hot/（40G 滚动窗口，cache_gc 水位清理）
-生产：照旧挂存储机 NFS，不知道 ARM 存在
+IMA / 中金 ──采集──► ARM staging/hot ──NFS 仅实验室──► 本机 Tailscale
+                         │
+vpush（本机盘）───────────┤  只走 HTTP ima-pull :8743 / GET /file
+                         │
+                         ├──► 存储机 NFS     （冷备份，生产不挂）
+                         └──► 115            （冷备份）
 ```
 
-## 3. 本次已就位（ARM，2026-09-19/20）
+## 2. 现网对照（2026-09-20）
 
-- 拆雷：两个采集 unit drop-in 改为 `Environment=DRY_RUN=1`（timer 本就 disabled，双保险）
-- venv 补 `pymupdf`：cicc 灾备采集的去水印依赖就绪（aarch64）
-- **GC 定时接线**：`vpush-cache-gc.timer` 每 30 分钟，`cache_gc.py --warn-gb 30 --force-gb 35`，dry-run 实测通过（此前 cache_gc 从未被调度）
-- 清理 v2 遗留：卸载 nfs-kernel-server、删除 `vpush-ima-pull.service` 与 `ima-pull-arm.token`
-- 仓库：v2 设计稿留档于 git 历史（24730837）；`docs/arm-middleware.md` §10.1 与 `arm_nfs_sync.py` docstring 口径修正继续有效（arm_nfs_sync 定位=存量合并/补采工具）
+| 组件 | 状态 |
+|---|---|
+| 生产 vpush | 归档必须是**本机盘**；`IMA_PULL_URL` 仍指存储 8743 ← 网络通了改 ARM HTTP，**不改挂载** |
+| ARM ima-pull | **systemd** `vpush-ima-pull` · `100.112.25.21:8743` → `/srv/vpush-ima`（另有 `GET /file`） |
+| ARM puller_loop | **systemd** `vpush-ima-lab-puller` → 115 + hot（不要再跑 puller 容器） |
+| ARM ops | **systemd** `vpush-arm-lab-ops` · Tailscale `:8055`（不要再跑 ops 容器） |
+| OpenList | 实验室 compose **仅留这一份**：`/lab-hot` Local；`/vpush` 115 Cloud |
+| ARM nfs-kernel-server | Tailscale `100.64.0.0/10` 导出 `/srv/vpush-ima`（实验室用，生产不挂） |
+| 采集 timer | IMA apply 已开；CICC 仍 DRY_RUN / disabled |
 
-## 4. 开放决策（待 Kale）
+## 3. 生产隔离（存储/ARM 挂了也不能拖垮 vpush）
 
-1. **P2 · DR 回灌**：118G 是否分批经 ARM 回灌 115（数天~数周低频传输；当前 115 仅 19 个文件，存储树物理单点）。若做，顺带决定稳态「增量镜像」job（存储树 → ARM staging → puller 上 115），需注意 GC 水位与上传完成状态的无竞态次序（先传后清，`min-age-seconds` 只防新文件误删，不够）。
-2. **Lab 本地脚本回仓**：`cache_gc.py`、`chinese_pdf.py`、`healthcheck.py`、`upload_once.py` 等 ~9 个脚本只存在于 `/opt/vpush-ima-lab/scripts/`，仓库没有（交接文档曾误标为仓库路径）。建议 Grok 提交入库或文档化。
+**生产主机禁止内核挂载远程 NFS（ARM 和存储都不挂）。**
+存储机挂了把 DMIT 拖进 D-state，就是硬 NFS + `main-health` 每分钟 `stat`/`mount` 造成的。再把 ARM 用同样方式挂上去，ARM 一挂生产照样死。
 
-## 5. 不变量（沿用，一条不减）
+| 通道 | 怎么连 | 对端挂了会怎样 |
+|---|---|---|
+| 归档盘 | **本机目录**（`IMA_ARCHIVE_HOST_PATH` 必须是本地盘） | 无影响 |
+| 采集 / 缺文件 | HTTP `IMA_PULL_URL` / `GET /file`，超时 + 熔断 | IMA/中金降级，站点其余正常 |
+| 中金命令 | 只写本机 `.cicc`；路径若是 NFS **直接拒绝** | 管理页 503，不卡 uvicorn |
+| 健康检查 | 默认 `IMA_ALLOW_NFS_REMOUNT=0`，不 `mount`、不碰 NFS 树 | 写本地 status JSON，结束 |
 
-- 生产 compose 永不出现 `VPUSH_ARM_MIDDLEWARE` / `VPUSH_ARM_NFS_SYNC`
-- 115 永不进阅读路径；OpenList 不暴露 115；Ops :8055 只走 Tailscale
-- secrets 600 / 目录 700，不进 git
-- 采集 timer 默认停，开采需 Kale 明确点头；`IMA_PULL_URL` 保持指向存储机 8743
-- 不上 Memcached/Redis（缓存的是 PDF 文件，清单用 SQLite）
+ARM 上的 NFS 导出只给实验室/本机 Tailscale 用，**不是**生产 bind-mount。不要开 `IMA_ALLOW_NFS_REMOUNT=1`，不要跑 `vpush-ima-recover` 那种自动 `mount` + recreate。
+
+不要在生产 compose 开 `VPUSH_ARM_MIDDLEWARE`（那会让 vpush 容器自己写 ARM staging 路径，容器里没有这棵盘）。
+
+以后才要动代码的情况：vpush 直读 OpenList/115、或日期分片布局。不要做「ARM 从冷池回拉旧日期」。
+
+## 4. 只增量
+
+ARM **不拉旧日期、不回填 118G**。`ima_to_arm_staging` 全库 remap、存储机 rsync 进 ARM、按历史 MMDD 扫目录，都不做。
+
+采集窗口：中金 `--days`（现网默认近 7 天）；IMA 只跟最新日目录 / `--limit`。切到 ARM 之后，vpush 现网是热窗口 + **切点之后的新文件**。更老的留在存储机/115 冷备份，不经 ARM 拉回来。
+
+## 5. 接下来
+
+1. 生产保持本地 `IMA_ARCHIVE_HOST_PATH`，停掉自动 NFS remount / recover。
+2. 网络打通后只改 `IMA_PULL_URL` / `IMA_PULL_TOKEN` / `IMA_FETCH_URL` 指向 ARM HTTP，**不改挂载**。
+3. ARM 开**增量**采集；存储机采集停掉（防中金双采）。存储机和 115 只收 ARM 推出去的增量冷备份。
+
+## 6. 不变量
+
+- 生产 compose 不写 `VPUSH_ARM_MIDDLEWARE` / `VPUSH_ARM_NFS_SYNC`
+- **生产主机不挂远程 NFS**（ARM / 存储都不挂）；对端挂了只允许 HTTP 超时失败
+- Ops / ima-pull / NFS 导出只走 Tailscale 或 WG，不绑公网
+- secrets 600，不进 git
+- ARM 只增量，不拉旧日期、不回填全库
+- 中金配额/熔断不绕过

@@ -54,7 +54,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.219";
+const APP_VERSION = "1.12.226";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -85,7 +85,10 @@ const state = {
   newsThumbObserver: null,
   newsImageAbort: null,
   newsArticleId: 0,
-  newsImageUrls: new Set(),
+  newsImageUrls: new Map(),
+  newsCollectionEnabled: true,
+  newsUnreadOnly: false,
+  newsUnreadCount: 0,
   newsTab: "realtime",
   newsRtItems: [],
   newsRtOffset: 0,
@@ -702,7 +705,7 @@ function avatarHtml(name, url, platform) {
 const NAV = [
   { group: "订阅", items: [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
-    { route: "news", icon: NEWS_ICON, label: "财经资讯" },
+    { route: "news", icon: NEWS_ICON, label: "财经资讯", badge: "news" },
     { route: "mx-views", icon: MX_VIEWS_ICON, label: "观点研判" },
     { route: "holdings", icon: HOLDINGS_ICON, label: "持股研判" },
     { route: "knowledge", icon: BOOK_ICON, label: "研报中心" },
@@ -751,7 +754,7 @@ function renderSidebar(user) {
         <button class="nav-item" data-route="${item.route}" onclick="go('${item.route}')" title="${item.label}">
           <span class="nav-icon">${item.icon}</span>
           <span class="nav-label">${item.label}</span>
-          ${item.badge ? `<span class="nav-badge" data-request-badge hidden></span>` : ""}
+          ${item.badge ? `<span class="nav-badge" data-${item.badge}-badge hidden></span>` : ""}
         </button>`;
   const html = NAV.filter((g) => !g.admin || user.is_admin)
     .map((group) => `
@@ -775,7 +778,7 @@ function renderSidebar(user) {
 
 const MOBILE_NAV = [
   { route: "timeline", icon: HOME_ICON, label: "动态" },
-  { route: "news", icon: NEWS_ICON, label: "财经新闻" },
+  { route: "news", icon: NEWS_ICON, label: "财经新闻", badge: "news" },
   { route: "mx-views", icon: MX_VIEWS_ICON, label: "研判" },
   { route: "holdings", icon: HOLDINGS_ICON, label: "持股" },
   { route: "home", icon: GRID_ICON, label: "广场" },
@@ -844,7 +847,7 @@ function renderBottomNav(user) {
   bottomNavRouteSignature = routeSignature;
   nav.innerHTML = tabs.map((t) => `
     <button class="bnav-item" data-route="${t.route}" aria-label="${t.label}" title="${t.label}" onclick="goFromBottomNav(this, '${t.route}')">
-      <span class="bnav-icon">${t.icon}</span>
+      <span class="bnav-icon">${t.icon}${t.badge ? `<span class="bnav-badge" data-${t.badge}-badge hidden></span>` : ""}</span>
     </button>`).join("");
   ensureMobilePlatformSwipe();
 }
@@ -2485,6 +2488,11 @@ async function renderTimeline(seq) {
     </div>
     <div id="tl-active-chips-wrap"${live ? ' class="is-hidden"' : ""}>${live ? "" : tlActiveChipsHtml()}</div>
     <div class="tl-ima-entry">
+      <button type="button" class="tl-ima-entry-btn" onclick="go('news')">
+        <span class="tl-ima-entry-icon">${NEWS_ICON}</span>
+        <span><strong>财经新闻</strong><small>打开财经新闻</small></span>
+        <span class="nav-badge" data-news-badge hidden></span>
+      </button>
       <button type="button" class="tl-ima-entry-btn" onclick="go('knowledge')">
         <span class="tl-ima-entry-icon">${BOOK_ICON}</span>
         <span><strong>研报中心</strong><small>打开研报中心</small></span>
@@ -5429,9 +5437,18 @@ function mountAdminGroupTabs(groupKey, active) {
 
 function syncRequestBadges() {
   const count = Number(state.pendingKolRequests) || 0;
-  document.querySelectorAll("[data-request-badge]").forEach((el) => {
+  document.querySelectorAll("[data-requests-badge]").forEach((el) => {
     el.textContent = count ? String(count) : "";
     el.hidden = !count;
+  });
+}
+
+function updateNewsBadge() {
+  const count = Number(state.newsUnreadCount) || 0;
+  const label = count > 99 ? "99+" : (count ? String(count) : "");
+  document.querySelectorAll("[data-news-badge]").forEach((el) => {
+    el.textContent = label;
+    el.hidden = !label;
   });
 }
 
@@ -6612,6 +6629,7 @@ const {
   loadFinancialNews,
   loadRealtimeNews,
   loadResearchNews,
+  markAllNewsRead,
   newsRtBacktopClick,
   newsRtExpand,
   newsRtNewBadgeClick,
@@ -6630,6 +6648,8 @@ const {
   selectNewsResearchSource,
   selectNewsSource,
   selectNewsTab,
+  setNewsFontSize,
+  toggleNewsUnreadOnly,
 } = createNewsView({
   $,
   state,
@@ -6658,6 +6678,9 @@ const {
   // 追加在块尾：test_news_center_has_realtime_and_articles_tabs 检查既有依赖须在块首 450 字符内
   lockBodyScroll,
   unlockBodyScroll,
+  renderSidebar: () => renderSidebar(state.user),
+  renderBottomNav: () => renderBottomNav(state.user),
+  updateNewsBadge,
 });
 
 const {
@@ -6775,6 +6798,7 @@ const {
   enableWebPush,
   disableWebPush,
   saveKeywords,
+  saveKeywordsMatchNews,
   saveKeywordsMatchReports,
   toggleReportKeyword,
   saveLlm,
@@ -6945,7 +6969,7 @@ let codesView, loadAdminCodes, adminCodesBatch, adminCodesClearSelect, adminCode
 
 // admin 视图懒加载：news 由 ensureAdminViews() 赋值，求值期读到的是 undefined
 let newsView, loadAdminNews, loadAdminPosts, selectAdminNewsSource, saveAdminNewsSettings, refreshAllAdminNews, refreshAdminNewsFeed, toggleAdminNewsSource,
-  toggleAdminNewsFeed, archiveAdminNewsSource, restoreAdminNewsSource, deleteAdminNewsSource, archiveAdminNewsFeed, restoreAdminNewsFeed, deleteAdminNewsFeed, openNewsSourceModal, openNewsFeedModal,
+  toggleAdminNewsFeed, archiveAdminNewsSource, restoreAdminNewsSource, deleteAdminNewsSource, archiveAdminNewsFeed, restoreAdminNewsFeed, deleteAdminNewsFeed, loadAdminNewsArticles, deleteAdminNewsArticle, openNewsSourceModal, openNewsFeedModal,
   updateAdminNewsQuery, updateAdminNewsStatus, updateAdminNewsArchived, adminFilterPosts, adminPostsLoadMore, adminTogglePost, adminDeletePost, adminSetPostHidden;
 
 // admin 视图懒加载：users 由 ensureAdminViews() 赋值，求值期读到的是 undefined
@@ -7070,6 +7094,8 @@ async function ensureAdminViews() {
   archiveAdminNewsFeed,
   restoreAdminNewsFeed,
   deleteAdminNewsFeed,
+  loadAdminNewsArticles,
+  deleteAdminNewsArticle,
   openNewsSourceModal,
   openNewsFeedModal,
   updateAdminNewsQuery,
@@ -8675,7 +8701,9 @@ async function viewAiPrompt(logId) {
 
 // PWA：注册 Service Worker（HTTP 或私有模式下失败静默，不影响功能）
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").catch(() => { });
+  // 带 APP_VERSION 让注册 URL 随发版变化：CF 按默认规则边缘缓存 /sw.js，
+  // 固定 URL 曾导致浏览器一直拿到旧 SW（skipWaiting 永不触发、shell 缓存不换代）。
+  navigator.serviceWorker.register(`/sw.js?v=${APP_VERSION}`).catch(() => {});
 }
 
 function selectFeishuSource(button) {
@@ -9032,6 +9060,7 @@ const INLINE_HANDLERS = {
   copyText,
   createProxyPool,
   cycleTheme,
+  deleteAdminNewsArticle,
   deleteAdminNewsFeed,
   deleteAdminNewsSource,
   deleteProxyNode,
@@ -9086,6 +9115,7 @@ const INLINE_HANDLERS = {
   loadResearchNews,
   loadWscnBroadcastPanel,
   logout,
+  markAllNewsRead,
   newsKolAll,
   newsKolDiscard,
   newsKolNone,
@@ -9168,6 +9198,7 @@ const INLINE_HANDLERS = {
   markTurnstileDirty,
   clearImgbedSettings,
   saveKeywords,
+  saveKeywordsMatchNews,
   saveKeywordsMatchReports,
   saveKolEdit,
   saveLlm,
@@ -9201,6 +9232,7 @@ const INLINE_HANDLERS = {
   selectPlatformTab,
   setFeishuSourceDisplay,
   setImaGroupInterval,
+  setNewsFontSize,
   setPlazaSourceMode,
   setSubscribeType,
   setTheme,
@@ -9218,6 +9250,7 @@ const INLINE_HANDLERS = {
   testBackupWebDAV,
   testProxyNode,
   tlApplyFilter,
+  toggleNewsUnreadOnly,
   tlApplyRailSearch,
   tlFilterPanel,
   tlOnSearchInput,

@@ -1,0 +1,36 @@
+[Unit]
+Description=V Push ARM lab ops panel (Tailscale :8055)
+# Lab only. Not a reading desk. Not production vpush admin.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/vpush-ima-lab/src/arm-lab-ops
+Environment=TZ=Asia/Shanghai
+Environment=ARM_OPS_BIND=tailscale
+Environment=ARM_OPS_PORT=8055
+Environment=CACHE_ROOT=/data/vpush-ima-cache
+Environment=P115_COOKIES_FILE=/opt/vpush-ima-lab/secrets/115-cookies.txt
+Environment=VPUSH_CICC_COOKIE_FILE=/opt/vpush-ima-lab/secrets/cicc-cookies.txt
+Environment=IMA_PURE_SECRETS_FILE=/opt/vpush-ima-lab/secrets/ima-pure.json
+Environment=ARM_OPS_PASSWORD_FILE=/opt/vpush-ima-lab/secrets/arm-ops-password.txt
+Environment=P115_DEVICE_TYPE=harmony
+Environment=OPENLIST_PUBLIC_URL=http://100.112.25.21:5244/lab-hot
+Environment=ARM_OPS_PULL_HEALTH_URL=http://127.0.0.1:8743/healthz
+Environment=PULLER_HEALTH_FILE=/data/vpush-ima-cache/logs/health.json
+Environment=VPUSH_SCRIPTS_ROOT=/opt/vpush-ima-lab/src/scripts
+Environment=VPUSH_SRC_ROOT=/opt/vpush-ima-lab/src
+Environment=VPUSH_PYTHON=/opt/vpush-ima-lab/venv/bin/python
+Environment=ARM_EXPORT_ROOT=/srv/vpush-ima
+# Do not set PULLER_CONTAINER_NAME. Status comes from systemd + health files.
+ExecStart=/opt/vpush-ima-lab/venv/bin/python /opt/vpush-ima-lab/src/arm-lab-ops/ops_app.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1408,9 +1408,10 @@ def test_admin_content_group_tabs_and_redirects():
     redirects = src.split("const ADMIN_ROUTE_REDIRECTS = {", 1)[1].split("};", 1)[0]
     for old in ("dashboard", "kols", "vocab", "requests", "posts", "logs", "audit", "backup", "users", "codes"):
         assert f"{old}: " in redirects
-    # 页签点击走容器路由；待审批角标贯通侧边栏与页签
+    # 页签点击走容器路由；待审批角标贯通侧边栏与页签（角标节点按 data-${badge}-badge 模板渲染）
     assert "onclick=\"go('admin/${groupKey}?tab=${t.id}')\"" in src
-    assert 'data-request-badge' in src
+    assert "data-${item.badge}-badge" in src
+    assert "[data-requests-badge]" in src
     assert "state.pendingKolRequests = Number(st.pending_kol_requests) || 0" in (APP_JS.parent / "views" / "admin" / "dashboard.js").read_text()
     assert "state.pendingKolRequests = requests.length" in (APP_JS.parent / "views" / "admin" / "users.js").read_text()
     # vocab 内部页签改用 vtab（避免与容器 tab 参数冲突），旧深链由重定向带 vtab
@@ -4945,8 +4946,10 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert "打开研报中心" in timeline
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
-    # 手机（≤768px）也显示入口：知识库已放开移动端；hmf 端做单行紧凑化后下边距为 8px
-    assert "@media (max-width: 900px) {\n  .tl-ima-entry { display: block; margin: 0 0 8px; }" in css
+    # 手机（≤768px）也显示入口：知识库已放开移动端；财经新闻与研报中心并排
+    assert "grid-template-columns: 1fr 1fr" in css
+    assert "go('news')" in timeline
+    assert "财经新闻" in timeline
 
 
 

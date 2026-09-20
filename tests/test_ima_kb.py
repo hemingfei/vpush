@@ -1599,11 +1599,27 @@ def test_list_catalog_detail_ok_during_storage_outage(tmp_path, monkeypatch):
     assert group_id
 
 
-def test_pdf_txt_return_503_when_storage_unavailable(tmp_path, monkeypatch):
+def test_pdf_txt_serve_local_when_storage_status_stale(tmp_path, monkeypatch):
     client, archive_root, _ = _remote_storage_client(
         tmp_path, monkeypatch, available=False, writable=False
     )
     admin_headers, _, _, _ = _seed_remote_document(client, archive_root)
+    pdf = client.get("/api/ima-documents/file_storage/pdf", headers=admin_headers)
+    txt = client.get("/api/ima-documents/file_storage/text", headers=admin_headers)
+    assert pdf.status_code == 200
+    assert pdf.content.startswith(b"%PDF")
+    assert txt.status_code == 200
+    assert txt.text == "hello"
+
+
+def test_pdf_txt_return_503_when_nfs_isolated(tmp_path, monkeypatch):
+    client, archive_root, _ = _remote_storage_client(tmp_path, monkeypatch)
+    admin_headers, _, _, _ = _seed_remote_document(client, archive_root)
+    monkeypatch.setattr(
+        client.app.state.ima_documents.store,
+        "archive_nfs_isolated",
+        lambda: True,
+    )
     pdf = client.get("/api/ima-documents/file_storage/pdf", headers=admin_headers)
     txt = client.get("/api/ima-documents/file_storage/text", headers=admin_headers)
     assert pdf.status_code == 503

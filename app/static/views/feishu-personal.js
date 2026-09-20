@@ -681,6 +681,29 @@ export function createFeishuPersonalView(dependencies) {
     }
   }
 
+  async function saveKeywordsMatchNews() {
+    const routeSeq = currentRouteSeq();
+    const token = state.token;
+    const sessionGeneration = imaMountState.sessionGeneration;
+    const input = $("#set-kw-news");
+    const on = !!(input && input.checked);
+    try {
+      const data = await api("/api/me", {
+        method: "PUT",
+        body: JSON.stringify({ keywords_match_news: on }),
+      });
+      if (!routeStillActive(routeSeq) || token !== state.token
+        || sessionGeneration !== imaMountState.sessionGeneration) return;
+      if (state.user) state.user.keywords_match_news = !!(data && data.keywords_match_news);
+      flash(on ? "已开启财经新闻匹配" : "已关闭财经新闻匹配");
+    } catch (err) {
+      if (!routeStillActive(routeSeq) || token !== state.token
+        || sessionGeneration !== imaMountState.sessionGeneration) return;
+      if (input) input.checked = !on;
+      flash(err.message, "error");
+    }
+  }
+
   function syncReportWatchChips() {
     const watching = userKeywordSet();
     document.querySelectorAll(".ima-doc-tag.is-watch").forEach((btn) => {
@@ -892,6 +915,7 @@ export function createFeishuPersonalView(dependencies) {
     disableWebPush,
     saveKeywords,
     saveKeywordsMatchReports,
+    saveKeywordsMatchNews,
     toggleReportKeyword,
     saveLlm,
     testLlm,

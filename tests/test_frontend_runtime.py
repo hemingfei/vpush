@@ -180,7 +180,7 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
     payload = json.dumps({
         "delayed": delayed,
         "failImage": fail_image,
-        "sources": {"items": [{"id": 1, "name": "Test", "selected": True}], "collection_enabled": True},
+        "sources": {"items": [{"id": 1, "name": "Test", "selected": True, "group_name": "测试组"}], "collection_enabled": True, "unread_count": 2},
         "news": {"items": [{
             "id": 7, "has_image": True, "source_name": "Test",
             "published_at": "2026-09-04T00:00:00Z", "title": "Title",
@@ -190,8 +190,10 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
     page.context.add_init_script(
         "const data = " + payload + """;
           localStorage.setItem('dav_token', 'test-token');
+          window.__newsRequests = [];
           window.fetch = async (input) => {
             const url = String(input);
+            if (url.includes('/api/news')) window.__newsRequests.push(url);
             if (url.includes('/api/me')) {
               return { ok: true, status: 200, json: async () => ({ id: 1, username: 'test', news_visible: true }) };
             }
@@ -1312,6 +1314,7 @@ def test_mx_kol_holdings_slider_drags_while_held_and_sorts(page: Page):
         escapeHtml: (s) => String(s), setPageTitle: () => {}, go: () => {},
         routeStillActive: () => true, emptyState: () => "", flash: () => {},
         closeViewsDrawer: () => {},
+        mxHoldingsInScope: () => true,
       });
       Object.assign(window, view);
       h.rows = () => [...document.querySelectorAll("#mxc-summary .mxc-h-name")].map((e) => e.textContent);
@@ -1585,3 +1588,21 @@ def test_action_mark_modal_llm_action_preselect(page: Page, static_origin: str):
     expect(page.locator('#action-mark-mask .am-act-btn.on')).to_have_text("减仓")
     expect(page.locator("#am-auto-hint")).to_have_count(0)
     page.evaluate("closeActionMarkModal()")
+
+
+def test_news_list_groups_by_day_and_unread_toggle_sends_param(page: Page, static_origin: str):
+    install_news_bootstrap(page)
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
+    # 默认进实时资讯页签：先切到「财经新闻」再断言列表行为
+    page.get_by_role("tab", name="财经新闻").click()
+    # 未读徽标：侧栏与底栏入口显示来源接口返回的未读数
+    badge = page.locator("[data-news-badge]:not([hidden])")
+    expect(badge.first).to_have_text("2")
+    # 未读开关：点击后列表请求带 unread=1 且开关进入选中态
+    toggle = page.locator(".news-unread-toggle")
+    expect(toggle).to_be_visible()
+    toggle.click()
+    expect(toggle).to_have_class(re.compile(r"is-on"))
+    expect(page.locator("#news-list .news-day-sep").first).to_be_visible()
+    sent = page.evaluate("() => window.__newsRequests")
+    assert any("unread=1" in url for url in sent)

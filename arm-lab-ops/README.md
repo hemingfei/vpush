@@ -56,18 +56,18 @@ python ops_app.py
 
 没有 `p115client` 时面板仍能看状态；点「开始扫码」会失败并保持关闭（不自己打 115 HTTP）。
 
-## ARM 部署
+## ARM 部署（宿主机 systemd）
 
-仓库目录拷到 `/opt/vpush-ima-lab/arm-lab-ops/`（或 `src/arm-lab-ops/`，与现网一致），把 [`docker-compose.snippet.yml`](docker-compose.snippet.yml) 并进实验室 compose（**不要**写进生产 `docker-compose*.yml`）。
+puller 与 ops 走宿主机 systemd，和 `vpush-ima-pull` / cache-gc / 日同步 timer 同一套。实验室 compose **只留 OpenList**。**不要**写进生产 `docker-compose*.yml`，也不要再启 `arm-lab-ops` / `vpush-ima-lab-puller-1` 容器。
 
-Cookie / token / 口令文件只放宿主机 **`/opt/vpush-ima-lab/secrets/`**（容器内 `/secrets`），**永远不要提交**。建议 `0700` 目录、`0600` 文件：
+Cookie / token / 口令文件只放宿主机 **`/opt/vpush-ima-lab/secrets/`**，**永远不要提交**。建议 `0700` 目录、`0600` 文件：
 
-| 宿主机路径 | 容器路径 | 用途 |
-|---|---|---|
-| `/opt/vpush-ima-lab/secrets/arm-ops-password.txt` | `/secrets/arm-ops-password.txt` | 面板口令 |
-| `/opt/vpush-ima-lab/secrets/115-cookies.txt` | `/secrets/115-cookies.txt` | 115 QR / puller |
-| `/opt/vpush-ima-lab/secrets/cicc-cookies.txt` | `/secrets/cicc-cookies.txt` | CICC lab sync |
-| `/opt/vpush-ima-lab/secrets/ima-pure.json` | `/secrets/ima-pure.json` | IMA lab sync `{"uid","refresh_token"}` |
+| 宿主机路径 | 用途 |
+|---|---|
+| `/opt/vpush-ima-lab/secrets/arm-ops-password.txt` | 面板口令 |
+| `/opt/vpush-ima-lab/secrets/115-cookies.txt` | 115 QR / puller |
+| `/opt/vpush-ima-lab/secrets/cicc-cookies.txt` | CICC lab sync |
+| `/opt/vpush-ima-lab/secrets/ima-pure.json` | IMA lab sync `{"uid","refresh_token"}` |
 
 ```bash
 # 在 ARM 上，一次
@@ -83,36 +83,39 @@ install -m 600 /dev/null /opt/vpush-ima-lab/secrets/arm-ops-password.txt
 #   ARM_OPS_BIND=<tailscale-ipv4>
 #   OPENLIST_PUBLIC_URL=http://<tailscale-ipv4>:5244/lab-hot
 
+# 面板依赖进宿主机 venv（不再用 ops 镜像）
+/opt/vpush-ima-lab/venv/bin/pip install -r /opt/vpush-ima-lab/src/arm-lab-ops/requirements.txt
+/opt/vpush-ima-lab/venv/bin/pip install p115client
+
+install -m 644 arm-lab-ops/systemd/vpush-arm-lab-ops.service \
+  arm-lab-ops/systemd/vpush-ima-lab-puller.service /etc/systemd/system/
+# puller 四份脚本须在同一目录，见 scripts/puller_loop.md
+systemctl daemon-reload
+# 若 cache / secrets 曾是 root 容器在写：
+#   chown -R ubuntu:ubuntu /data/vpush-ima-cache
+#   chown ubuntu:ubuntu /opt/vpush-ima-lab/secrets/*
+systemctl enable --now vpush-ima-lab-puller.service vpush-arm-lab-ops.service
+
+# 停掉实验室 compose 里的两份容器；OpenList 留下
 cd /opt/vpush-ima-lab
-# 将 snippet 的 arm-lab-ops service 合入现有 compose 后：
-docker compose build arm-lab-ops
-docker compose up -d arm-lab-ops
+docker stop arm-lab-ops vpush-ima-lab-puller-1
+docker rm arm-lab-ops vpush-ima-lab-puller-1
 ```
 
-`git pull` 后再 recreate 一次，避免丢掉 live 的 rw cache / src+venv / `VPUSH_PYTHON`：
+`git pull` 后重启 unit（puller 若仍用 `/opt/vpush-ima-lab/scripts/` 副本，先按 `scripts/puller_loop.md` 再 install 一遍）：
 
 ```bash
-cd /opt/vpush-ima-lab
+cd /opt/vpush-ima-lab/src
 git pull
-docker compose build arm-lab-ops
-docker compose up -d arm-lab-ops
+systemctl restart vpush-arm-lab-ops.service
+systemctl restart vpush-ima-lab-puller.service
 ```
 
-Phase 2 要 **重入 failed** 以及写 `logs/ops-audit.jsonl`，所以 **`CACHE_ROOT` 需要 rw**（phase 1 常见 ro 不够）。也可以只把 `failed/` + `staging/` + `logs/` 以 rw 挂进去；推荐整棵 cache rw。
+Phase 2 要 **重入 failed** 以及写 `logs/ops-audit.jsonl`，所以进程对 **`CACHE_ROOT` 需要 rw**。unit 直接读宿主机路径，不再 bind-mount，也不再挂 `docker.sock`。
 
-触发 IMA/CICC 脚本时，host-network 容器通过 bind-mount `/opt/vpush-ima-lab/src` 执行宿主机脚本。`VPUSH_SCRIPTS_ROOT` 默认 `/opt/vpush-ima-lab/src/scripts`（找不到再试仓库 `../scripts`）。**必须**设 `VPUSH_PYTHON=/opt/vpush-ima-lab/venv/bin/python` 并 **ro 挂上宿主机 `venv/`**——镜像自带 Python 缺 `app.*` 依赖，宿主机 venv 才有。
+`VPUSH_SCRIPTS_ROOT` 默认 `/opt/vpush-ima-lab/src/scripts`（找不到再试仓库 `../scripts`）。**必须**设 `VPUSH_PYTHON=/opt/vpush-ima-lab/venv/bin/python`——样本 unit 已写死。
 
-卷（与 live `docker-compose.ops.yml` 对齐）：
-
-| 挂载 | 权限 | 用途 |
-|---|---|---|
-| `/data/vpush-ima-cache` | **rw（phase 2）** | staging / hot / failed / logs；requeue 要写 staging+failed+audit |
-| `/opt/vpush-ima-lab/src` | ro | `scripts/ima_arm_lab_sync.py` / `cicc_arm_lab_sync.py` |
-| `/opt/vpush-ima-lab/venv` | ro | `VPUSH_PYTHON`；镜像 Python 不够跑 lab sync |
-| `/opt/vpush-ima-lab/secrets` → `/secrets` | rw | QR 改写 `115-cookies.txt`（0600）；CICC / IMA 凭据只读使用 |
-| `/var/run/docker.sock` | ro | 看 puller 容器（`PULLER_CONTAINER_NAME`，默认 `vpush-ima-lab-puller-1`） |
-
-Puller 健康信息按顺序尝试：`PULLER_HEALTH_URL` → `PULLER_HEALTH_FILE`（默认 `$CACHE_ROOT/logs/health.json`）→ docker.sock / `docker ps` → `$CACHE_ROOT/logs/` 尾部 + `systemctl show vpush-ima-lab-sync.timer`（active / next run，best-effort）。
+Puller 健康信息按顺序尝试：`PULLER_HEALTH_URL` → `PULLER_HEALTH_FILE`（默认 `$CACHE_ROOT/logs/health.json`）→ `systemctl show vpush-ima-lab-puller.service` → `$CACHE_ROOT/logs/` 尾部 + IMA / CICC timer（active / next，best-effort）。只有显式设了 `PULLER_CONTAINER_NAME` 才再去看 docker。
 
 同步摘要读最新 `$CACHE_ROOT/logs/ima-lab-sync-*.log`，并尝试 `journalctl -u vpush-ima-lab-sync.service` 一小段（失败则忽略）。CICC 日跑日志在 `$CACHE_ROOT/logs/cicc-lab-sync-*.log`。
 

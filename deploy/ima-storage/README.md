@@ -80,6 +80,15 @@ RESTIC_REPOSITORY=<main-control-repo>
 RESTIC_PASSWORD=<main-control-password>
 ```
 
+## Production isolation (do not remount)
+
+A hung NFS client on DMIT is what previously took the whole site down with the storage box. After ARM:
+
+- `IMA_ARCHIVE_HOST_PATH` stays a **local** directory. Do not mount ARM or storage here.
+- `main-health.sh` defaults to `IMA_ALLOW_NFS_REMOUNT=0`: it will not `mount`, not `stat` an NFS tree, and not read `.vpush-storage-health.json` off a remote mount.
+- Set `IMA_ALLOW_NFS_REMOUNT=1` only as an emergency rollback. Do not re-enable `vpush-ima-recover.timer`.
+- vpush talks to ARM with HTTP (`IMA_PULL_URL`, `GET /file`) and timeouts.
+
 ## NFS export identity
 
 Storage export must squash to the container archive identity:

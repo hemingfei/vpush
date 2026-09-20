@@ -1,0 +1,15 @@
+[Unit]
+Description=V Push ARM hot → classic NFS export tree (incremental only)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+Environment=CACHE_ROOT=/data/vpush-ima-cache
+Environment=VPUSH_NFS_SYNC_SOURCE=/data/vpush-ima-cache/hot
+Environment=VPUSH_NFS_SYNC_DEST=/srv/vpush-ima
+Environment=VPUSH_PYTHON=/opt/vpush-ima-lab/venv/bin/python
+ExecStart=/opt/vpush-ima-lab/bin/arm-nfs-sync.sh
+Nice=10
+IOSchedulingClass=idle

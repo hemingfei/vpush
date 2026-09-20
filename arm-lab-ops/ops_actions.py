@@ -17,6 +17,9 @@ from typing import Any
 
 from ops_settings import (
     AUDIT_LOG_NAME,
+    CICC_INCR_DAYS_DEFAULT,
+    CICC_INCR_DAYS_MAX,
+    CICC_INCR_DAYS_MIN,
     IMA_GROUP_ALLOWLIST,
     LAST_JOB_NAME,
     REQUEUE_CAP,
@@ -30,6 +33,7 @@ from ops_settings import (
     python_bin,
     scripts_root,
     src_root,
+    cicc_timeout_seconds,
     sync_timeout_seconds,
 )
 from ops_status import list_failed_files, redact, skip_cache_file
@@ -338,63 +342,51 @@ def run_subprocess_job(
         _JOB_LOCK.release()
 
 
+IMA_DUAL_COLLECT = "IMA 由 vpush 经 /pull 增量采集，ARM 实验室 timer 已停用，勿在此双采"
+
+
+def clamp_cicc_days(raw: Any, *, default: int = CICC_INCR_DAYS_DEFAULT) -> int:
+    if raw is None or raw == "":
+        value = default
+    else:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ActionError("days must be an integer") from exc
+    return min(max(value, CICC_INCR_DAYS_MIN), CICC_INCR_DAYS_MAX)
+
+
 def ima_sync(body: dict[str, Any] | None, *, dry_run: bool) -> dict[str, Any]:
-    payload = body if isinstance(body, dict) else {}
-    if not dry_run:
-        require_confirm(payload)
-    limit = clamp_sync_limit(payload.get("limit"))
-    group = normalize_ima_group(payload.get("group"))
-    secrets = ima_secrets_path()
-    if not secrets.is_file():
-        raise ActionError("IMA secrets file missing")
-    script = _script_path("ima_arm_lab_sync.py")
-    mode = "--dry-run" if dry_run else "--apply"
-    argv = [
-        python_bin(),
-        str(script),
-        "--enable",
-        mode,
-        "--limit",
-        str(limit),
-        "--group",
-        group,
-    ]
-    action = "ima-dry-run" if dry_run else "ima-apply"
-    result = run_subprocess_job(action, argv)
-    result["limit"] = limit
-    result["group"] = group
-    return result
+    """IMA collection lives on vpush → ARM /pull. Refuse dual-collect."""
+    del body, dry_run
+    raise ActionError(IMA_DUAL_COLLECT, 409)
 
 
 def cicc_sync(body: dict[str, Any] | None, *, dry_run: bool) -> dict[str, Any]:
     payload = body if isinstance(body, dict) else {}
     if not dry_run:
         require_confirm(payload)
-    limit = clamp_sync_limit(payload.get("limit"))
     cookie = cicc_cookie_path()
     if not cookie.is_file():
         raise ActionError(
             f"CICC cookie file missing ({cookie.name}); set VPUSH_CICC_COOKIE_FILE"
         )
-    script = _script_path("cicc_arm_lab_sync.py")
-    mode = "--dry-run" if dry_run else "--apply"
+    raw_days = payload.get("days")
+    if raw_days in (None, ""):
+        raw_days = payload.get("cicc_incr_days")
+    days = clamp_cicc_days(raw_days)
+    script = _script_path("cicc_report_collector.py")
     argv = [
         python_bin(),
         str(script),
-        "--enable",
-        mode,
-        "--limit",
-        str(limit),
+        "--arm-middleware",
+        "--days",
+        str(days),
     ]
-    days = payload.get("days")
-    if days not in (None, ""):
-        try:
-            days_n = max(0, min(int(days), 30))
-        except (TypeError, ValueError) as exc:
-            raise ActionError("days must be an integer") from exc
-        argv.extend(["--days", str(days_n)])
+    if dry_run:
+        argv.append("--dry-run")
     action = "cicc-dry-run" if dry_run else "cicc-apply"
-    result = run_subprocess_job(action, argv)
-    result["limit"] = limit
+    result = run_subprocess_job(action, argv, timeout=cicc_timeout_seconds())
+    result["days"] = days
     return result
 

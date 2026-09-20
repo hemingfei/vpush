@@ -218,6 +218,9 @@ def test_main_health_logs_one_transition_event():
     assert "mount " in text
     assert ".vpush-ima-root" in text
     assert "nc -z" in text or "nc -z" in text.replace('"', "")
+    assert "IMA_ALLOW_NFS_REMOUNT" in text
+    assert "archive_mount_is_nfs" in text
+    assert "SKIP_REMOTE_HEALTH" in text
 
 
 def test_systemd_services_harden_runtime():

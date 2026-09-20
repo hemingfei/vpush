@@ -57,7 +57,7 @@ export function createAdminNewsView(dependencies) {
   function adminNewsSourceRowHtml(source) {
     const status = adminNewsSourceStatus(source);
     return `<button type="button" class="news-admin-source-row ${source.id === adminNewsState.selectedId ? "is-selected" : ""} ${source.archived_at ? "is-archived" : ""}" onclick="selectAdminNewsSource(${source.id})">
-      <span class="news-admin-source-name">${escapeHtml(source.name)}</span>
+      <span class="news-admin-source-name">${escapeHtml(source.name)}${source.group_name ? `<em class="news-admin-source-group">${escapeHtml(source.group_name)}</em>` : ""}</span>
       <span class="news-admin-source-meta"><span class="news-admin-status news-admin-status-${status}">${adminNewsStatusLabel(status)}</span><span>${source.article_count || 0} 篇</span></span>
     </button>`;
   }
@@ -115,6 +115,8 @@ export function createAdminNewsView(dependencies) {
           ${selected.archived_at ? "" : `<button type="button" class="btn-normal" onclick="openNewsFeedModal(${selected.id})">${PLUS_ICON} 添加 Feed</button>`}
         </div>
         <div class="news-admin-feeds">${(selected.feeds || []).length ? selected.feeds.map(adminNewsFeedRowHtml).join("") : emptyState("还没有配置 Feed")}</div>
+        <div class="news-admin-feed-head" style="margin-top:18px"><div><h3>文章</h3><p class="section-meta">仅显示最近文章；删除单篇不可恢复。</p></div></div>
+        <div id="admin-news-articles" class="news-admin-feeds">${emptyState("加载中…")}</div>
       </section>` : `<section class="news-admin-detail-panel">${emptyState("选择一个媒体开始管理")}</section>`;
     const settings = adminNewsState.settings || { enabled: true, visible: true, refresh_interval_minutes: 10 };
     const selectedStatus = adminNewsState.status;
@@ -164,6 +166,7 @@ export function createAdminNewsView(dependencies) {
       renderTopbar(state.user);
       renderBottomNav(state.user);
       renderAdminNews();
+      if (adminNewsState.selectedId) loadAdminNewsArticles(adminNewsState.selectedId);
       return true;
     } catch (err) {
       if (!routeStillActive(seq) || loadSeq !== _adminNewsLoadSeq) return false;
@@ -175,6 +178,43 @@ export function createAdminNewsView(dependencies) {
   function selectAdminNewsSource(sourceId) {
     adminNewsState.selectedId = Number(sourceId);
     renderAdminNews();
+    if (adminNewsState.selectedId) loadAdminNewsArticles(adminNewsState.selectedId);
+  }
+
+  let _adminNewsArticlesSeq = 0;
+
+  async function loadAdminNewsArticles(sourceId) {
+    const seq = ++_adminNewsArticlesSeq;
+    const container = $("#admin-news-articles");
+    if (!container) return;
+    try {
+      const data = await api(`/api/admin/news/articles?source_id=${sourceId}&limit=50`);
+      if (seq !== _adminNewsArticlesSeq || !document.body.contains(container)) return;
+      const items = data.items || [];
+      container.innerHTML = items.length ? items.map((article) => `
+        <div class="news-admin-feed-row">
+          <div class="news-admin-feed-main">
+            <div class="news-admin-feed-title"><strong>${escapeHtml(article.title)}</strong></div>
+            <div class="news-admin-feed-meta">${escapeHtml(article.feed_name || "")} · ${escapeHtml((article.published_at || "").slice(0, 16).replace("T", " "))}</div>
+          </div>
+          <div class="news-admin-feed-actions">
+            <button type="button" class="btn-ghost danger" onclick="deleteAdminNewsArticle(${article.id})">删除</button>
+          </div>
+        </div>`).join("") : emptyState("该媒体还没有文章");
+    } catch (err) {
+      if (seq === _adminNewsArticlesSeq && document.body.contains(container)) {
+        container.innerHTML = emptyState("加载失败: " + err.message);
+      }
+    }
+  }
+
+  async function deleteAdminNewsArticle(articleId) {
+    if (!confirm("删除这篇文章？不可恢复。")) return;
+    try {
+      await api(`/api/admin/news/articles/${articleId}`, { method: "DELETE" });
+      flash("文章已删除");
+      await loadAdminNews(currentRouteSeq());
+    } catch (err) { flash(err.message, "error"); }
   }
 
   async function saveAdminNewsSettings() {
@@ -329,7 +369,9 @@ export function createAdminNewsView(dependencies) {
     mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-source-modal-title">
       <h3 id="news-source-modal-title">${source ? "编辑媒体" : "新增媒体"}</h3>
       <label class="form-label">媒体名称<input id="news-source-name" class="form-control" maxlength="60" value="${escapeHtml(source?.name || "")}"></label>
-      <p class="muted">新增媒体不会自动加入任何用户的新闻流；启用全文采集前请确认内容许可。</p>
+      <label class="form-label">分组<input id="news-source-group" class="form-control" maxlength="40" list="news-group-suggestions" value="${escapeHtml(source?.group_name || "")}" placeholder="如：国内宏观 / 国际 / 科技"></label>
+      <datalist id="news-group-suggestions"><option value="国内宏观"></option><option value="国际"></option><option value="科技"></option><option value="公司"></option></datalist>
+      <p class="muted">新增媒体不会自动加入任何用户的新闻流；启用全文采集前请确认内容许可。分组用于用户端来源选择器。</p>
       <div class="toolbar"><button type="button" class="btn-normal" id="news-source-save">保存</button><button type="button" class="btn-ghost" data-close>取消</button></div>
     </div>`;
     document.body.appendChild(mask);
@@ -339,13 +381,14 @@ export function createAdminNewsView(dependencies) {
     mask.querySelector("[data-close]").addEventListener("click", close);
     mask.querySelector("#news-source-save").addEventListener("click", async () => {
       const name = mask.querySelector("#news-source-name").value.trim();
+      const group_name = mask.querySelector("#news-source-group").value.trim();
       if (!name) { flash("媒体名称不能为空", "error"); return; }
       const seq = currentRouteSeq();
       const button = mask.querySelector("#news-source-save");
       button.disabled = true;
       try {
         await api(source ? `/api/admin/news/sources/${source.id}` : "/api/admin/news/sources", {
-          method: source ? "PATCH" : "POST", body: JSON.stringify({ name }),
+          method: source ? "PATCH" : "POST", body: JSON.stringify({ name, group_name }),
         });
         if (!routeStillActive(seq)) return;
         close();
@@ -597,6 +640,8 @@ export function createAdminNewsView(dependencies) {
     archiveAdminNewsFeed,
     restoreAdminNewsFeed,
     deleteAdminNewsFeed,
+    loadAdminNewsArticles,
+    deleteAdminNewsArticle,
     openNewsSourceModal,
     openNewsFeedModal,
     updateAdminNewsQuery,

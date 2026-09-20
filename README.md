@@ -47,6 +47,10 @@
 
 ## 快速 Docker 部署
 
+自托管（NAS / VPS / 群晖）：按本节用 Docker Compose 或官方镜像。
+现网 [vpush.net](https://vpush.net/) 发版：只走 Lane A，见 [docs/deploy-lanes.md](docs/deploy-lanes.md) 与 `scripts/release_vpush.sh`。
+实验室 / IMA / 中金机房：见 [docs/ARM中间层架构.md](docs/ARM中间层架构.md)，不跟现网发版一起做。
+
 ### 0. 用 AI Agent 部署（可选，推荐）
 
 本项目从部署、配置到日常运维都可以交给 AI Agent（如 Codex、Claude Code、Cursor 等）直接完成。克隆仓库后，把目标交给 AI Agent，它会自行阅读本 README 与部署文档、准备配置、执行命令并做健康检查：
@@ -215,7 +219,7 @@ docker compose up -d --build
 
 ## ARM 中间层
 
-ARM（Oracle-SJ-ARM）可作为采集与对象存储之间的中间层：采集只写 staging，由宿主机权威 `scripts/puller_loop.py`（及 `lab_common.py` / `manifest.py`，部署到 `/opt/vpush-ima-lab/scripts/`）上传 115，存储恢复后再用 `scripts/arm_nfs_sync.py` 做 NFS 兼容同步（**默认关**，开关独立于中间层）。OpenList 只读 `/lab-hot`，不暴露 115。**默认关闭**（`VPUSH_ARM_MIDDLEWARE=1` / `--arm-middleware` 才打开），生产 compose 与存储机采集行为不变。中金与 IMA 新下载均可直接写 `$VPUSH_ARM_STAGING_ROOT/local/.../YYYY/MM/DD/`；实验室限量入口是 `ima_arm_lab_sync` / `cicc_arm_lab_sync`。实验室运维面板见 [arm-lab-ops/README.md](arm-lab-ops/README.md)（phase 3：同步时钟 / limit / `PULLER_BATCH_SIZE` 旋钮；hot 文件 `0664`）。说明见 [docs/arm-middleware.md](docs/arm-middleware.md)。
+ARM（Oracle-SJ-ARM）是采集 + 中间层：只做增量采集，热缓存与 HTTP 拉取给 vpush；115 / 存储机是冷备。生产只连 ARM HTTP（超时 + 熔断），**禁止把 ARM/存储 NFS 挂进现网**。实验室脚本在 `/opt/vpush-ima-lab/`；ops / puller / ima-pull 走宿主机 systemd，compose **只留 OpenList**。运维见 [arm-lab-ops/README.md](arm-lab-ops/README.md)。说明见 [docs/ARM中间层架构.md](docs/ARM中间层架构.md)。
 
 ## 推送渠道配置
 

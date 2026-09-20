@@ -397,11 +397,11 @@ class NewsService:
                 datetime.now(UTC) - timedelta(days=retention_days)
                 if retention_days is not None else None
             )
-            stored = 0
+            batch = []
             for article in parsed.articles:
                 if cutoff is not None and datetime.fromisoformat(article.published_at) < cutoff:
                     continue
-                self.db.upsert_news_article({
+                batch.append({
                     "source_id": feed["source_id"],
                     "feed_id": feed_id,
                     "external_id": article.external_id,
@@ -415,7 +415,7 @@ class NewsService:
                     "fetched_at": article.fetched_at,
                     "content_hash": article.content_hash,
                 })
-                stored += 1
+            stored = self.db.upsert_news_articles_batch(batch)
             self.db.mark_news_feed_success(
                 feed_id,
                 etag=response.headers.get("etag", ""),

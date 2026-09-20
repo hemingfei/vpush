@@ -5,6 +5,8 @@
         存储机 vpush-cicc-dispatch.path 消费（mode ∈ MODES）
   状态  读 local/.cicc/status.json（存储机每 60s 刷新，超时视为 stale）
   开关  写/删 local/.cicc/incremental.enabled（每日 03:00 增量的总开关）
+
+生产归档若是远程 NFS，这里拒绝一切读写，避免存储/ARM 挂了把管理页和 uvicorn 卡死。
 """
 from __future__ import annotations
 
@@ -14,6 +16,8 @@ import re
 import time
 import uuid
 from pathlib import Path
+
+from .archive_guard import is_remote_nfs
 
 MODES = ("incr", "year", "all", "stop", "compress", "schedule", "settings", "backup")
 STATUS_STALE_SECONDS = 300
@@ -31,11 +35,25 @@ CICC_CATEGORIES = ("宏观经济", "市场策略", "全球研究", "行业研究
                    "量化及ESG", "大宗商品", "外汇研究", "固定收益", "中金研究院", "其他")
 
 
+class CiccIsolatedError(RuntimeError):
+    """Archive is remote NFS; refuse I/O so a dead peer cannot stall the host."""
+
+
 class CiccControl:
     def __init__(self, archive_root: str):
-        self.ctrl = Path(archive_root) / "local" / ".cicc"
+        self.archive_root = Path(archive_root)
+        self.ctrl = self.archive_root / "local" / ".cicc"
+
+    def isolated(self) -> bool:
+        return is_remote_nfs(self.archive_root) or is_remote_nfs(self.ctrl)
+
+    def _refuse_if_isolated(self) -> None:
+        if self.isolated():
+            raise CiccIsolatedError("知识库存储暂不可用")
 
     def status(self) -> dict:
+        if self.isolated():
+            return {"available": False, "stale": True, "reason": "isolated"}
         path = self.ctrl / "status.json"
         try:
             with open(path, encoding="utf-8") as f:
@@ -48,6 +66,7 @@ class CiccControl:
     def trigger(self, mode: str, actor: str, extra: dict | None = None) -> dict:
         if mode not in MODES:
             raise ValueError(f"未知操作：{mode}")
+        self._refuse_if_isolated()
         cmds = self.ctrl / "commands"
         cmds.mkdir(parents=True, exist_ok=True)
         cmd_id = uuid.uuid4().hex
@@ -63,10 +82,14 @@ class CiccControl:
         return {"queued": mode}
 
     def schedule_enabled(self) -> bool:
+        if self.isolated():
+            return False
         return (self.ctrl / "incremental.enabled").exists()
 
     def read_schedule(self) -> dict:
         """当前采集时间计划（存储机 cicc-schedule.json，经 status 透传时缺省 03:00）。"""
+        if self.isolated():
+            return {"time": "03:00", "schedule_enabled": False}
         data = json.loads((self.ctrl / "status.json").read_text(encoding="utf-8")) \
             if (self.ctrl / "status.json").exists() else {}
         storage = data.get("storage") or {}
@@ -89,6 +112,7 @@ class CiccControl:
         return self.trigger("settings", actor, extra=extra)
 
     def set_schedule(self, enabled: bool) -> dict:
+        self._refuse_if_isolated()
         self.ctrl.mkdir(parents=True, exist_ok=True)
         flag = self.ctrl / "incremental.enabled"
         if enabled:

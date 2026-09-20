@@ -32,6 +32,12 @@ PULLER_BATCH_DEFAULT = 40
 PULLER_BATCH_MIN = 1
 PULLER_BATCH_MAX = 200
 DEFAULT_IMA_GROUPS_PARALLEL = True
+CICC_INCR_DAYS_DEFAULT = 3
+CICC_INCR_DAYS_MIN = 1
+CICC_INCR_DAYS_MAX = 14
+DEFAULT_EXPORT_ROOT = "/srv/vpush-ima"
+DEFAULT_PULL_HEALTH_URL = "http://127.0.0.1:8743/healthz"
+DEFAULT_PULLER_UNIT = "vpush-ima-lab-puller.service"
 SESSION_COOKIE = "arm_ops"
 SESSION_TTL_SECONDS = 12 * 3600
 QR_START_LIMIT = 5
@@ -46,11 +52,14 @@ REQUEUE_CAP = 100
 SYNC_LIMIT_DEFAULT = 3
 SYNC_LIMIT_MAX = 5
 SYNC_TIMEOUT_SECONDS = 120
+CICC_TIMEOUT_SECONDS = 21600
 SYNC_OUTPUT_CHARS = 4000
 JOURNAL_LINES = 40
 CACHE_WARN_GB_DEFAULT = 30.0
 CACHE_FORCE_GB_DEFAULT = 35.0
 IMA_SYNC_LOG_GLOB = "ima-lab-sync-*.log"
+IMA_HOST_SYNC_LOG_GLOB = "ima-host-sync-*.log"
+CICC_SYNC_LOG_GLOB = "cicc-host-sync-*.log"
 RETRY_SUFFIX = ".retry.json"
 SKIP_SUFFIXES = (".retry.json", ".tmp", ".part", ".partial", ".lock", ".swp")
 AUDIT_LOG_NAME = "ops-audit.jsonl"
@@ -149,7 +158,9 @@ def scripts_root() -> Path:
         here.parent.parent / "scripts",
     )
     for candidate in candidates:
-        if (candidate / "ima_arm_lab_sync.py").is_file():
+        if (candidate / "cicc_report_collector.py").is_file() or (
+            candidate / "ima_arm_lab_sync.py"
+        ).is_file():
             return candidate
     return Path(DEFAULT_SCRIPTS_ROOT)
 
@@ -197,8 +208,21 @@ def sync_timeout_seconds() -> int:
     return env_int("ARM_OPS_SYNC_TIMEOUT", SYNC_TIMEOUT_SECONDS)
 
 
+def cicc_timeout_seconds() -> int:
+    return env_int("ARM_OPS_CICC_TIMEOUT", CICC_TIMEOUT_SECONDS)
+
+
 def openlist_public_url() -> str:
     return env_str("OPENLIST_PUBLIC_URL", "")
+
+
+def export_root() -> Path:
+    return Path(env_str("ARM_EXPORT_ROOT", DEFAULT_EXPORT_ROOT))
+
+
+def pull_health_url() -> str:
+    """Empty unless ARM_OPS_PULL_HEALTH_URL is set (tests stay offline)."""
+    return env_str("ARM_OPS_PULL_HEALTH_URL", "")
 
 
 def puller_health_url() -> str:
@@ -218,7 +242,12 @@ def docker_sock() -> Path:
 
 
 def puller_container_name() -> str:
+    """Set only to watch a leftover compose puller. Host units leave this empty."""
     return env_str("PULLER_CONTAINER_NAME", "")
+
+
+def puller_unit() -> str:
+    return env_str("ARM_OPS_PULLER_UNIT", DEFAULT_PULLER_UNIT)
 
 
 def timer_unit() -> str:

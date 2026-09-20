@@ -1,0 +1,17 @@
+[Unit]
+Description=V Push IMA PDF puller on ARM (collection + hot cache, not a backup sidecar)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/vpush-ima-lab
+# Writes the classic POSIX tree vpush will mount. Bind Tailscale only.
+ExecStart=/usr/bin/python3 /opt/vpush-ima-lab/src/app/ima_puller.py --root /srv/vpush-ima --bind 100.112.25.21 --port 8743 --token-file /opt/vpush-ima-lab/secrets/ima-pull-arm.token
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

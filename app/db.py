@@ -928,6 +928,7 @@ CREATE TABLE IF NOT EXISTS news_sources (
     enabled INTEGER NOT NULL DEFAULT 1,
     built_in INTEGER NOT NULL DEFAULT 0,
     default_selected INTEGER NOT NULL DEFAULT 0,
+    group_name TEXT NOT NULL DEFAULT '',
     archived_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -1774,6 +1775,18 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE users ADD COLUMN keywords_match_reports_since TEXT NOT NULL DEFAULT ''"
             )
+        if "keywords_match_news" not in user_cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN keywords_match_news INTEGER NOT NULL DEFAULT 0"
+            )
+        if "keywords_match_news_since" not in user_cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN keywords_match_news_since TEXT NOT NULL DEFAULT ''"
+            )
+        if "news_font_size" not in user_cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN news_font_size TEXT NOT NULL DEFAULT ''"
+            )
         self._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_feed_token "
             "ON users(feed_token) WHERE feed_token != ''"
@@ -1969,6 +1982,14 @@ class DB:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_knowledge_kw_notified_user "
             "ON knowledge_keyword_notified(user_id)"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS news_keyword_notified ("
+            "  user_id INTEGER NOT NULL,"
+            "  article_id INTEGER NOT NULL,"
+            "  created_at TEXT NOT NULL DEFAULT (datetime('now')),"
+            "  PRIMARY KEY (user_id, article_id)"
+            ")"
         )
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS hosted_images ("
@@ -2177,6 +2198,17 @@ class DB:
         migrate_split_combined_target_names(self)
 
     def _migrate_news(self) -> None:
+        # 列迁移必须先于 v1 早退：老库补列与 seed 无关，不能被一次性 gate 跳过。
+        source_cols = {row["name"] for row in self._rows("PRAGMA table_info(news_sources)")}
+        if "group_name" not in source_cols:
+            self._conn.execute(
+                "ALTER TABLE news_sources ADD COLUMN group_name TEXT NOT NULL DEFAULT ''"
+            )
+        # 内置源只在首次 seed（news_default_sources_v1 置位后整体跳过）：
+        # 否则 INSERT OR IGNORE 拦不住已删除的行，管理员「彻底删除」内置源
+        # 会在每次重启时复活。新增内置源时需换新 key（如 news_default_sources_v2）。
+        if self.get_setting("news_default_sources_v1") == "1":
+            return
         for slug, name, feeds in _BUILTIN_NEWS:
             self._conn.execute(
                 "INSERT OR IGNORE INTO news_sources "
@@ -3408,10 +3440,15 @@ class DB:
                 raise
 
     def touch_last_login(self, user_id: int) -> None:
-        self._execute(
-            "UPDATE users SET last_login_at = datetime('now') WHERE id = ?",
-            (user_id,),
-        )
+        try:
+            self._execute(
+                "UPDATE users SET last_login_at = datetime('now') WHERE id = ?",
+                (user_id,),
+            )
+        except sqlite3.OperationalError as exc:
+            # WAL writer contention must not 500 /api/me — the SPA treats that as a blank page.
+            if "locked" not in str(exc).lower():
+                raise
 
     def note_llm_status(self, user_id: int, status: str) -> None:
         self._execute(
@@ -3430,6 +3467,8 @@ class DB:
         "llm_api_format",
         "token_version", "last_login_at",
         "keywords_match_reports", "keywords_match_reports_since",
+        "keywords_match_news", "keywords_match_news_since",
+        "news_font_size",
     })
 
     def _build_user_sets(self, updates: dict) -> tuple[list, list]:
@@ -3440,7 +3479,7 @@ class DB:
                 raise ValueError(f"非法用户字段: {key}")
             if key in (
                 "is_admin", "notify_enabled", "daily_report", "translate_twitter",
-                "dnd_allow_favorite", "keywords_match_reports",
+                "dnd_allow_favorite", "keywords_match_reports", "keywords_match_news",
             ):
                 value = _to_bool(value)
             if key in SECRET_COLUMNS:
@@ -3835,15 +3874,15 @@ class DB:
         rows = self._rows("SELECT * FROM news_sources WHERE id = ?", (source_id,))
         return rows[0] if rows else None
 
-    def add_news_source(self, name: str) -> int:
+    def add_news_source(self, name: str, group_name: str = "") -> int:
         name = (name or "").strip()
         if not name or len(name) > 60:
             raise ValueError("媒体名称长度必须为 1-60 个字符")
         try:
             return self._execute(
-                "INSERT INTO news_sources (slug, name, built_in, default_selected) "
-                "VALUES (?, ?, 0, 0)",
-                (f"custom-{uuid.uuid4().hex}", name),
+                "INSERT INTO news_sources (slug, name, built_in, default_selected, group_name) "
+                "VALUES (?, ?, 0, 0, ?)",
+                (f"custom-{uuid.uuid4().hex}", name, (group_name or "").strip()[:40]),
             )
         except sqlite3.IntegrityError:
             raise ValueError("媒体名称已存在") from None
@@ -3854,6 +3893,7 @@ class DB:
         *,
         name: str | None = None,
         enabled: bool | None = None,
+        group_name: str | None = None,
     ) -> dict | None:
         current = self.get_news_source(source_id)
         if current is None:
@@ -3866,6 +3906,9 @@ class DB:
                 raise ValueError("媒体名称长度必须为 1-60 个字符")
             sets.append("name = ?")
             params.append(name)
+        if group_name is not None:
+            sets.append("group_name = ?")
+            params.append(group_name.strip()[:40])
         if enabled is not None:
             sets.append("enabled = ?")
             params.append(1 if enabled else 0)
@@ -4151,6 +4194,80 @@ class DB:
                 self._conn.rollback()
                 raise
 
+    def upsert_news_articles_batch(self, articles: list[dict]) -> int:
+        """一个 Feed 一次事务批量入库；返回入库篇数。"""
+        if not articles:
+            return 0
+        rows = []
+        for article in articles:
+            images = article.get("images", [])
+            if not isinstance(images, list):
+                images = []
+            rows.append((
+                article["source_id"], article["feed_id"], article["external_id"],
+                article["title"], article["url"], article.get("author", ""),
+                article.get("summary", ""), article.get("content_html", ""),
+                json.dumps(images, ensure_ascii=False), article["published_at"],
+                article["fetched_at"], article.get("content_hash", ""),
+            ))
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.executemany(
+                    "INSERT INTO news_articles "
+                    "(source_id, feed_id, external_id, title, url, author, summary, "
+                    "content_html, images, published_at, fetched_at, content_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(source_id, external_id) DO UPDATE SET "
+                    "feed_id = excluded.feed_id, title = excluded.title, url = excluded.url, "
+                    "author = excluded.author, summary = excluded.summary, "
+                    "content_html = excluded.content_html, images = excluded.images, "
+                    "published_at = excluded.published_at, fetched_at = excluded.fetched_at, "
+                    "content_hash = excluded.content_hash",
+                    rows,
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return len(rows)
+
+    def delete_news_article(self, article_id: int) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM news_articles WHERE id = ?", (article_id,)
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def list_admin_news_articles(
+        self,
+        *,
+        source_id: int | None = None,
+        q: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        conds: list[str] = []
+        params: list[object] = []
+        if source_id is not None:
+            conds.append("a.source_id = ?")
+            params.append(source_id)
+        if (q or "").strip():
+            conds.append("a.title LIKE ?")
+            params.append(f"%{q.strip()}%")
+        where = f"WHERE {' AND '.join(conds)}" if conds else ""
+        params.extend([max(1, min(int(limit), 200)), max(0, int(offset))])
+        return self._rows(
+            "SELECT a.id, a.title, a.published_at, a.source_id, a.feed_id, "
+            "s.name AS source_name, f.name AS feed_name "
+            "FROM news_articles a "
+            "JOIN news_sources s ON s.id = a.source_id "
+            "JOIN news_feeds f ON f.id = a.feed_id "
+            f"{where} ORDER BY a.published_at DESC, a.id DESC LIMIT ? OFFSET ?",
+            params,
+        )
+
     @staticmethod
     def _normalize_news_article(row: dict) -> dict:
         raw_images = row.get("images")
@@ -4174,8 +4291,13 @@ class DB:
             return cur.rowcount
 
     def _news_article_filter(
-        self, source_id: int | None, q: str
+        self, user_id: int, source_id: int | None, q: str, *, unread: bool = False
     ) -> tuple[str, list[object]]:
+        """source_id 给定时按源浏览（源未归档即可读），否则全部未归档源全局混排
+        （财经资讯口径：不按用户订阅圈过滤）。
+
+        unread 以 news_last_seen_at 水位线为准；从未打开过新闻页视为全部未读。
+        """
         conds = [
             "s.id = a.source_id",
             "s.archived_at IS NULL",
@@ -4184,6 +4306,12 @@ class DB:
         if source_id is not None:
             conds.append("a.source_id = ?")
             params.append(source_id)
+        if unread:
+            conds.append(
+                "a.published_at > COALESCE("
+                "(SELECT news_last_seen_at FROM users WHERE id = ?), '')"
+            )
+            params.append(user_id)
         if q:
             conds.append("(a.title LIKE ? OR a.summary LIKE ?)")
             like = f"%{q}%"
@@ -4198,17 +4326,23 @@ class DB:
         q: str,
         limit: int,
         offset: int,
+        unread: bool = False,
     ) -> list[dict]:
-        where, params = self._news_article_filter(source_id, (q or "").strip())
+        where, params = self._news_article_filter(
+            user_id, source_id, (q or "").strip(), unread=unread
+        )
         params.extend([max(1, min(int(limit), 100)), max(0, int(offset))])
         rows = self._rows(
-            "SELECT a.*, s.name AS source_name, s.slug AS source_slug, s.enabled AS source_enabled "
+            "SELECT a.id, a.title, a.url, a.author, a.summary, a.published_at, "
+            "a.source_id, s.name AS source_name, s.slug AS source_slug, "
+            "s.enabled AS source_enabled, "
+            "(a.images IS NOT NULL AND a.images != '[]' AND a.images != '') AS has_image "
             "FROM news_articles a "
             "JOIN news_sources s ON s.id = a.source_id "
             f"WHERE {where} ORDER BY a.published_at DESC, a.id DESC LIMIT ? OFFSET ?",
             params,
         )
-        return [self._normalize_news_article(row) for row in rows]
+        return [dict(row) for row in rows]
 
     def count_news_articles_for_source(self, source_id: int) -> int:
         rows = self._rows(
@@ -4216,8 +4350,12 @@ class DB:
         )
         return _to_int(rows[0]["n"]) if rows else 0
 
-    def count_news_articles(self, user_id: int, *, source_id: int | None, q: str) -> int:
-        where, params = self._news_article_filter(source_id, (q or "").strip())
+    def count_news_articles(
+        self, user_id: int, *, source_id: int | None, q: str, unread: bool = False
+    ) -> int:
+        where, params = self._news_article_filter(
+            user_id, source_id, (q or "").strip(), unread=unread
+        )
         rows = self._rows(
             "SELECT COUNT(*) AS n FROM news_articles a "
             "JOIN news_sources s ON s.id = a.source_id "
@@ -4226,18 +4364,80 @@ class DB:
         )
         return _to_int(rows[0]["n"]) if rows else 0
 
+    def unread_news_count(self, user_id: int) -> int:
+        """订阅圈内、水位线之后的文章总数；从未打开过 = 全部未读。"""
+        rows = self._rows(
+            "SELECT COUNT(*) AS n FROM news_articles a "
+            "JOIN news_sources s ON s.id = a.source_id "
+            "WHERE s.archived_at IS NULL "
+            "AND EXISTS (SELECT 1 FROM user_news_sources u "
+            "WHERE u.source_id = a.source_id AND u.user_id = ?) "
+            "AND a.published_at > COALESCE("
+            "(SELECT news_last_seen_at FROM users WHERE id = ?), '')",
+            (user_id, user_id),
+        )
+        return _to_int(rows[0]["n"]) if rows else 0
+
+    _NEWS_ARTICLE_VISIBLE = (
+        "SELECT a.*, s.name AS source_name, s.slug AS source_slug, "
+        "s.enabled AS source_enabled FROM news_articles a "
+        "JOIN news_sources s ON s.id = a.source_id "
+        "WHERE s.archived_at IS NULL"
+    )
+
     def get_news_article(
         self, article_id: int, user_id: int | None = None
     ) -> dict | None:
-        sql = (
-            "SELECT a.*, s.name AS source_name, s.slug AS source_slug, "
-            "s.enabled AS source_enabled FROM news_articles a "
-            "JOIN news_sources s ON s.id = a.source_id "
-            "WHERE a.id = ? AND s.archived_at IS NULL"
-        )
+        sql = self._NEWS_ARTICLE_VISIBLE + " AND a.id = ?"
         params: list[object] = [article_id]
+        if user_id is not None:
+            # 全局混排口径：订阅圈外可读启用源（浏览模式），归档源仅历史订阅者不可见
+            sql += " AND (s.enabled = 1 OR EXISTS (" \
+                "SELECT 1 FROM user_news_sources u WHERE u.user_id = ? AND u.source_id = a.source_id))"
+            params.append(user_id)
         rows = self._rows(sql, params)
         return self._normalize_news_article(rows[0]) if rows else None
+
+    def get_next_news_article(
+        self, article: dict, user_id: int
+    ) -> int | None:
+        """阅读顺序中的下一篇（同排序规则下的后一行）。"""
+        return self._adjacent_news_article(article, user_id, newer=False)
+
+    def get_prev_news_article(
+        self, article: dict, user_id: int
+    ) -> int | None:
+        """阅读顺序中的上一篇（同排序规则下的前一行）。"""
+        return self._adjacent_news_article(article, user_id, newer=True)
+
+    def _adjacent_news_article(
+        self, article: dict, user_id: int, *, newer: bool
+    ) -> int | None:
+        if newer:
+            boundary = (
+                " AND (a.published_at > ? OR (a.published_at = ? AND a.id > ?)) "
+            )
+            order = "ORDER BY a.published_at ASC, a.id ASC LIMIT 1"
+        else:
+            boundary = (
+                " AND (a.published_at < ? OR (a.published_at = ? AND a.id < ?)) "
+            )
+            order = "ORDER BY a.published_at DESC, a.id DESC LIMIT 1"
+        sql = (
+            self._NEWS_ARTICLE_VISIBLE
+            + boundary
+            + "AND (s.enabled = 1 OR EXISTS ("
+            + "SELECT 1 FROM user_news_sources u WHERE u.user_id = ? AND u.source_id = a.source_id)) "
+            + order
+        )
+        rows = self._rows(
+            sql,
+            (
+                article["published_at"], article["published_at"], article["id"],
+                user_id,
+            ),
+        )
+        return rows[0]["id"] if rows else None
 
     def advance_news_seen(self, user_id: int, view_started_at: str) -> bool:
         with self._lock:
@@ -4539,6 +4739,53 @@ class DB:
         return self._rows(
             "SELECT * FROM users WHERE notify_enabled = 1 AND keywords_match_reports = 1 "
             "ORDER BY id"
+        )
+
+    def list_news_keyword_users(self) -> list[dict]:
+        return self._rows(
+            "SELECT * FROM users WHERE notify_enabled = 1 AND keywords_match_news = 1 "
+            "ORDER BY id"
+        )
+
+    def list_recent_news_articles(self, since: str, limit: int = 400) -> list[dict]:
+        since = str(since or "").strip()
+        if not since:
+            return []
+        rows = self._read_only_rows(
+            "SELECT a.id, a.title, a.summary, a.author, a.published_at, "
+            "s.name AS source_name FROM news_articles a "
+            "JOIN news_sources s ON s.id = a.source_id "
+            "WHERE a.fetched_at >= ? AND s.archived_at IS NULL "
+            "ORDER BY a.fetched_at DESC, a.id DESC LIMIT ?",
+            (since, max(1, min(int(limit), 800))),
+        )
+        return [dict(row) for row in rows]
+
+    def filter_unnotified_news_articles(
+        self, user_id: int, articles: list[dict]
+    ) -> list[dict]:
+        if not articles:
+            return []
+        ids = [int(a["id"]) for a in articles]
+        placeholders = ",".join("?" * len(ids))
+        notified = {
+            row["article_id"]
+            for row in self._read_only_rows(
+                f"SELECT article_id FROM news_keyword_notified "
+                f"WHERE user_id = ? AND article_id IN ({placeholders})",
+                (user_id, *ids),
+            )
+        }
+        return [a for a in articles if int(a["id"]) not in notified]
+
+    def mark_news_keyword_notified(self, user_id: int, articles: list[dict]) -> None:
+        rows = [(user_id, int(a["id"])) for a in articles]
+        if not rows:
+            return
+        self._execute(
+            f"INSERT OR IGNORE INTO news_keyword_notified (user_id, article_id) "
+            f"VALUES {','.join('(?, ?)' for _ in rows)}",
+            [v for pair in rows for v in pair],
         )
 
     def list_recent_ima_documents(self, since: str, limit: int = 400) -> list[dict]:
@@ -8449,8 +8696,14 @@ class DB:
             return None
         return _ima_public_document(rows[0])
 
-    def ima_document_index_count(self) -> int:
-        rows = self._read_only_rows("SELECT COUNT(*) AS n FROM ima_document_index")
+    def ima_document_index_count(self, group_id: str = "") -> int:
+        if group_id:
+            rows = self._read_only_rows(
+                "SELECT COUNT(*) AS n FROM ima_document_index WHERE group_id = ?",
+                (group_id,),
+            )
+        else:
+            rows = self._read_only_rows("SELECT COUNT(*) AS n FROM ima_document_index")
         return int(rows[0]["n"] if rows else 0)
 
     def get_tag_vocabulary(self) -> list[dict]:

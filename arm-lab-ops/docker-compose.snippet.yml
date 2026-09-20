@@ -1,4 +1,8 @@
-# Add this service to /opt/vpush-ima-lab compose (lab only).
+# Leftover. Prefer host systemd for ops + puller:
+#   vpush-arm-lab-ops.service
+#   vpush-ima-lab-puller.service
+# OpenList stays in the lab compose. Do not add puller/ops back.
+# This snippet is only a fallback if you must run the panel in Docker.
 # Not production vpush. Not a reading desk. Do not merge into
 # production docker-compose*.yml.
 #
@@ -50,6 +54,8 @@ services:
       P115_DEVICE_TYPE: harmony
       # Live ARM pins Tailscale IPv4, e.g. http://<tailscale-ipv4>:5244/lab-hot
       OPENLIST_PUBLIC_URL: ${OPENLIST_PUBLIC_URL:-http://127.0.0.1:5244/lab-hot}
+      ARM_OPS_PULL_HEALTH_URL: ${ARM_OPS_PULL_HEALTH_URL:-http://127.0.0.1:8743/healthz}
+      ARM_EXPORT_ROOT: ${ARM_EXPORT_ROOT:-/srv/vpush-ima}
       PULLER_CONTAINER_NAME: ${PULLER_CONTAINER_NAME:-vpush-ima-lab-puller-1}
       VPUSH_SCRIPTS_ROOT: /opt/vpush-ima-lab/src/scripts
       # Image Python lacks app.* deps. Host venv has them (not .venv).
@@ -71,6 +77,7 @@ services:
       # PULLER_HEALTH_FILE / logs when you can drop this mount.
       # Do not copy this volume into production compose.
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /srv/vpush-ima:/srv/vpush-ima:ro
     # Fallback if Tailscale is down: ARM_OPS_BIND=127.0.0.1 and SSH tunnel.
     # Do not use ports: ["0.0.0.0:8055:8055"] — that is the public NIC.
     # Loopback-only publish (no tailnet) if you must map ports instead of host net:

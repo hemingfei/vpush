@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from ops_settings import (
+    CICC_INCR_DAYS_DEFAULT,
+    CICC_SYNC_LOG_GLOB,
     FAILED_LIST_CAP,
+    IMA_HOST_SYNC_LOG_GLOB,
     IMA_SYNC_LOG_GLOB,
     JOURNAL_LINES,
     LAST_JOB_NAME,
@@ -30,11 +33,14 @@ from ops_settings import (
     cicc_timer_unit,
     cookies_path,
     docker_sock,
+    export_root,
     ima_secrets_path,
     openlist_public_url,
+    pull_health_url,
     puller_container_name,
     puller_health_file,
     puller_health_url,
+    puller_unit,
     timer_unit,
 )
 
@@ -74,6 +80,9 @@ _SAFE_HEALTH_KEYS = {
     "tick_ok",
     "tick_fail",
     "tick_skip",
+    "keep_hot",
+    "batch_size",
+    "admitted",
     "action",
     "argv",
     "returncode",
@@ -341,8 +350,10 @@ def _docker_via_sock(sock: Path, name: str) -> dict[str, Any] | None:
 
 
 def docker_status() -> dict[str, Any]:
-    sock = docker_sock()
     name = puller_container_name()
+    if not name:
+        return {"available": False, "source": None, "containers": []}
+    sock = docker_sock()
     via_cli = _docker_via_cli(name)
     if via_cli is not None:
         return via_cli
@@ -437,6 +448,60 @@ def timer_status(unit: str | None = None) -> dict[str, Any]:
     }
 
 
+def service_status(unit: str | None = None) -> dict[str, Any]:
+    """Best-effort `systemctl show` for a long-running unit (lab puller)."""
+    name = unit or puller_unit()
+    try:
+        proc = subprocess.run(
+            [
+                "systemctl",
+                "show",
+                name,
+                "--property=ActiveState,UnitFileState,SubState,MainPID",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "unit": name,
+            "active": "unknown",
+            "detail": type(exc).__name__,
+            "enabled": None,
+            "sub": None,
+            "pid": None,
+        }
+    if proc.returncode != 0:
+        raw = (proc.stderr or proc.stdout or "unavailable").splitlines()
+        err = redact(raw[0] if raw else "unavailable")
+        return {
+            "unit": name,
+            "active": "unavailable",
+            "detail": err[:80],
+            "enabled": None,
+            "sub": None,
+            "pid": None,
+        }
+    props = _parse_systemctl_show(proc.stdout)
+    known = {"active", "inactive", "failed", "activating", "deactivating"}
+    active = (props.get("ActiveState") or "").strip()
+    pid_raw = (props.get("MainPID") or "").strip()
+    pid = int(pid_raw) if pid_raw.isdigit() and int(pid_raw) > 0 else None
+    enabled = (props.get("UnitFileState") or "").strip() or None
+    if enabled and enabled.lower() in {"n/a", "0", "none"}:
+        enabled = None
+    return {
+        "unit": name,
+        "active": active if active in known else (active or "unknown"),
+        "detail": None,
+        "enabled": enabled,
+        "sub": (props.get("SubState") or "").strip() or None,
+        "pid": pid,
+    }
+
+
 def log_tails(root: Path, limit: int = LOG_TAIL_LINES) -> list[dict[str, Any]]:
     log_dir = root / "logs"
     if not log_dir.is_dir():
@@ -463,6 +528,7 @@ _SYNC_COUNTS_RE = re.compile(
     re.IGNORECASE,
 )
 _SYNC_ERROR_RE = re.compile(r"\b(FAIL|ERROR|失败|Traceback)\b", re.IGNORECASE)
+_SYNC_OK_RE = re.compile(r"\brc=0\b", re.IGNORECASE)
 
 
 def skip_cache_file(path: Path) -> bool:
@@ -473,15 +539,25 @@ def skip_cache_file(path: Path) -> bool:
     return any(lowered.endswith(suf) for suf in SKIP_SUFFIXES)
 
 
-def latest_ima_sync_log(root: Path | None = None) -> Path | None:
-    log_dir = (root or cache_root()) / "logs"
+def _latest_log(root: Path, *globs: str) -> Path | None:
+    log_dir = root / "logs"
     if not log_dir.is_dir():
         return None
-    matches = [p for p in log_dir.glob(IMA_SYNC_LOG_GLOB) if p.is_file()]
+    matches: list[Path] = []
+    for pattern in globs:
+        matches.extend(p for p in log_dir.glob(pattern) if p.is_file())
     if not matches:
         return None
     matches.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
     return matches[0]
+
+
+def latest_ima_sync_log(root: Path | None = None) -> Path | None:
+    return _latest_log(root or cache_root(), IMA_HOST_SYNC_LOG_GLOB, IMA_SYNC_LOG_GLOB)
+
+
+def latest_cicc_sync_log(root: Path | None = None) -> Path | None:
+    return _latest_log(root or cache_root(), CICC_SYNC_LOG_GLOB, "cicc-lab-sync-*.log")
 
 
 def parse_ima_sync_log(path: Path) -> dict[str, Any]:
@@ -528,6 +604,8 @@ def parse_ima_sync_log(path: Path) -> dict[str, Any]:
             row["skipped"] = int(cmatch.group(2))
             row["failed"] = int(cmatch.group(3))
             group_has_summary.add(current)
+            if row["failed"] == 0:
+                last_error = None
             continue
         kind = line.split(None, 1)[0].upper() if line.split() else ""
         if current not in group_has_summary:
@@ -539,6 +617,8 @@ def parse_ima_sync_log(path: Path) -> dict[str, Any]:
                 bucket(current)["failed"] += 1
         if _SYNC_ERROR_RE.search(line):
             last_error = redact(line)
+        if _SYNC_OK_RE.search(line):
+            last_error = None
 
     totals = {"downloaded": 0, "skipped": 0, "failed": 0}
     for row in groups.values():
@@ -573,6 +653,131 @@ def journal_snippet(unit: str | None = None) -> dict[str, Any]:
         return {"available": False, "unit": service, "tail": [], "detail": err[:80]}
     tail = [redact(line) for line in (proc.stdout or "").splitlines() if line.strip()]
     return {"available": True, "unit": service, "tail": tail[-20:], "detail": None}
+
+
+def parse_cicc_sync_log(path: Path) -> dict[str, Any]:
+    empty = {
+        "log": path.name if path else None,
+        "mtime": iso_mtime(path) if path and path.is_file() else None,
+        "last_run": None,
+        "days": None,
+        "dry_run": None,
+        "returncode": None,
+        "last_error": None,
+    }
+    if not path.is_file():
+        return empty
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return empty
+    if len(text) > 200_000:
+        text = text[-200_000:]
+    days = None
+    dry_run = None
+    returncode = None
+    last_error = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("start "):
+            match = re.search(r"days=(\d+)", line)
+            if match:
+                days = int(match.group(1))
+            dry_match = re.search(r"dry_run=(\d+)", line)
+            if dry_match:
+                dry_run = dry_match.group(1) == "1"
+        if line.startswith("done "):
+            rc = re.search(r"rc=(-?\d+)", line)
+            if rc:
+                returncode = int(rc.group(1))
+                if returncode == 0:
+                    last_error = None
+                    continue
+        if _SYNC_ERROR_RE.search(line):
+            last_error = redact(line)
+    return {
+        "log": path.name,
+        "mtime": iso_mtime(path),
+        "last_run": iso_mtime(path),
+        "days": days,
+        "dry_run": dry_run,
+        "returncode": returncode,
+        "last_error": last_error,
+    }
+
+
+def cicc_sync_summary(root: Path | None = None) -> dict[str, Any]:
+    target = latest_cicc_sync_log(root)
+    if target is None:
+        summary: dict[str, Any] = {
+            "log": None,
+            "mtime": None,
+            "last_run": None,
+            "days": None,
+            "dry_run": None,
+            "returncode": None,
+            "last_error": None,
+        }
+    else:
+        summary = parse_cicc_sync_log(target)
+    journal = journal_snippet(cicc_timer_unit())
+    summary["journal"] = journal
+    return summary
+
+
+def export_status() -> dict[str, Any]:
+    root = export_root()
+    cicc = walk_usage(root / "local" / "cicc-research")
+    return {
+        "root": str(root),
+        "exists": root.exists(),
+        "cicc_research": cicc,
+    }
+
+
+def pull_listener_status() -> dict[str, Any]:
+    url = pull_health_url()
+    if not url:
+        return {"ok": False, "status": "unconfigured", "url": ""}
+    try:
+        import httpx
+
+        with httpx.Client(timeout=2.0, follow_redirects=True) as client:
+            resp = client.get(url)
+        text = (resp.text or "").strip()[:32]
+        return {
+            "ok": resp.status_code == 200,
+            "status": text or str(resp.status_code),
+            "url": url,
+        }
+    except Exception as exc:
+        return {"ok": False, "status": type(exc).__name__, "url": url}
+
+
+def settings_incr_days(root: Path | None = None) -> int:
+    path = (root or cache_root()) / "ops-lab-settings.json"
+    payload = _json_from_path(path)
+    if not isinstance(payload, dict):
+        return CICC_INCR_DAYS_DEFAULT
+    try:
+        value = int(payload.get("cicc_incr_days") or CICC_INCR_DAYS_DEFAULT)
+    except (TypeError, ValueError):
+        return CICC_INCR_DAYS_DEFAULT
+    return value if 1 <= value <= 14 else CICC_INCR_DAYS_DEFAULT
+
+
+def puller_policy(root: Path | None = None) -> dict[str, Any]:
+    target = root or cache_root()
+    payload = _json_from_path(target / "manifest" / "puller-heartbeat.json")
+    if not isinstance(payload, dict):
+        return {"keep_hot": True, "batch_size": None, "source": "default"}
+    keep = payload.get("keep_hot")
+    batch = payload.get("batch_size")
+    return {
+        "keep_hot": True if keep is None else bool(keep),
+        "batch_size": batch if isinstance(batch, int) else None,
+        "source": "heartbeat",
+    }
 
 
 def sync_summary(root: Path | None = None) -> dict[str, Any]:
@@ -784,12 +989,15 @@ def collect_status() -> dict[str, Any]:
     health_url = puller_health_url()
     file_health = health_from_file(puller_health_file())
     url_health = health_from_url(health_url) if health_url else None
+    unit = service_status()
     docker = docker_status()
     source = "none"
     if url_health is not None:
         source = "health_url"
     elif file_health is not None:
         source = "health_file"
+    elif unit.get("active") == "active":
+        source = "systemd"
     elif docker.get("containers"):
         source = "docker"
     elif (root / "logs").is_dir():
@@ -798,10 +1006,21 @@ def collect_status() -> dict[str, Any]:
     cicc_timer = timer_status(cicc_timer_unit())
     if source == "none" and timer.get("active") not in {None, "unknown"}:
         source = "systemd"
+    policy = puller_policy(root)
+    export = export_status()
+    pull = pull_listener_status()
+    ima_timer_live = timer.get("enabled") not in {None, "disabled", "masked"} and timer.get("active") == "active"
 
     return {
         "ok": True,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "roles": {
+            "ima_collect": "vpush_pull",
+            "cicc_collect": "arm_incr",
+            "storage": "hot_then_115",
+            "vpush_link": "http_pull",
+            "ima_dual_collect": ima_timer_live,
+        },
         "cache": {
             "root": str(root),
             "exists": root.exists(),
@@ -811,23 +1030,33 @@ def collect_status() -> dict[str, Any]:
             "hot": walk_usage(root / "hot"),
             "failed": walk_usage(root / "failed"),
         },
+        "export": export,
+        "pull": pull,
         "failed_queue": list_failed_files(root),
         "sync": sync_summary(root),
+        "cicc_sync": cicc_sync_summary(root),
         "last_job": read_last_job(root),
         "puller": {
             "source": source,
+            "unit": unit,
             "docker": docker,
             "health": url_health or file_health,
             "timer": timer,
             "cicc_timer": cicc_timer,
             "uploads": puller_upload_counts(root),
+            "policy": policy,
             "logs": log_tails(root),
         },
         "ima": {
             **ima_cred_status(),
+            "timer": timer,
             "note": "IMA QR is not on this panel. Use Mac ima_phone_sync.",
         },
         "p115": cookie_meta(),
-        "cicc": cookie_meta(cicc_cookie_path()),
+        "cicc": {
+            **cookie_meta(cicc_cookie_path()),
+            "timer": cicc_timer,
+            "incr_days": settings_incr_days(root),
+        },
         "openlist": {"url": openlist_public_url()},
     }

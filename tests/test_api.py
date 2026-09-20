@@ -100,7 +100,6 @@ def test_news_list_and_seen_anchor_are_user_scoped():
         "/api/news/seen", headers=first_headers,
         json={"view_started_at": "2026-09-02T10:00:00+00:00"},
     ).status_code == 200
-
     # 文章可见性不再按用户来源过滤：second 同样能看列表与详情
     assert client.get(f"/api/news/{article_id}", headers=second_headers).status_code == 200
     second = client.get("/api/news", headers=second_headers).json()
@@ -121,6 +120,18 @@ def test_news_list_and_seen_anchor_are_user_scoped():
     assert second_after["items"][0]["is_new"] is False
     first_final = client.get("/api/news", headers=first_headers).json()
     assert first_final["items"][0]["is_new"] is True
+
+    # 归档源的文章不可见：列表与详情同步过滤（浏览归档源 400）
+    db.set_news_source_archived(source_ids[0], True)
+    assert client.get(f"/api/news/{article_id}", headers=second_headers).status_code == 404
+    assert client.get(f"/api/news/{article_id}", headers=first_headers).status_code == 404
+    browse = client.get(f"/api/news?source_id={source_ids[0]}", headers=second_headers)
+    assert browse.status_code == 400
+    db.set_news_source_archived(source_ids[0], False)
+    browse = client.get(f"/api/news?source_id={source_ids[0]}", headers=second_headers)
+    assert browse.status_code == 200
+    # 按发布时间倒序：后插入的 newer_id 在前，article_id 紧随其后
+    assert [item["id"] for item in browse.json()["items"]] == [newer_id, article_id]
 
 
 def test_news_source_selection_and_invalid_selection_are_authenticated():
@@ -178,6 +189,145 @@ def test_admin_news_feed_hard_delete_cascades_articles():
     assert client.delete(
         f"/api/admin/news/feeds/{feed_id}", headers=headers
     ).status_code == 404
+
+
+def test_news_article_next_id_and_admin_delete():
+    client = make_client("news-admin-article.db")
+    headers = auth_headers(client)
+    user = user_headers(client, "news_reader")
+    db = client.app.state.db
+    source_id = db.add_news_source("下一篇源")
+    feed_id = db.add_news_feed(
+        source_id, "主源", "https://feed.example/rss", "https://feed.example/rss"
+    )
+    first = db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "g1",
+        "title": "旧文", "url": "https://example.com/1", "author": "A",
+        "summary": "S", "content_html": "<p>1</p>", "images": [],
+        "published_at": "2026-09-01T10:00:00+00:00",
+        "fetched_at": "2026-09-01T10:00:00+00:00", "content_hash": "g1",
+    })
+    second = db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "g2",
+        "title": "新文", "url": "https://example.com/2", "author": "A",
+        "summary": "S", "content_html": "<p>2</p>", "images": [],
+        "published_at": "2026-09-01T11:00:00+00:00",
+        "fetched_at": "2026-09-01T11:00:00+00:00", "content_hash": "g2",
+    })
+    detail = client.get(f"/api/news/{second}", headers=user)
+    assert detail.status_code == 200
+    assert detail.json()["next_id"] == first
+    assert client.delete(
+        f"/api/admin/news/articles/{second}", headers={"Authorization": "Bearer nope"}
+    ).status_code == 401
+    listing = client.get(
+        f"/api/admin/news/articles?source_id={source_id}", headers=headers
+    )
+    assert listing.status_code == 200
+    assert {r["id"] for r in listing.json()["items"]} == {first, second}
+    assert client.delete(
+        f"/api/admin/news/articles/{second}", headers=headers
+    ).status_code == 200
+    assert db.get_news_article(second) is None
+    assert client.delete(f"/api/admin/news/articles/{second}", headers=headers).status_code == 404
+    assert client.get(f"/api/news/{second}", headers=user).status_code == 404
+
+
+def test_news_keywords_match_news_toggle_roundtrip():
+    client = make_client("news-kw-toggle.db")
+    headers = user_headers(client, "news_kw_user")
+    response = client.put(
+        "/api/me", headers=headers, json={"keywords_match_news": True}
+    )
+    assert response.status_code == 200
+    db = client.app.state.db
+    uid = db.get_user_by_username("news_kw_user")["id"]
+    assert db.get_user(uid)["keywords_match_news"] == 1
+    assert db.get_user(uid)["keywords_match_news_since"]
+    me = client.get("/api/me", headers=headers).json()
+    assert me["keywords_match_news"] is True
+    response = client.put(
+        "/api/me", headers=headers, json={"keywords_match_news": False}
+    )
+    assert response.status_code == 200
+    assert db.get_user(uid)["keywords_match_news"] == 0
+
+
+def test_news_unread_filter_read_all_and_badge_count():
+    client = make_client("news-unread.db")
+    headers = user_headers(client, "unread_user")
+    db = client.app.state.db
+    uid = db.get_user_by_username("unread_user")["id"]
+    source_id = db.add_news_source("未读源")
+    feed_id = db.add_news_feed(
+        source_id, "主源", "https://feed.example/rss", "https://feed.example/rss"
+    )
+    db.set_user_news_sources(uid, [source_id])
+    old_id = db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "old",
+        "title": "旧文", "url": "https://example.com/old", "author": "A",
+        "summary": "S", "content_html": "", "images": [],
+        "published_at": "2026-09-01T10:00:00+00:00",
+        "fetched_at": "2026-09-01T10:00:00+00:00", "content_hash": "old",
+    })
+    new_id = db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "new",
+        "title": "新文", "url": "https://example.com/new", "author": "A",
+        "summary": "S", "content_html": "", "images": [],
+        "published_at": "2026-09-19T10:00:00+00:00",
+        "fetched_at": "2026-09-19T10:00:00+00:00", "content_hash": "new",
+    })
+    # 从未打开过新闻页：全部未读
+    sources = client.get("/api/news/sources", headers=headers).json()
+    assert sources["unread_count"] == 2
+    unread = client.get("/api/news?unread=1", headers=headers).json()
+    assert {i["id"] for i in unread["items"]} == {old_id, new_id}
+    # 水位推进到两篇之间：只剩新文未读
+    assert db.advance_news_seen(uid, "2026-09-15T00:00:00+00:00")
+    sources = client.get("/api/news/sources", headers=headers).json()
+    assert sources["unread_count"] == 1
+    unread = client.get("/api/news?unread=1", headers=headers).json()
+    assert [i["id"] for i in unread["items"]] == [new_id]
+    # read-all 后：无未读
+    assert client.post("/api/news/read-all", headers=headers).status_code == 200
+    sources = client.get("/api/news/sources", headers=headers).json()
+    assert sources["unread_count"] == 0
+    assert client.get("/api/news?unread=1", headers=headers).json()["items"] == []
+
+
+def test_news_font_size_roundtrip_and_validation():
+    client = make_client("news-font.db")
+    headers = user_headers(client, "font_user")
+    assert client.put(
+        "/api/me", headers=headers, json={"news_font_size": "large"}
+    ).status_code == 200
+    assert client.get("/api/me", headers=headers).json()["news_font_size"] == "large"
+    assert client.put(
+        "/api/me", headers=headers, json={"news_font_size": "huge"}
+    ).status_code == 400
+    assert client.put(
+        "/api/me", headers=headers, json={"news_font_size": ""}
+    ).status_code == 200
+
+
+def test_admin_news_source_group_name_roundtrip():
+    client = make_client("news-group.db")
+    headers = auth_headers(client)
+    db = client.app.state.db
+    source_id = db.add_news_source("分组源", group_name="国际")
+    assert db.get_news_source(source_id)["group_name"] == "国际"
+    response = client.patch(
+        f"/api/admin/news/sources/{source_id}",
+        headers=headers, json={"group_name": "宏观"},
+    )
+    assert response.status_code == 200
+    assert db.get_news_source(source_id)["group_name"] == "宏观"
+    created = client.post(
+        "/api/admin/news/sources", headers=headers,
+        json={"name": "新建分组源", "group_name": "科技"},
+    )
+    assert created.status_code == 200
+    assert db.get_news_source(created.json()["id"])["group_name"] == "科技"
 
 
 def test_news_seen_rejects_naive_timestamp_and_moves_forward_only():
@@ -4616,6 +4766,35 @@ def test_img_proxy_allows_transparent_proxy_range(monkeypatch):
     assert resp.status_code == 200
 
 
+def _stub_img_proxy_ok(monkeypatch):
+    import httpx as _httpx
+
+    fake_resp = _httpx.Response(
+        200, content=b"\xff\xd8\xffok", headers={"content-type": "image/jpeg"}
+    )
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.headers = {}
+
+        def stream(self, method, url, **kwargs):
+            class Stream:
+                def __enter__(self):
+                    return fake_resp
+
+                def __exit__(self, *args):
+                    return False
+
+            fake_resp.iter_bytes = lambda: iter([fake_resp.content])
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["198.18.0.1"])
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+
+
 def test_img_proxy_rate_limit_per_ip(monkeypatch):
     """匿名 img-proxy 按 IP 限速，避免公网刷带宽。"""
     import httpx as _httpx
@@ -4643,10 +4822,11 @@ def test_img_proxy_rate_limit_per_ip(monkeypatch):
 
     monkeypatch.setattr(_httpx, "Client", FakeClient)
     monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 3)
+    _stub_img_proxy_ok(monkeypatch)
     client = make_client()
-    params = {"url": "https://pbs.twimg.com/x.jpg"}
+    params = {"url": "https://pbs.twimg.com/media/x.jpg"}
     for _ in range(3):
-        assert client.get("/api/img-proxy", params=params).status_code == 400
+        assert client.get("/api/img-proxy", params=params).status_code == 200
     blocked = client.get("/api/img-proxy", params=params)
     assert blocked.status_code == 429
     assert blocked.headers.get("retry-after")
@@ -4678,14 +4858,15 @@ def test_img_proxy_xff_cannot_bypass_rate_limit(monkeypatch):
 
     monkeypatch.setattr(_httpx, "Client", FakeClient)
     monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 3)
+    _stub_img_proxy_ok(monkeypatch)
     client = make_client()
-    params = {"url": "https://pbs.twimg.com/x.jpg"}
+    params = {"url": "https://pbs.twimg.com/media/x.jpg"}
     for i in range(3):
         assert client.get(
             "/api/img-proxy",
             params=params,
             headers={"X-Forwarded-For": f"1.1.1.{i}"},
-        ).status_code == 400
+        ).status_code == 200
     assert client.get(
         "/api/img-proxy",
         params=params,
@@ -4718,16 +4899,17 @@ def test_img_proxy_rate_limit_buckets_trusted_xff(monkeypatch):
 
     monkeypatch.setattr(_httpx, "Client", FakeClient)
     monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 2)
+    _stub_img_proxy_ok(monkeypatch)
     cfg = Config()
     cfg.web.trust_proxy = True
     client = make_client(config=cfg)
-    params = {"url": "https://pbs.twimg.com/x.jpg"}
+    params = {"url": "https://pbs.twimg.com/media/x.jpg"}
     for _ in range(2):
         assert client.get(
             "/api/img-proxy",
             params=params,
             headers={"X-Forwarded-For": "1.1.1.1"},
-        ).status_code == 400
+        ).status_code == 200
     assert client.get(
         "/api/img-proxy",
         params=params,
@@ -4737,7 +4919,7 @@ def test_img_proxy_rate_limit_buckets_trusted_xff(monkeypatch):
         "/api/img-proxy",
         params=params,
         headers={"X-Forwarded-For": "2.2.2.2"},
-    ).status_code == 400
+    ).status_code == 200
 
 
 def test_me_subscription_count():

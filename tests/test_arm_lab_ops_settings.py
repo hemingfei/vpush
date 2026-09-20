@@ -73,6 +73,11 @@ def test_clock_and_limit_validation():
         parse_limit(21, field="ima_limit_per_group")
     with pytest.raises(ActionError, match="integer"):
         parse_limit("nope", field="cicc_limit")
+    from ops_lab_knobs import parse_days
+    assert parse_days(3) == 3
+    assert parse_days(14) == 14
+    with pytest.raises(ActionError, match="between 1 and 14"):
+        parse_days(0)
     assert parse_batch(40) == 40
     assert parse_batch(1) == 1
     assert parse_batch(200) == 200
@@ -254,11 +259,13 @@ def test_write_puller_env_mode(lab_env):
 def test_dashboard_has_settings_section(client):
     assert _login(client).status_code == 303
     html = client.get("/").text
+    js = (OPS_DIR / "static" / "ops.js").read_text(encoding="utf-8")
     assert 'id="settings-card"' in html
     assert 'id="settings-confirm"' in html
-    assert "/api/settings" in html
+    assert "/api/settings" in html or "/api/settings" in js
     assert "PULLER_BATCH_SIZE" in html
     assert "每日同步时钟" in html
+    assert "cicc_incr_days" in html or "中金增量天数" in html
 
 
 def test_wrappers_read_settings_file():
@@ -266,18 +273,46 @@ def test_wrappers_read_settings_file():
     ima = (root / "ima-lab-sync-all.sh").read_text(encoding="utf-8")
     cicc = (root / "cicc-lab-sync.sh").read_text(encoding="utf-8")
     helper = (root / "apply-lab-sync-timers.sh").read_text(encoding="utf-8")
-    assert "ops-lab-settings.json" in ima
-    assert "ima_limit_per_group" in ima
-    assert "ima_groups_parallel" in ima
-    assert 'DRY_RUN:-1' in ima
-    assert 'MODE="--dry-run"' in ima
-    assert 'MODE="--apply"' in ima
-    assert "--enable --apply" not in ima
-    assert "ops-lab-settings.json" in cicc
-    assert "cicc_limit" in cicc
+    assert "ima_host_sync.py" in ima
+    assert "IMA_LAB_DUAL_COLLECT" in ima
+    assert "IMA_PURE_GROUPS_FILE" in ima
+    assert "cicc_report_collector.py" in cicc
+    assert "--arm-middleware" in cicc
+    assert "--days" in cicc
+    assert "CICC_INCR_DAYS" in cicc
     assert 'DRY_RUN:-1' in cicc
     assert "OnCalendar=" in helper
     assert "vpush-ima-lab-sync.timer" in helper
     assert "vpush-cicc-lab-sync.timer" in helper
+    nfsd = (root.parent / "systemd" / "nfsd-tailscale.conf").read_text(encoding="utf-8")
+    assert "host=100.112.25.21" in nfsd
+    assert nfsd.strip().endswith("host=100.112.25.21")
     assert "cookie" not in ima.lower()
     assert "password" not in ima.lower()
+
+
+def test_host_units_prefer_systemd_not_compose():
+    systemd = Path(__file__).resolve().parent.parent / "arm-lab-ops" / "systemd"
+    puller = (systemd / "vpush-ima-lab-puller.service").read_text(encoding="utf-8")
+    ops = (systemd / "vpush-arm-lab-ops.service").read_text(encoding="utf-8")
+    snippet = (systemd.parent / "docker-compose.snippet.yml").read_text(encoding="utf-8")
+    readme = (systemd.parent / "README.md").read_text(encoding="utf-8")
+    assert "puller_loop.py" in puller
+    assert "CACHE_ROOT=/data/vpush-ima-cache" in puller
+    assert "P115_COOKIES_FILE=/opt/vpush-ima-lab/secrets/115-cookies.txt" in puller
+    assert "EnvironmentFile=-/data/vpush-ima-cache/ops-puller.env" in puller
+    assert "docker.sock" not in puller
+    assert "ops_app.py" in ops
+    assert "ARM_OPS_BIND=tailscale" in ops
+    assert "ARM_OPS_PASSWORD_FILE=/opt/vpush-ima-lab/secrets/arm-ops-password.txt" in ops
+    assert not any(
+        line.startswith("Environment=PULLER_CONTAINER_NAME") for line in ops.splitlines()
+    )
+    assert "docker.sock" not in ops
+    assert "0.0.0.0" not in ops
+    assert "UID=" not in puller and "UID=" not in ops
+    assert "refresh_token" not in puller and "refresh_token" not in ops
+    assert "Leftover" in snippet
+    assert "vpush-arm-lab-ops.service" in snippet
+    assert "vpush-ima-lab-puller.service" in readme
+    assert "只留 OpenList" in readme

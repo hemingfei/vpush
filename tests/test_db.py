@@ -1924,6 +1924,17 @@ def test_replace_database_failure_wakes_waiting_readers(tmp_path, monkeypatch):
     }
 
 
+def test_touch_last_login_ignores_database_locked(tmp_path, monkeypatch):
+    db = DB(str(tmp_path / "login-lock.sqlite"))
+    user_id = db.add_user("locked", "hash")
+
+    def boom(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db, "_execute", boom)
+    db.touch_last_login(user_id)
+
+
 def test_ima_read_models_do_not_wait_for_python_db_lock(tmp_path):
     db = DB(str(tmp_path / "ima-readonly.sqlite"))
     db.replace_ima_document_index(
@@ -2138,6 +2149,89 @@ def test_news_feed_hard_delete_cascades_articles(tmp_path):
     assert db.get_news_feed(feed_b) is not None
     assert db.count_news_articles_for_source(source_id) == 1
     assert db.get_news_article(keep_id) is not None
+    db.close()
+
+
+def _news_article_row(source_id, feed_id, external_id, published_at):
+    return {
+        "source_id": source_id, "feed_id": feed_id, "external_id": external_id,
+        "title": f"T-{external_id}", "url": f"https://example.com/{external_id}",
+        "author": "A", "summary": "S", "content_html": "<p>body</p>", "images": [],
+        "published_at": published_at, "fetched_at": published_at, "content_hash": external_id,
+    }
+
+
+def test_news_batch_upsert_is_atomic(tmp_path):
+    db = DB(str(tmp_path / "batch.db"))
+    source_id = db.add_news_source("批量源")
+    feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
+    batch = [
+        _news_article_row(source_id, feed_id, "g1", "2026-09-01T00:00:01+00:00"),
+        _news_article_row(source_id, feed_id, "g2", "2026-09-01T00:00:02+00:00"),
+    ]
+    assert db.upsert_news_articles_batch(batch) == 2
+    assert db.upsert_news_articles_batch([]) == 0
+    batch[1]["title"] = "T-g2-updated"
+    db.upsert_news_articles_batch(batch)
+    assert db.count_news_articles_for_source(source_id) == 2
+    rows = db.list_admin_news_articles(source_id=source_id, limit=10)
+    assert {r["title"] for r in rows} == {"T-g1", "T-g2-updated"}
+    db.close()
+
+
+def test_news_next_article_follows_reading_order(tmp_path):
+    db = DB(str(tmp_path / "next.db"))
+    uid = db.add_user("reader", "hash")
+    source_id = db.add_news_source("顺序源")
+    feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
+    first = db.upsert_news_article(_news_article_row(source_id, feed_id, "g1", "2026-09-01T00:00:01+00:00"))
+    second = db.upsert_news_article(_news_article_row(source_id, feed_id, "g2", "2026-09-01T00:00:02+00:00"))
+    assert db.get_next_news_article(db.get_news_article(second), uid) == first
+    assert db.get_next_news_article(db.get_news_article(first), uid) is None
+    db.delete_news_article(first)
+    assert db.get_news_article(first) is None
+    assert db.get_next_news_article(db.get_news_article(second), uid) is None
+    db.close()
+
+
+def test_news_keyword_notify_helpers(tmp_path):
+    from app.news_notify import article_keyword_hit, format_digest
+
+    db = DB(str(tmp_path / "kwnotify.db"))
+    uid = db.add_user("reader", "hash")
+    db._execute(
+        "UPDATE users SET notify_enabled = 1, keywords_match_news = 1, "
+        "keywords_match_news_since = ? WHERE id = ?",
+        ("2026-09-01T00:00:00+00:00", uid),
+    )
+    assert [u["id"] for u in db.list_news_keyword_users()] == [uid]
+    source_id = db.add_news_source("关键词源")
+    feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
+    art = db.upsert_news_article(_news_article_row(source_id, feed_id, "g1", "2026-09-01T01:00:00+00:00"))
+    recent = db.list_recent_news_articles("2026-09-01T00:00:00+00:00")
+    assert [r["id"] for r in recent] == [art]
+    assert db.filter_unnotified_news_articles(uid, recent) == recent
+    assert article_keyword_hit(["t-g1", "不存在词"], recent[0]) == ["t-g1"]
+    text = format_digest(recent, extra=1)
+    assert "命中关键词" in text and "还有 1 条" in text
+    db.mark_news_keyword_notified(uid, recent)
+    assert db.filter_unnotified_news_articles(uid, recent) == []
+    db.close()
+
+
+def test_news_builtin_source_hard_delete_survives_reopen(tmp_path):
+    db = DB(str(tmp_path / "builtin.db"))
+    builtin = db._rows(
+        "SELECT id, slug FROM news_sources WHERE built_in = 1 ORDER BY id LIMIT 1"
+    )[0]
+    db.delete_news_source(builtin["id"])
+    db.reopen()  # 触发 _migrate_news：已删除的内置源不得复活
+    assert db.get_news_source(builtin["id"]) is None
+    assert not db._rows(
+        "SELECT id FROM news_sources WHERE slug = ?", (builtin["slug"],)
+    )
+    # 其余内置源不受影响
+    assert db._rows("SELECT id FROM news_sources WHERE built_in = 1")
     db.close()
 
 

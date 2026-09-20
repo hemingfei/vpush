@@ -2108,8 +2108,11 @@ class Scheduler:
         self.retry_queue = PushRetryQueue()
         self._stop = asyncio.Event()
         self._last_cleanup = 0.0
-        self._last_report_extract = time.monotonic()
+        # 0 so the first scheduler tick runs extract after a restart.
+        # time.monotonic() here delayed the first batch by a full interval.
+        self._last_report_extract = 0.0
         self._report_extract_running = False
+        self._report_extract_lock = threading.Lock()
         self._last_ima_digest = time.monotonic()
         self._ima_digest_running = False
         self._last_digest_flush = time.monotonic()
@@ -2119,6 +2122,7 @@ class Scheduler:
         self._last_health_check = time.monotonic()
         self._last_cicc_alert_check = 0.0
         self._last_knowledge_notify = 0.0
+        self._last_news_notify = 0.0
         self._last_proxy_tick = 0.0
         self._last_mx_view_check = 0.0
         self._mx_view_check_running = False
@@ -3540,6 +3544,16 @@ class Scheduler:
                     )
                 except Exception:  # noqa: BLE001
                     logger.exception("研报关键词提醒异常")
+            if now_mono - self._last_news_notify >= 60:
+                self._last_news_notify = now_mono
+                try:
+                    from .news_notify import maybe_notify_news_keywords
+
+                    await asyncio.to_thread(
+                        maybe_notify_news_keywords, self.db, self.notifiers_config
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("财经新闻关键词提醒异常")
             if now_mono - self._last_proxy_tick >= PROXY_TICK_INTERVAL:
                 self._last_proxy_tick = now_mono
                 try:
@@ -4070,6 +4084,15 @@ class Scheduler:
         return done
 
     def _run_report_extraction_task(self) -> int:
+        """研报结构化抽取入口：与 IMA/CICC kick 共用，忙则跳过。"""
+        if not self._report_extract_lock.acquire(blocking=False):
+            return 0
+        try:
+            return self._run_report_extraction_unlocked()
+        finally:
+            self._report_extract_lock.release()
+
+    def _run_report_extraction_unlocked(self) -> int:
         """研报结构化抽取：每小时处理最近三天的一批研报。
 
         开关与预算都在 settings：report_extract_enabled（默认开，='0' 关）、
@@ -4154,18 +4177,26 @@ class Scheduler:
                 unresolved += 1
                 continue
             text = ""
+            opened = False
             try:
                 if txt_path is not None and txt_path.is_file():
                     text = txt_path.read_text(encoding="utf-8", errors="replace")
+                    opened = True
                 elif pdf_path is not None and pdf_path.is_file():
                     text = _pdf_first_pages_text(pdf_path)
+                    opened = True
             except (OSError, ValueError):
                 text = ""
             text = usable_report_text(text)
-            if not text.strip() and not str(doc["name"] or "").strip():
-                # txt 与 pdf 都取不到文本且没有标题：落行防重试（修复文本源后可重置重抽）
-                db.save_report_extraction(group_id, media_id, status="notext")
-                continue
+            if not text.strip():
+                if not opened and (has_txt or bool(doc["pdf_path"])):
+                    # Path in the index but file not readable: retry next round.
+                    # Do not title-only commit or the backlog is burned.
+                    unresolved += 1
+                    continue
+                if not str(doc["name"] or "").strip():
+                    db.save_report_extraction(group_id, media_id, status="notext")
+                    continue
             txt_hash = hashlib.sha256(text[:20000].encode("utf-8", "ignore")).hexdigest()[:16]
             try:
                 result = extract_report_structure(

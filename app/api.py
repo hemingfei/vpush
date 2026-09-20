@@ -379,11 +379,13 @@ class NewsSettingsIn(BaseModel):
 
 class NewsSourceCreateIn(BaseModel):
     name: str
+    group_name: str = ""
 
 
 class NewsSourceUpdateIn(BaseModel):
     name: str | None = None
     enabled: bool | None = None
+    group_name: str | None = None
 
 
 class HoldingCreateIn(BaseModel):
@@ -429,6 +431,8 @@ class MeUpdate(BaseModel):
     dnd_allow_favorite: bool | None = None
     keywords: list[str] | None = None
     keywords_match_reports: bool | None = None
+    keywords_match_news: bool | None = None
+    news_font_size: str | None = None
     llm_api_base: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
@@ -1039,6 +1043,8 @@ def public_user(user: dict, db=None) -> dict:
         "dnd_end": user.get("dnd_end") or "",
         "dnd_allow_favorite": bool(user.get("dnd_allow_favorite")),
         "keywords_match_reports": bool(user.get("keywords_match_reports")),
+        "keywords_match_news": bool(user.get("keywords_match_news")),
+        "news_font_size": user.get("news_font_size") or "",
         "llm_api_base": user.get("llm_api_base") or "",
         "llm_api_key": mask_secret(user_plain_secret(user, "llm_api_key", db)),
         "llm_model": user.get("llm_model") or "",
@@ -2428,6 +2434,17 @@ def create_api_router(
             current = db.get_user(user["id"]) or {}
             if want and not current.get("keywords_match_reports"):
                 updates["keywords_match_reports_since"] = datetime.now(UTC).isoformat()
+        if "keywords_match_news" in body.model_fields_set and body.keywords_match_news is not None:
+            want = bool(body.keywords_match_news)
+            updates["keywords_match_news"] = want
+            current = db.get_user(user["id"]) or {}
+            if want and not current.get("keywords_match_news"):
+                updates["keywords_match_news_since"] = datetime.now(UTC).isoformat()
+        if "news_font_size" in body.model_fields_set and body.news_font_size is not None:
+            size = body.news_font_size
+            if size not in ("", "small", "large"):
+                raise HTTPException(status_code=400, detail="字号只支持空(标准)/small/large")
+            updates["news_font_size"] = size
         if "notify_enabled" in body.model_fields_set:
             updates["notify_enabled"] = body.notify_enabled
         if "daily_report_enabled" in body.model_fields_set and body.daily_report_enabled is not None:
@@ -2906,10 +2923,12 @@ def create_api_router(
                 "enabled": bool(source["enabled"]),
                 "status": status["code"],
                 "last_success_at": status["last_success_at"],
+                "group_name": source["group_name"] or "",
             })
         return {
             "items": items,
             "collection_enabled": db.get_setting("news_enabled") == "1",
+            "unread_count": db.unread_news_count(user["id"]),
         }
 
     @router.get("/news")
@@ -2918,19 +2937,25 @@ def create_api_router(
         offset: int = Query(0, ge=0),
         source_id: int | None = Query(None),
         q: str = Query("", max_length=200),
+        unread: bool = Query(False),
         user: dict = Depends(get_current_user),
     ):
+        if source_id is not None:
+            browse = db.get_news_source(source_id)
+            if browse is None or browse["archived_at"]:
+                raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
         view_started_at = datetime.now(UTC).isoformat()
         anchor = (db.get_user(user["id"]) or {}).get("news_last_seen_at")
         rows = db.list_news_articles(
-            user["id"], source_id=source_id, q=q, limit=limit, offset=offset
+            user["id"], source_id=source_id, q=q, limit=limit, offset=offset,
+            unread=unread,
         )
         items = []
         for row in rows:
             row.pop("images", None)
             row["is_new"] = bool(anchor and row["published_at"] > anchor)
             items.append(row)
-        total = db.count_news_articles(user["id"], source_id=source_id, q=q)
+        total = db.count_news_articles(user["id"], source_id=source_id, q=q, unread=unread)
         return {
             "items": items,
             "offset": offset,
@@ -3035,6 +3060,12 @@ def create_api_router(
             "sources": selected_kols,
         }
 
+    @router.post("/news/read-all")
+    def mark_news_read_all(user: dict = Depends(get_current_user)):
+        normalized = datetime.now(UTC).isoformat()
+        db.advance_news_seen(user["id"], normalized)
+        return {"ok": True, "news_last_seen_at": normalized}
+
     @router.get("/news/{article_id}")
     def news_article(article_id: int, user: dict = Depends(get_current_user)):
         article = db.get_news_article(article_id, user_id=user["id"])
@@ -3042,11 +3073,17 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="文章不存在")
         article.pop("images", None)
         article.pop("has_image", None)
+        article["next_id"] = db.get_next_news_article(article, user["id"])
+        article["prev_id"] = db.get_prev_news_article(article, user["id"])
         return article
 
     @router.get("/news/{article_id}/images/{index}")
     def news_article_image(
-        article_id: int, index: int, user: dict = Depends(get_download_user)
+        article_id: int,
+        index: int,
+        response: Response,
+        if_none_match: str | None = Header(None),
+        user: dict = Depends(get_download_user),
     ):
         try:
             body, content_type = _news_service_or_503().fetch_image(
@@ -3058,14 +3095,15 @@ def create_api_router(
             raise HTTPException(status_code=400, detail="图片地址不安全或类型不受支持") from None
         except NewsUpstreamError:
             raise HTTPException(status_code=502, detail="图片暂时无法加载") from None
-        return Response(
-            content=body,
-            media_type=content_type,
-            headers={
-                "Cache-Control": "private, max-age=86400",
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
+        etag = f'"news-img-{hashlib.sha256(body).hexdigest()[:16]}"'
+        headers = {
+            "Cache-Control": "private, max-age=86400",
+            "ETag": etag,
+            "X-Content-Type-Options": "nosniff",
+        }
+        if if_none_match and if_none_match.strip() == etag:
+            return Response(status_code=304, headers=headers)
+        return Response(content=body, media_type=content_type, headers=headers)
 
     # ---- 管理员财经新闻 ----
     def _admin_news_source_row(source: dict, include_archived: bool = True) -> dict:
@@ -3198,7 +3236,7 @@ def create_api_router(
         if not 1 <= len(name) <= 60:
             raise HTTPException(status_code=400, detail="媒体名称长度必须为 1-60 个字符")
         try:
-            source_id = db.add_news_source(name)
+            source_id = db.add_news_source(name, group_name=body.group_name or "")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
         _audit(admin, "news_source_create", str(source_id), name)
@@ -3212,6 +3250,8 @@ def create_api_router(
         kwargs = {}
         if "name" in body.model_fields_set:
             kwargs["name"] = body.name
+        if "group_name" in body.model_fields_set:
+            kwargs["group_name"] = body.group_name
         if "enabled" in body.model_fields_set:
             kwargs["enabled"] = body.enabled
         try:
@@ -3339,6 +3379,28 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="Feed 不存在")
         db.delete_news_feed(feed_id)
         _audit(admin, "news_feed_delete", str(feed_id), feed["name"])
+        return {"ok": True}
+
+    @router.get("/admin/news/articles")
+    def admin_news_articles(
+        source_id: int | None = Query(None),
+        q: str = Query("", max_length=200),
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+        admin: dict = Depends(require_admin),
+    ):
+        del admin
+        items = db.list_admin_news_articles(
+            source_id=source_id, q=q, limit=limit, offset=offset
+        )
+        return {"items": items}
+
+    @router.delete("/admin/news/articles/{article_id}")
+    def delete_admin_news_article(article_id: int, admin: dict = Depends(require_admin)):
+        deleted = db.delete_news_article(article_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="文章不存在")
+        _audit(admin, "news_article_delete", str(article_id))
         return {"ok": True}
 
     @router.post("/admin/news/feeds/{feed_id}/refresh")
@@ -4471,9 +4533,10 @@ def create_api_router(
         return {"abstract_zh": zh}
 
     def _ima_archive_file(document: dict, field: str):
-        if not ima_documents.store.archive_readable():
+        store = ima_documents.store
+        if store.archive_nfs_isolated():
             raise HTTPException(status_code=503, detail="知识库存储暂不可用")
-        return ima_documents.store.authorized_archive_file(document.get(f"{field}_path"))
+        return store.authorized_archive_file(document.get(f"{field}_path"))
 
     @router.get("/ima-documents/{media_id}/timeline")
     def get_feishu_document_timeline(
@@ -5230,7 +5293,7 @@ def create_api_router(
 
     @router.post("/admin/ima-storage/backup", dependencies=[Depends(require_admin)])
     def backup_ima_storage(admin: dict = Depends(require_admin)):
-        from .cicc_collector import from_env
+        from .cicc_collector import CiccIsolatedError, from_env
 
         # 旧实现写 .vpush-backup-request 请求文件，但存储机从未有消费者（死信）；
         # 改走命令通道：dispatch 的 backup 模式直接运行 restic-backup.sh
@@ -5238,7 +5301,10 @@ def create_api_router(
         ctl = from_env()
         if ctl is None:
             raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
-        result = ctl.trigger("backup", admin["username"])
+        try:
+            result = ctl.trigger("backup", admin["username"])
+        except CiccIsolatedError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         _audit(admin, "ima_storage_backup", "", "requested")
         return {"status": "started", **result}
 
@@ -5253,13 +5319,15 @@ def create_api_router(
 
     @router.post("/admin/cicc/trigger", dependencies=[Depends(require_admin)])
     def cicc_trigger(body: CiccTriggerIn, admin: dict = Depends(require_admin)):
-        from .cicc_collector import from_env
+        from .cicc_collector import CiccIsolatedError, from_env
 
         ctl = from_env()
         if ctl is None:
             raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
         try:
             result = ctl.trigger(body.mode, admin["username"])
+        except CiccIsolatedError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         _audit(admin, "cicc_trigger", "", body.mode)
@@ -5276,16 +5344,19 @@ def create_api_router(
 
     @router.put("/admin/cicc/schedule", dependencies=[Depends(require_admin)])
     def cicc_set_schedule(body: CiccScheduleIn, admin: dict = Depends(require_admin)):
-        from .cicc_collector import from_env, validate_time_of_day
+        from .cicc_collector import CiccIsolatedError, from_env, validate_time_of_day
 
         ctl = from_env()
         if ctl is None:
             raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
         if body.time is not None and not validate_time_of_day(body.time):
             raise HTTPException(status_code=400, detail="时间格式应为 HH:mm（00:00-23:59）")
-        result = ctl.set_schedule(body.enabled)
-        if body.time is not None:
-            result.update(ctl.set_schedule_time(body.time, admin["username"]))
+        try:
+            result = ctl.set_schedule(body.enabled)
+            if body.time is not None:
+                result.update(ctl.set_schedule_time(body.time, admin["username"]))
+        except CiccIsolatedError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         _audit(admin, "cicc_schedule", "",
                f"{'enabled' if body.enabled else 'disabled'} time={body.time or '-'}")
         return result

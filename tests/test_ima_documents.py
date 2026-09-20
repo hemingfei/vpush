@@ -1235,6 +1235,24 @@ def test_list_items_retries_transient_code_30005(monkeypatch):
     assert sleeps == [1.5]
 
 
+def test_list_items_retries_rate_limit_code_30021(monkeypatch):
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    responses = iter([
+        {"code": 30021},
+        {"code": "30021"},
+        {"code": 0, "knowledge_list": []},
+    ])
+    sleeps = []
+    client._token = lambda: "access"
+    client._open_json = lambda request: (next(responses), {})
+    monkeypatch.setattr("app.ima_documents.time.sleep", sleeps.append)
+
+    assert client.list_items("root") == []
+    assert sleeps == [1.5, 3.0]
+
+
 def test_knowledge_tab_reader_status_prefers_code_on_success(monkeypatch):
     client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh", root_folder_id="root"))
     client._token = lambda: "access"
@@ -4019,6 +4037,88 @@ def test_download_includes_puller_error_body(tmp_path, monkeypatch):
         )
 
 
+def test_download_pull_circuit_opens_on_http_5xx(tmp_path, monkeypatch):
+    from app.archive_guard import reset_arm_circuit
+
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    reset_arm_circuit()
+    monkeypatch.setenv("IMA_PULL_URL", "http://10.80.0.2:8743/pull")
+    monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive))
+    def fake_urlopen(req, timeout=20):
+        raise urllib.error.HTTPError(req.full_url, 502, "Bad Gateway", {}, io.BytesIO(b""))
+
+    monkeypatch.setattr(ima_documents.urllib.request, "urlopen", fake_urlopen)
+    media = {
+        "jump_url_info": {
+            "url": "https://res-skb.ima.qq.com/file.pdf?sign=1",
+            "headers": {"X-IMA-Sign": "sig"},
+        }
+    }
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    dest = archive / "g" / "a.pdf"
+    try:
+        with pytest.raises(RuntimeError, match="HTTP 502"):
+            client.download(media, dest)
+        with pytest.raises(RuntimeError, match="HTTP 502"):
+            client.download(media, dest)
+        with pytest.raises(RuntimeError, match="circuit open"):
+            client.download(media, dest)
+    finally:
+        reset_arm_circuit()
+
+
+def test_storage_block_clears_when_ima_pull(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMA_PULL_URL", "http://arm:8743/pull")
+    monkeypatch.delenv("VPUSH_ARM_MIDDLEWARE", raising=False)
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / ".vpush-ima-root").touch()
+    service = ImaDocumentService(
+        DB(tmp_path / "pull-block.sqlite"),
+        tmp_path / "index",
+        archive_root=archive,
+        storage_status=ImaStorageStatus(tmp_path / "missing-status.json", remote=True),
+    )
+    assert service.store.archive_writable() is False
+    assert service._storage_block_status() is None
+
+
+def test_download_pull_circuit_opens_on_unreachable(tmp_path, monkeypatch):
+    from app.archive_guard import reset_arm_circuit
+
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    reset_arm_circuit()
+    monkeypatch.setenv("IMA_PULL_URL", "http://10.80.0.2:8743/pull")
+    monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive))
+    monkeypatch.setenv("IMA_PULL_TIMEOUT", "2")
+
+    def fake_urlopen(req, timeout=20):
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(ima_documents.urllib.request, "urlopen", fake_urlopen)
+    media = {
+        "jump_url_info": {
+            "url": "https://res-skb.ima.qq.com/file.pdf?sign=1",
+            "headers": {"X-IMA-Sign": "sig"},
+        }
+    }
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    dest = archive / "g" / "a.pdf"
+    try:
+        with pytest.raises(RuntimeError, match="unreachable"):
+            client.download(media, dest)
+        with pytest.raises(RuntimeError, match="unreachable"):
+            client.download(media, dest)
+        with pytest.raises(RuntimeError, match="circuit open"):
+            client.download(media, dest)
+    finally:
+        reset_arm_circuit()
+
+
 def test_download_uses_cdn_when_pull_url_unset(tmp_path, monkeypatch):
     seen = {}
 
@@ -4606,6 +4706,32 @@ def test_worker_kicks_report_extract_after_download(monkeypatch):
 
 def test_worker_skips_report_extract_when_nothing_downloaded(monkeypatch):
     assert _bare_worker(monkeypatch, {"status": "finished", "downloaded": 0}) == []
+
+
+def test_arm_library_sync_kicks_extract_when_added(monkeypatch):
+    service = ImaDocumentService.__new__(ImaDocumentService)
+    kicks = []
+    service.on_files_ready = lambda: kicks.append("extract")
+    monkeypatch.setattr(
+        service,
+        "sync_local_library_from_arm",
+        lambda: {"status": "finished", "fetched": 2, "added": 2},
+    )
+    service._arm_library_sync_safe()
+    assert kicks == ["extract"]
+
+
+def test_arm_library_sync_skips_extract_when_nothing_new(monkeypatch):
+    service = ImaDocumentService.__new__(ImaDocumentService)
+    kicks = []
+    service.on_files_ready = lambda: kicks.append("extract")
+    monkeypatch.setattr(
+        service,
+        "sync_local_library_from_arm",
+        lambda: {"status": "finished", "fetched": 0, "added": 0},
+    )
+    service._arm_library_sync_safe()
+    assert kicks == []
 
 
 def test_failed_listing_keeps_old_group_index(tmp_path, monkeypatch):

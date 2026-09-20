@@ -1,27 +1,100 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ARM 实验室运维 · 登录</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f5f7">
+  <title>ARM 中间层 · 登录</title>
+  <link id="favicon" rel="icon" type="image/svg+xml" href="/static/logo-mark.svg">
+  <script>
+    (function () {
+      try {
+        var m = localStorage.getItem("theme") || "auto";
+        var dark = m === "dark" || (m === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        if (dark) document.documentElement.classList.add("theme-dark");
+        var themeColor = document.querySelector('meta[name="theme-color"]');
+        if (themeColor) themeColor.content = dark ? "#0f1115" : "#f5f5f7";
+        var fav = document.getElementById("favicon");
+        if (fav) fav.setAttribute("href", dark ? "/static/logo-mark-dark.svg" : "/static/logo-mark.svg");
+      } catch (e) { /* localStorage 不可用时静默 */ }
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/vendor/design-tokens.css">
+  <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/ops.css">
 </head>
-<body class="paper">
-  <main class="login-board">
-    <p class="eyebrow">Oracle-SJ-ARM</p>
-    <h1>实验室运维</h1>
-    <p class="lede">中间层状态与 115 扫码。不是阅读台，也不是生产 vpush 后台。</p>
-    {% if error %}
-    <p class="banner banner-warn" role="alert">{{ error }}</p>
-    {% endif %}
-    <form method="post" action="/login" class="stack">
-      <label class="field">
-        <span>口令</span>
-        <input type="password" name="password" autocomplete="current-password" required>
-      </label>
-      <button type="submit" class="btn btn-primary">进入面板</button>
-    </form>
-    <p class="hint">优先 Tailscale 本机 IPv4:8055（仍须口令）。备选 <code>ssh -L 8055:127.0.0.1:8055</code>。不要在公网 NIC 上挂 <code>0.0.0.0:8055</code>。</p>
-  </main>
+<body>
+  <div id="auth-view" class="auth-view">
+    <div class="auth-topbar">
+      <button type="button" class="theme-toggle-btn auth-theme-toggle" onclick="cycleTheme()" aria-label="切换主题" title="切换主题"></button>
+    </div>
+    <main class="login-shell">
+      <div class="login-brand">
+        <div class="login-brand-header">
+          <img id="login-logo" class="login-logo" src="/static/logo-mark.svg" alt="ARM">
+          <h1 class="login-brand-title">ARM 中间层</h1>
+          <p class="login-brand-desc">采集与热缓存。vpush 只连这里。</p>
+        </div>
+        <ul class="login-features">
+          <li class="login-feature">
+            <div class="login-feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>
+            </div>
+            <div class="login-feature-content">
+              <div class="login-feature-header">
+                <span class="login-feature-name">IMA 走生产增量</span>
+                <span class="status-pulse-dot" title="由 vpush 写入" aria-label="由 vpush 写入"></span>
+              </div>
+              <span class="login-feature-meta">生产 sync_once 经 /pull 落盘，这里不双采</span>
+            </div>
+          </li>
+          <li class="login-feature">
+            <div class="login-feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>
+            </div>
+            <div class="login-feature-content">
+              <div class="login-feature-header">
+                <span class="login-feature-name">热缓存先入 hot</span>
+                <span class="status-pulse-dot" title="不挡展示" aria-label="不挡展示"></span>
+              </div>
+              <span class="login-feature-meta">115 后台上传，失败不挡住 vpush 取文件</span>
+            </div>
+          </li>
+          <li class="login-feature">
+            <div class="login-feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+            <div class="login-feature-content">
+              <div class="login-feature-header">
+                <span class="login-feature-name">只对 vpush HTTP</span>
+                <span class="status-pulse-dot" title="隔离" aria-label="隔离"></span>
+              </div>
+              <span class="login-feature-meta">/pull · /file · /list，不挂生产 NFS</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+      <section class="login-card">
+        <div class="login-card-body">
+          <form id="login-form" class="login-form" method="post" action="/login">
+            <h2 class="login-title">进入值班台</h2>
+            <p class="login-subtitle">看采集、热缓存、115 与对 vpush 的 HTTP。</p>
+            <label class="field-label" for="login-password">口令</label>
+            <div class="pw-field">
+              <input id="login-password" class="form-control" type="password" name="password" placeholder="输入值班口令" autocomplete="current-password" required>
+              <button type="button" class="pw-toggle" aria-label="显示密码" onclick="togglePassword('login-password', this)">
+                <svg class="pw-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="pw-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="m1 1 22 22"/></svg>
+              </button>
+            </div>
+            <p id="auth-error" class="form-error" role="alert">{% if error %}{{ error }}{% endif %}</p>
+            <button type="submit" class="btn-normal btn-fluid">进入面板</button>
+            <p class="login-access-note">优先 Tailscale 本机 IPv4:8055（仍须口令）。备选 <code>ssh -L 8055:127.0.0.1:8055</code>。不要在公网 NIC 上挂 <code>0.0.0.0:8055</code>。</p>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/static/ops.js"></script>
 </body>
 </html>
