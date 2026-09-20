@@ -192,6 +192,39 @@ def test_parse_ima_sync_log_redacts_and_groups(tmp_path):
     assert "UID=<redacted>" in dumped
 
 
+def test_parse_ima_sync_log_clears_last_error_after_later_success(tmp_path):
+    log = tmp_path / "ima-lab-sync-20260920.log"
+    log.write_text(
+        "\n".join(
+            [
+                "lab sync 失败: IMA list failed code=30021",
+                "=== sequential apply start ===",
+                "group=legacy",
+                "apply downloaded=1 skipped=0 failed=0",
+                "=== sequential apply end rc=0 ===",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    summary = parse_ima_sync_log(log)
+    assert summary["totals"]["downloaded"] == 1
+    assert summary["last_error"] is None
+
+
+def test_parse_cicc_sync_log_clears_last_error_after_rc0(tmp_path):
+    log = tmp_path / "cicc-host-sync-20260920.log"
+    log.write_text(
+        "start 2026-09-20T12:00:00+08:00 days=3 dry_run=0\n"
+        "lab sync 失败: timeout\n"
+        "done rc=0 2026-09-20T12:01:00+08:00\n",
+        encoding="utf-8",
+    )
+    summary = parse_cicc_sync_log(log)
+    assert summary["returncode"] == 0
+    assert summary["last_error"] is None
+
+
 def test_parse_cicc_host_sync_log(tmp_path):
     log = tmp_path / "cicc-host-sync-20260920.log"
     log.write_text(
@@ -290,6 +323,7 @@ def test_cicc_apply_mocked(lab_env, monkeypatch):
     def fake_run(argv, **kwargs):
         seen["argv"] = argv
         seen["env"] = kwargs.get("env") or {}
+        seen["timeout"] = kwargs.get("timeout")
         return _Proc(0, "apply downloaded=1 skipped=0 failed=0\n", "")
 
     monkeypatch.setattr("ops_actions.subprocess.run", fake_run)
@@ -303,6 +337,7 @@ def test_cicc_apply_mocked(lab_env, monkeypatch):
     assert "3" in seen["argv"]
     assert "--dry-run" not in seen["argv"]
     assert "cicc_report_collector.py" in " ".join(seen["argv"])
+    assert seen["timeout"] == 21600
 
 
 def test_api_sync_endpoints_mocked(client, lab_env, monkeypatch):

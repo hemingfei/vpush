@@ -46,17 +46,30 @@ def test_below_force_does_not_delete(_isolate_cache):
     assert hot.is_file()
 
 
-def test_force_deletes_oldest_hot_first(_isolate_cache):
+def test_force_deletes_uploaded_hot_keeps_pending(_isolate_cache):
     cache = _isolate_cache
-    old = _write(cache, "hot/local/old.pdf", 100_000, mtime=1)
-    new = _write(cache, "hot/local/new.pdf", 10_000, mtime=9_000_000_000)
+    uploaded = _write(cache, "hot/local/done.pdf", 100_000, mtime=1)
+    pending = _write(cache, "hot/local/pending.pdf", 10_000, mtime=2)
+    manifest.mark_uploaded("local/done.pdf", sha1="done", size=100_000)
     result = cache_gc.run_gc(
-        root=cache, warn=50_000, force=80_000, purge_failed=False, dry_run=False, min_age=0
+        root=cache, warn=20_000, force=40_000, purge_failed=False, dry_run=False, min_age=0
     )
-    assert old.is_file() is False
-    assert new.is_file()
-    assert result["deleted_bytes"] >= 100_000
-    assert result["message"] == "forced_cleaned"
+    assert uploaded.is_file() is False
+    assert pending.is_file()
+    assert "hot_not_uploaded" in {row["reason"] for row in result["protected"]}
+
+
+def test_skips_unuploaded_hot(_isolate_cache):
+    cache = _isolate_cache
+    pending = _write(cache, "hot/local/pending.pdf", 100_000, mtime=1)
+    result = cache_gc.run_gc(
+        root=cache, warn=20_000, force=40_000, purge_failed=False, dry_run=False, min_age=0
+    )
+    assert pending.is_file()
+    reasons = {row["reason"] for row in result["protected"]}
+    assert "hot_not_uploaded" in reasons
+    assert result["ok"] is False
+    assert result["message"] == "still_over_force"
 
 
 def test_skips_unuploaded_staging(_isolate_cache):
@@ -87,6 +100,7 @@ def test_deletes_uploaded_staging(_isolate_cache):
 def test_dry_run_leaves_hot(_isolate_cache):
     cache = _isolate_cache
     hot = _write(cache, "hot/local/a.pdf", 100_000, mtime=1)
+    manifest.mark_uploaded("local/a.pdf", sha1="abc", size=100_000)
     result = cache_gc.run_gc(
         root=cache, warn=20_000, force=40_000, purge_failed=False, dry_run=True, min_age=0
     )

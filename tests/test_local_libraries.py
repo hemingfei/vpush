@@ -307,6 +307,26 @@ def test_scan_keeps_index_when_disk_has_fewer_pdfs(tmp_path):
     assert row["pdf_count"] == 4
 
 
+def test_scan_keeps_index_when_settings_pdf_count_zero(tmp_path):
+    service, archive = _service(tmp_path)
+    lib = _make_library(
+        archive,
+        slug="cicc-research",
+        pdfs=[f"091{i}/old_{i}.pdf" for i in range(4)],
+    )
+    service.scan_local_libraries()
+    payload = json.loads(service.db.get_setting("ima_local_libraries") or "{}")
+    payload["libraries"][0]["pdf_count"] = 0
+    service.db.set_setting("ima_local_libraries", json.dumps(payload, ensure_ascii=False))
+    for i in range(3):
+        (lib / f"091{i}" / f"old_{i}.pdf").unlink()
+    result = service.scan_local_libraries()
+
+    assert service.db.ima_document_index_count() == 4
+    row = next(item for item in result["libraries"] if item["slug"] == "cicc-research")
+    assert "少于上次" in row["error"]
+
+
 def test_ingest_local_library_increment_adds_without_dropping(tmp_path):
     service, archive = _service(tmp_path)
     _make_library(

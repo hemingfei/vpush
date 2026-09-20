@@ -274,6 +274,7 @@ def test_wrappers_read_settings_file():
     cicc = (root / "cicc-lab-sync.sh").read_text(encoding="utf-8")
     helper = (root / "apply-lab-sync-timers.sh").read_text(encoding="utf-8")
     assert "ima_host_sync.py" in ima
+    assert "IMA_LAB_DUAL_COLLECT" in ima
     assert "IMA_PURE_GROUPS_FILE" in ima
     assert "cicc_report_collector.py" in cicc
     assert "--arm-middleware" in cicc

@@ -6377,8 +6377,14 @@ class DB:
             return None
         return _ima_public_document(rows[0])
 
-    def ima_document_index_count(self) -> int:
-        rows = self._read_only_rows("SELECT COUNT(*) AS n FROM ima_document_index")
+    def ima_document_index_count(self, group_id: str = "") -> int:
+        if group_id:
+            rows = self._read_only_rows(
+                "SELECT COUNT(*) AS n FROM ima_document_index WHERE group_id = ?",
+                (group_id,),
+            )
+        else:
+            rows = self._read_only_rows("SELECT COUNT(*) AS n FROM ima_document_index")
         return int(rows[0]["n"] if rows else 0)
 
     def get_tag_vocabulary(self) -> list[dict]:

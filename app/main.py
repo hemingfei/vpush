@@ -241,8 +241,11 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     notifiers = build_notifiers(config)
     def _ima_archive_file(relative):
         store = getattr(ima_documents, "store", None)
-        if store is None or not store.archive_readable():
+        if store is None:
             return None
+        # archive_readable() is the old NFS health gate. Local disk + ARM
+        # GET /file must still resolve; authorized_archive_file already
+        # returns None on a kernel NFS mount.
         return store.authorized_archive_file(relative)
 
     scheduler = Scheduler(

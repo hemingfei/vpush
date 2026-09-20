@@ -253,6 +253,64 @@ def test_report_extraction_uses_title_when_pdf_has_no_text(tmp_path, monkeypatch
     assert calls == [("", "Nomura AI Strategy Buy-260909.pdf")]
 
 
+def test_report_extract_skips_missing_file_without_burning(tmp_path, monkeypatch):
+    db = DB(tmp_path / "missing-file.db")
+    group_id = "local-cicc-research"
+    today = datetime.datetime.now(app_scheduler.CN_TZ).date().isoformat()
+    db._execute(
+        "INSERT INTO ima_document_index "
+        "(group_id, media_id, name, has_pdf, pdf_path, sort_date) "
+        "VALUES (?, 'ghost', 'Ghost report.pdf', 1, 'missing.pdf', ?)",
+        (group_id, today),
+    )
+    monkeypatch.setattr(
+        "app.llm.extract_report_structure",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not extract")),
+    )
+    scheduler = Scheduler(
+        db,
+        {},
+        [],
+        SimpleNamespace(),
+        llm_config=SimpleNamespace(api_key="k", api_base="https://example.com/v1", model="m"),
+        ima_archive_file=lambda path: tmp_path / path,
+    )
+    assert scheduler._run_report_extraction_task() == 0
+    assert db.report_extractions_for_keys([(group_id, "ghost")]) == {}
+
+
+def test_report_extract_due_immediately_after_start(tmp_path):
+    db = DB(tmp_path / "extract-start.db")
+    scheduler = Scheduler(
+        db,
+        {},
+        [],
+        SimpleNamespace(),
+        llm_config=SimpleNamespace(api_key="k", api_base="https://example.com/v1", model="m"),
+        ima_archive_file=lambda path: tmp_path / path,
+    )
+    assert scheduler._last_report_extract == 0.0
+    interval = int(db.get_setting("report_extract_interval_seconds") or 3600)
+    assert time.monotonic() - scheduler._last_report_extract > interval
+
+
+def test_report_extract_skips_when_lock_held(tmp_path):
+    db = DB(tmp_path / "extract-lock.db")
+    scheduler = Scheduler(
+        db,
+        {},
+        [],
+        SimpleNamespace(),
+        llm_config=SimpleNamespace(api_key="k", api_base="https://example.com/v1", model="m"),
+        ima_archive_file=lambda path: tmp_path / path,
+    )
+    assert scheduler._report_extract_lock.acquire(blocking=False)
+    try:
+        assert scheduler._run_report_extraction_task() == 0
+    finally:
+        scheduler._report_extract_lock.release()
+
+
 def add_kol_subscribed(db, platform, name, external_id, **kw):
     """建大V + 自动建一个订阅用户，使抓取调度认为该大V有人订阅。
 

@@ -2,8 +2,9 @@
 """Cache GC for /cache (ARM lab).
 
 If /cache used >= CACHE_WARN_GB (default 30) log a warning.
-If /cache used >= CACHE_FORCE_GB (default 35) delete oldest files in hot/
-(and staging/ only after lab.sqlite says uploaded/hot).
+If /cache used >= CACHE_FORCE_GB (default 35) delete oldest *uploaded* hot/
+and staging/ (lab.sqlite status uploaded/hot). Hot-first copies that are
+not yet on 115 stay. Manifest unread → protect all hot and staging.
 
 Never delete failed/ unless --purge-failed (or GC_PURGE_FAILED=1).
 Never delete un-uploaded staging unless --allow-unuploaded-staging
@@ -146,6 +147,15 @@ def protect_reason(
 ) -> str | None:
     """Return a reason to skip deletion, or None if the file may be GC'd."""
     if _under(path, paths["hot"]):
+        if allow_unuploaded:
+            return None
+        if not manifest_ok:
+            return "manifest_unread"
+        rel = staging_rel(path, paths["hot"])
+        if rel is None:
+            return "hot_escape"
+        if rel not in uploaded_rels:
+            return "hot_not_uploaded"
         return None
     if _under(path, paths["failed"]):
         return None if purge_failed else "failed_protected"

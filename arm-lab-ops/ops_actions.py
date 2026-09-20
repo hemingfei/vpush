@@ -33,6 +33,7 @@ from ops_settings import (
     python_bin,
     scripts_root,
     src_root,
+    cicc_timeout_seconds,
     sync_timeout_seconds,
 )
 from ops_status import list_failed_files, redact, skip_cache_file
@@ -385,7 +386,7 @@ def cicc_sync(body: dict[str, Any] | None, *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         argv.append("--dry-run")
     action = "cicc-dry-run" if dry_run else "cicc-apply"
-    result = run_subprocess_job(action, argv)
+    result = run_subprocess_job(action, argv, timeout=cicc_timeout_seconds())
     result["days"] = days
     return result
 

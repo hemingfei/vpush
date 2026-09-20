@@ -3747,9 +3747,10 @@ def create_api_router(
         return {"abstract_zh": zh}
 
     def _ima_archive_file(document: dict, field: str):
-        if not ima_documents.store.archive_readable():
+        store = ima_documents.store
+        if store.archive_nfs_isolated():
             raise HTTPException(status_code=503, detail="知识库存储暂不可用")
-        return ima_documents.store.authorized_archive_file(document.get(f"{field}_path"))
+        return store.authorized_archive_file(document.get(f"{field}_path"))
 
     @router.get("/ima-documents/{media_id}/timeline")
     def get_feishu_document_timeline(

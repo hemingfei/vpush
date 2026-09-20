@@ -1373,6 +1373,8 @@ class ImaPureClient:
                     body = json.loads(response.read().decode())
                 breaker.success()
             except urllib.error.HTTPError as exc:
+                if int(getattr(exc, "code", 0) or 0) >= 500:
+                    breaker.failure()
                 detail = ""
                 try:
                     detail = exc.read().decode("utf-8", "replace")[:200].strip()
@@ -1726,9 +1728,18 @@ class ImaDocumentStore:
             return True
         return self.storage_status.can_write() and self._marker_present()
 
+    def archive_nfs_isolated(self) -> bool:
+        """True when the archive is a kernel NFS mount. Do not stat it."""
+        return self._nfs_isolated or is_remote_nfs(self.archive_root)
+
     def authorized_archive_file(self, relative: Any) -> Path | None:
-        """Resolve a stored archive-relative path. Caller must gate on archive_readable()."""
-        if self._nfs_isolated or is_remote_nfs(self.archive_root):
+        """Resolve a stored archive-relative path.
+
+        Local disk may fetch a miss from ARM over HTTP. A kernel NFS mount
+        returns None and never stats. This does not require archive_readable():
+        stale IMA_STORAGE_STATUS must not block extract or user download.
+        """
+        if self.archive_nfs_isolated():
             return None
         path = self._state_path(relative)
         if path is not None and self._path_is_file(path):
@@ -2856,6 +2867,12 @@ class ImaDocumentService:
             self._progress = current
 
     def _storage_block_status(self) -> str | None:
+        if self.store.archive_nfs_isolated():
+            return "storage_unavailable"
+        # Production writes through IMA_PULL to ARM. A stale NFS-era
+        # status file must not abort listing/download.
+        if os.environ.get("IMA_PULL_URL", "").strip() and not arm_middleware_enabled():
+            return None
         if self.store.archive_writable():
             return None
         data = self.storage_status.load()
@@ -4106,6 +4123,13 @@ class ImaDocumentService:
             slug = str(entry.get("slug") or "")
             old = previous.get(slug) or {}
             old_count = int(old.get("pdf_count") or 0)
+            group_id = str(entry.get("group_id") or old.get("group_id") or "")
+            counter = getattr(self.db, "ima_document_index_count", None)
+            if group_id and callable(counter):
+                try:
+                    old_count = max(old_count, int(counter(group_id)))
+                except TypeError:
+                    pass
             new_count = int(entry.get("pdf_count") or 0)
             if entry.get("error") or old_count <= 0 or new_count >= old_count:
                 output.append(entry)
@@ -4360,6 +4384,7 @@ class ImaDocumentService:
                 result.get("fetched"),
                 result.get("added"),
             )
+            self._kick_report_extract(result)
         except Exception as exc:  # noqa: BLE001
             logger.warning("ARM local library sync failed error=%s", _safe_error(exc))
 
@@ -4453,7 +4478,15 @@ class ImaDocumentService:
         return {"status": "started"}
 
     def _kick_report_extract(self, result: dict[str, Any] | None) -> None:
-        if not isinstance(result, dict) or int(result.get("downloaded") or 0) <= 0:
+        if not isinstance(result, dict):
+            return
+        ready = 0
+        for key in ("downloaded", "added", "fetched"):
+            try:
+                ready += max(int(result.get(key) or 0), 0)
+            except (TypeError, ValueError):
+                continue
+        if ready <= 0:
             return
         hook = getattr(self, "on_files_ready", None)
         if not callable(hook):

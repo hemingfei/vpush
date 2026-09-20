@@ -52,6 +52,7 @@ REQUEUE_CAP = 100
 SYNC_LIMIT_DEFAULT = 3
 SYNC_LIMIT_MAX = 5
 SYNC_TIMEOUT_SECONDS = 120
+CICC_TIMEOUT_SECONDS = 21600
 SYNC_OUTPUT_CHARS = 4000
 JOURNAL_LINES = 40
 CACHE_WARN_GB_DEFAULT = 30.0
@@ -205,6 +206,10 @@ def cache_force_bytes() -> int:
 
 def sync_timeout_seconds() -> int:
     return env_int("ARM_OPS_SYNC_TIMEOUT", SYNC_TIMEOUT_SECONDS)
+
+
+def cicc_timeout_seconds() -> int:
+    return env_int("ARM_OPS_CICC_TIMEOUT", CICC_TIMEOUT_SECONDS)
 
 
 def openlist_public_url() -> str:

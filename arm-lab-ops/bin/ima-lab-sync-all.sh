@@ -23,4 +23,11 @@ export IMA_HOST_INDEX="${IMA_HOST_INDEX:-$CACHE_ROOT/ima-index}"
 export VPUSH_ARM_STAGING_ROOT="${VPUSH_ARM_STAGING_ROOT:-$CACHE_ROOT/staging}"
 export PYTHONPATH="${PYTHONPATH:-$SRC_ROOT}"
 
+# Production owns IMA incremental (sync_once → IMA_PULL). Do not dual-collect
+# from this host timer unless Kale explicitly sets IMA_LAB_DUAL_COLLECT=1.
+if [[ "${IMA_LAB_DUAL_COLLECT:-0}" != "1" ]]; then
+  echo "IMA lab collect refused: production owns incremental via IMA_PULL. Timer must stay disabled." >&2
+  exit 3
+fi
+
 exec "$PYTHON" "$SCRIPT" --enable --secrets "$SECRETS" --groups-file "$GROUPS_FILE"

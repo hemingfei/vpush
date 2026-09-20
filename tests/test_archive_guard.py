@@ -148,10 +148,44 @@ def test_store_refuses_nfs_without_statting(tmp_path, monkeypatch):
         storage_status=ImaStorageStatus(None, remote=True),
     )
     assert store._nfs_isolated is True
+    assert store.archive_nfs_isolated() is True
     assert store.archive_readable() is False
     assert store.archive_writable() is False
     assert store.authorized_archive_file("0918/a.pdf") is None
     assert not archive.exists()
+
+
+def test_authorized_archive_file_fetches_when_status_unreadble(tmp_path, monkeypatch):
+    reset_arm_circuit()
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / ".vpush-ima-root").touch()
+    monkeypatch.setenv("IMA_PULL_URL", "http://100.112.25.21:8743/pull")
+    monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
+    monkeypatch.setattr("app.ima_documents.is_remote_nfs", lambda *args, **kwargs: False)
+    monkeypatch.setattr("app.archive_guard.is_remote_nfs", lambda *args, **kwargs: False)
+
+    class Resp:
+        def read(self):
+            return b"%PDF-1.7arm"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=5: Resp())
+    status = ImaStorageStatus(tmp_path / "missing-status.json", remote=True)
+    store = ImaDocumentStore(
+        tmp_path / "index",
+        archive_root=archive,
+        storage_status=status,
+    )
+    assert store.archive_readable() is False
+    got = store.authorized_archive_file("7479/0920/a.pdf")
+    assert got is not None
+    assert got.read_bytes() == b"%PDF-1.7arm"
 
 
 def test_archive_lock_refuses_nfs(tmp_path, monkeypatch):

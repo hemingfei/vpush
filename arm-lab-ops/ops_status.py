@@ -528,6 +528,7 @@ _SYNC_COUNTS_RE = re.compile(
     re.IGNORECASE,
 )
 _SYNC_ERROR_RE = re.compile(r"\b(FAIL|ERROR|失败|Traceback)\b", re.IGNORECASE)
+_SYNC_OK_RE = re.compile(r"\brc=0\b", re.IGNORECASE)
 
 
 def skip_cache_file(path: Path) -> bool:
@@ -603,6 +604,8 @@ def parse_ima_sync_log(path: Path) -> dict[str, Any]:
             row["skipped"] = int(cmatch.group(2))
             row["failed"] = int(cmatch.group(3))
             group_has_summary.add(current)
+            if row["failed"] == 0:
+                last_error = None
             continue
         kind = line.split(None, 1)[0].upper() if line.split() else ""
         if current not in group_has_summary:
@@ -614,6 +617,8 @@ def parse_ima_sync_log(path: Path) -> dict[str, Any]:
                 bucket(current)["failed"] += 1
         if _SYNC_ERROR_RE.search(line):
             last_error = redact(line)
+        if _SYNC_OK_RE.search(line):
+            last_error = None
 
     totals = {"downloaded": 0, "skipped": 0, "failed": 0}
     for row in groups.values():
@@ -685,6 +690,9 @@ def parse_cicc_sync_log(path: Path) -> dict[str, Any]:
             rc = re.search(r"rc=(-?\d+)", line)
             if rc:
                 returncode = int(rc.group(1))
+                if returncode == 0:
+                    last_error = None
+                    continue
         if _SYNC_ERROR_RE.search(line):
             last_error = redact(line)
     return {
