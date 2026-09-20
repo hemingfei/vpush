@@ -4468,10 +4468,11 @@ function paintActionMarkModal(data) {
     const eff = effTargets.get(`${m.target_name}|${m.action}`);
     const mine = !!m.is_mine;
     // 撤他人（仅管理员）带 user_id；撤自己恒不带（DELETE 以登录态定位）
+    // 票名经 JSON.stringify 后嵌双引号 onclick 属性会被截断，替换成 &quot; 实体
     const delBtn = (mine || isAdmin)
       ? `<button type="button" class="am-mark-del" title="撤销该标注"
           aria-label="撤销${escapeHtml(m.username)}对${escapeHtml(m.target_name)}的标注"
-          onclick="deleteActionMark(${Number(data.post.id)}, ${JSON.stringify(String(m.target_name))}, ${mine ? 0 : Number(m.user_id || 0)})">×</button>`
+          onclick="deleteActionMark(${Number(data.post.id)}, ${JSON.stringify(String(m.target_name)).replace(/"/g, "&quot;")}, ${mine ? 0 : Number(m.user_id || 0)})">×</button>`
       : "";
     return `
     <div class="am-mark-row${eff ? " is-effective" : ""}">
@@ -6883,6 +6884,7 @@ const {
   mxcRecentChange,
   mxcSetSort,
   mxcToggleClosed,
+  mxcToggleActs,
 } = createMxKolHoldingsView({
   $,
   state,
@@ -9300,6 +9302,7 @@ const INLINE_HANDLERS = {
   mxcRecentChange,
   mxcSetSort,
   mxcToggleClosed,
+  mxcToggleActs,
   mxvAdminKolToggle,
   mxvAdminKolAll,
   mxvAdminKolNone,

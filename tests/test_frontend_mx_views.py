@@ -794,7 +794,8 @@ def test_mx_kol_pnl_actions_contract():
     """盈亏行操作时间线：后端 actions=[{kind,at}] 逐笔渲染建仓/加仓/减仓/清仓/翻空徽章。
 
     徽章复用时间线 MXC_KINDS 文案与配色（买=红系/卖=绿系）；在持与已了结两段
-    都嵌；行情缺价的票操作也照记（降级行同样有时间线）。
+    都嵌；行情缺价的票操作也照记（降级行同样有时间线）。长窗口同一票几十笔
+    操作全铺开会盖过其他票：默认每类只露最近一次，其余折叠进「更多」。
     """
     mxc = (STATIC / "views" / "mx-kol-holdings.js").read_text(encoding="utf-8")
     # 渲染函数消费 actions 字段，文案/配色走 MXC_KINDS（与时间线徽章同源无双写）
@@ -811,3 +812,16 @@ def test_mx_kol_pnl_actions_contract():
     mxc_css = (STATIC / "mx-kol-holdings.css").read_text(encoding="utf-8")
     assert ".mxc-pnl-acts" in mxc_css and "flex-wrap:wrap" in mxc_css
     assert ".mxc-kind.buy" in mxc_css and ".mxc-kind.sell" in mxc_css
+    # 默认折叠：latest 表按 kind 留最近一笔，差额进「更多」；展开态按票名记
+    # （盈亏接口后到补刷时不丢），toggle 只重画盈亏面板
+    assert "latest[" in acts and "mxcToggleActs(" in acts
+    toggle_acts = _fn_body("mxcToggleActs", mxc)
+    assert "actsOpen" in toggle_acts and "mxcRenderPnl()" in toggle_acts
+    # teardown 清展开态（换大V不带残留票名）
+    teardown = _fn_body("mxcTeardown", mxc)
+    assert "actsOpen: {}" in teardown
+    # window 注册（内联 onclick 可达）
+    handlers = APP_JS[APP_JS.index("const INLINE_HANDLERS"):]
+    assert "mxcToggleActs" in handlers
+    # 行内按钮覆写样式存在（左对齐徽章流，不吃 .mxc-more 的块级居中）
+    assert ".mxc-acts-more" in mxc_css

@@ -10,7 +10,7 @@ export function createMxKolHoldingsView(dependencies) {
   } = dependencies;
 
   const _mxc = { seq: 0, data: null, pnl: null, days: 30, view: "all", recent: 3, sort: "weight",
-    kolId: 0, drawerEl: null, drawerBody: null, token: 0, closedExpanded: false };
+    kolId: 0, drawerEl: null, drawerBody: null, token: 0, closedExpanded: false, actsOpen: {} };
   // 已了结列表默认只露前 5 条：窗口拉长后清仓票会累积一大串，
   // 挤压在持浮动；超出部分折叠进「更多」，点击展开全部
   const MXC_CLOSED_LIMIT = 5;
@@ -32,7 +32,7 @@ export function createMxKolHoldingsView(dependencies) {
   };
 
   function mxcTeardown() {
-    Object.assign(_mxc, { data: null, pnl: null, view: "all", drawerEl: null, drawerBody: null });
+    Object.assign(_mxc, { data: null, pnl: null, view: "all", drawerEl: null, drawerBody: null, actsOpen: {} });
     // closedExpanded 不重置：换大V/换窗口回来时保持用户上次的展开选择
     // recent（最近观点天数）跨路由保留：回来时还是用户上次调的口径；
     // days 不保留——每个大V/宿主入口都按默认 30 天开（按钮 title 的承诺）
@@ -305,16 +305,41 @@ export function createMxKolHoldingsView(dependencies) {
     return map;
   }
 
-  // 盈亏行内操作时间线徽章：后端 actions=[{kind,at}]，文案/配色与时间线徽章同源
-  // （MXC_KINDS）。建仓/加仓/减仓/清仓/翻空各带发生时间；多笔时折行铺开；
+  // 盈亏行内操作时间线徽章：后端 actions=[{kind,at}]（早→晚），文案/配色与时间线
+  // 徽章同源（MXC_KINDS）。建仓/加仓/减仓/清仓/翻空各带发生时间；长窗口下同一票
+  // 可累积几十笔，全铺开会盖过其他票——默认每类只露最近一次（保持时间线原序），
+  // 其余折叠进「更多」，展开状态按票名记录（盈亏接口后到补刷时不丢）。
   // 人工标注产生的操作带 manual:true，追加「人工」角标
   function mxcPnlActs(p) {
     const acts = (p && p.actions) || [];
     if (!acts.length) return "";
-    return `<div class="mxc-pnl-acts">${acts.map((a) => {
+    const latest = {};
+    acts.forEach((a) => {
+      if (!latest[a.kind] || String(a.at || "") > String(latest[a.kind].at || "")) latest[a.kind] = a;
+    });
+    const collapsed = acts.length - acts.filter((a) => latest[a.kind] === a).length;
+    const expanded = !!(p.target_name && _mxc.actsOpen[p.target_name]);
+    const list = expanded ? acts : acts.filter((a) => latest[a.kind] === a);
+    const badges = list.map((a) => {
       const k = MXC_KINDS[a.kind] || MXC_KINDS.hold;
       return `<span class="mxc-kind ${k.cls}" title="${escapeHtml(k.label)} ${escapeHtml((a.at || "").slice(5, 16))}">${k.label} ${(a.at || "").slice(5, 16)}${a.manual ? '<i class="mxc-manual-badge">人工</i>' : ""}</span>`;
-    }).join("")}</div>`;
+    }).join("");
+    // 收起态才有「还有 N 笔」；展开后按钮文案换「收起」，计数仍按折叠差额算
+    // 票名经 JSON.stringify 后是双引号串，直接嵌双引号 onclick 属性会被截断，
+    // 先替换成 &quot;（HTML 解析时还原为 "，JS 收到完整字符串）
+    const more = collapsed > 0
+      ? `<button type="button" class="mxc-more mxc-acts-more"
+          onclick="mxcToggleActs(${JSON.stringify(String(p.target_name || "")).replace(/"/g, "&quot;")})">${expanded ? "收起 ▴" : `更多 ▾（还有 ${collapsed} 笔）`}</button>`
+      : "";
+    return `<div class="mxc-pnl-acts">${badges}${more}</div>`;
+  }
+
+  // 行内操作「更多/收起」：按票名翻转展开态，只重画盈亏面板（汇总与时间线不受影响）
+  function mxcToggleActs(name) {
+    if (!name) return;
+    if (_mxc.actsOpen[name]) delete _mxc.actsOpen[name];
+    else _mxc.actsOpen[name] = true;
+    mxcRenderPnl();
   }
 
   // 预估盈亏面板：浮动（在持）+ 已了结分开两列；行情未接入出低调占位。
@@ -507,7 +532,7 @@ export function createMxKolHoldingsView(dependencies) {
     const markBtn = (e.evidence && e.evidence.length && state.user?.can_mx_action_mark)
       ? `<button type="button" class="mxc-mark-btn" title="人工标注该消息的个股操作（修正/确认此操作）"
           aria-label="标注${escapeHtml(e.target_name)}的操作"
-          onclick="openActionMarkModal(${Number(e.evidence[0])}, ${JSON.stringify(String(e.target_name))})">标注</button>`
+          onclick="openActionMarkModal(${Number(e.evidence[0])}, ${JSON.stringify(String(e.target_name)).replace(/"/g, "&quot;")})">标注</button>`
       : "";
     return `
     <div class="mxv-feed-item mxc-row">
@@ -529,5 +554,5 @@ export function createMxKolHoldingsView(dependencies) {
   }
 
   return { renderMxKolHoldings, mxcOpenDrawer, mxcCloseDrawer, mxcSetView, mxcChangeDays, mxcRecentInput,
-    mxcRecentChange, mxcSetSort, mxcToggleClosed };
+    mxcRecentChange, mxcSetSort, mxcToggleClosed, mxcToggleActs };
 }
