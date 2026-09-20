@@ -259,9 +259,10 @@ def test_write_puller_env_mode(lab_env):
 def test_dashboard_has_settings_section(client):
     assert _login(client).status_code == 303
     html = client.get("/").text
+    js = (OPS_DIR / "static" / "ops.js").read_text(encoding="utf-8")
     assert 'id="settings-card"' in html
     assert 'id="settings-confirm"' in html
-    assert "/api/settings" in html
+    assert "/api/settings" in html or "/api/settings" in js
     assert "PULLER_BATCH_SIZE" in html
     assert "每日同步时钟" in html
     assert "cicc_incr_days" in html or "中金增量天数" in html

@@ -142,6 +142,8 @@ def test_auth_required_for_status_and_qr(client):
     login_html = client.get("/login").text
     assert "Tailscale" in login_html
     assert "0.0.0.0:8055" in login_html
+    assert 'class="login-shell"' in login_html
+    assert 'id="auth-view"' in login_html
     assert client.get("/api/status").status_code == 401
     assert client.post("/api/115/qr/start", json={"device_type": "harmony"}).status_code == 401
     assert client.get("/api/115/qr/status", params={"session_id": "x"}).status_code == 401
@@ -372,3 +374,8 @@ def test_dashboard_phase2_has_confirmed_apply(client):
     assert 'id="ima-qr"' not in html
     assert 'id="settings-card"' in html
     assert 'id="settings-confirm"' in html
+    assert 'id="app-view"' in html
+    assert 'id="sidebar-nav"' in html
+    assert 'id="bottom-nav"' in html
+    assert "/static/style.css" in html
+    assert "/static/vendor/design-tokens.css" in html
