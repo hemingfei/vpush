@@ -364,3 +364,43 @@ def test_pull_writes_pdf(tmp_path, monkeypatch):
         assert health == b"ok"
     finally:
         server.shutdown()
+
+
+def test_file_requires_token(tmp_path, monkeypatch):
+    (tmp_path / "g").mkdir()
+    (tmp_path / "g" / "a.pdf").write_bytes(b"%PDF-1.7local")
+    server, base = _start(tmp_path, monkeypatch)
+    try:
+        try:
+            urllib.request.urlopen(base + "/file?dest=g/a.pdf", timeout=5)
+            raise AssertionError("should 401")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+    finally:
+        server.shutdown()
+
+
+def test_file_returns_pdf(tmp_path, monkeypatch):
+    (tmp_path / "g").mkdir()
+    (tmp_path / "g" / "a.pdf").write_bytes(b"%PDF-1.7local")
+    server, base = _start(tmp_path, monkeypatch)
+    try:
+        req = urllib.request.Request(
+            base + "/file?dest=g/a.pdf",
+            headers={"Authorization": "Bearer secret"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert resp.read() == b"%PDF-1.7local"
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    base + "/file?dest=../secret.pdf",
+                    headers={"Authorization": "Bearer secret"},
+                ),
+                timeout=5,
+            )
+            raise AssertionError("should 400")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400
+    finally:
+        server.shutdown()

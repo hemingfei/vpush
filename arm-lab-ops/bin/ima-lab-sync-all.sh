@@ -15,7 +15,7 @@ PYTHON="${VPUSH_PYTHON:-/opt/vpush-ima-lab/venv/bin/python}"
 SCRIPT="${IMA_LAB_SYNC_PY:-$SCRIPTS_ROOT/ima_arm_lab_sync.py}"
 
 LIMIT="${IMA_LIMIT:-10}"
-PARALLEL="${IMA_GROUPS_PARALLEL:-1}"
+PARALLEL="${IMA_GROUPS_PARALLEL:-0}"
 
 if [[ -f "$SETTINGS" ]]; then
   parsed="$("$PYTHON" - "$SETTINGS" <<'PY'
@@ -25,8 +25,8 @@ try:
     data = json.loads(open(path, encoding="utf-8").read())
 except Exception:
     raise SystemExit(0)
-limit = data.get("ima_limit_per_group", 10)
-parallel = data.get("ima_groups_parallel", True)
+limit = data.get("ima_limit_per_group", data.get("ima_limit", 10))
+parallel = data.get("ima_groups_parallel", data.get("ima_parallel", False))
 try:
     limit = max(1, min(int(limit), 20))
 except (TypeError, ValueError):
@@ -74,5 +74,6 @@ fi
 status=0
 for group in "${GROUPS[@]}"; do
   run_group "$group" || status=1
+  sleep 2
 done
 exit "$status"

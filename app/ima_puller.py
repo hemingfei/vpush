@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 MAX_PDF_BYTES = 200 * 1024 * 1024
 MAX_JSON_BYTES = 1_000_000
@@ -45,10 +45,17 @@ def allowed_url(url: str) -> bool:
     return parsed.scheme == "https" and host.endswith(".ima.qq.com")
 
 
-def safe_dest(root: Path, dest: str) -> Path:
+def safe_archive_rel(
+    root: Path,
+    dest: str,
+    suffixes: tuple[str, ...] = (".pdf", ".txt"),
+) -> Path:
     text = str(dest or "").replace("\\", "/").lstrip("/")
-    if not text.endswith(".pdf") or text.endswith("/.pdf"):
-        raise ValueError("dest must be a .pdf path")
+    lower = text.lower()
+    if any(lower.endswith("/" + suffix.lstrip(".")) for suffix in suffixes):
+        raise ValueError("dest must be an archive file")
+    if not any(lower.endswith(suffix) for suffix in suffixes):
+        raise ValueError("dest must be an archive file")
     root = root.resolve()
     current = root
     for part in Path(text).parts[:-1]:
@@ -61,6 +68,10 @@ def safe_dest(root: Path, dest: str) -> Path:
     if candidate.parent.exists() and candidate.parent.is_symlink():
         raise ValueError("archive directory must not be a symlink")
     return candidate
+
+
+def safe_dest(root: Path, dest: str) -> Path:
+    return safe_archive_rel(root, dest, suffixes=(".pdf",))
 
 
 def _http_open(request: urllib.request.Request):
@@ -207,10 +218,40 @@ def make_handler(root: Path, token: str):
             self.wfile.write(body)
 
         def do_GET(self) -> None:
-            if self.path.split("?", 1)[0] != "/healthz":
+            parsed = urlparse(self.path)
+            if parsed.path == "/healthz":
+                self._send(200, b"ok")
+                return
+            if parsed.path != "/file":
                 self._send(404, b"no")
                 return
-            self._send(200, b"ok")
+            if self.headers.get("Authorization") != f"Bearer {token}":
+                self._send(401, b"auth")
+                return
+            dest = (parse_qs(parsed.query).get("dest") or [""])[0]
+            try:
+                path = safe_archive_rel(root, dest)
+            except ValueError:
+                self._send(400, b"dest")
+                return
+            if not path.is_file():
+                self._send(404, b"missing")
+                return
+            size = path.stat().st_size
+            if path.suffix.lower() == ".pdf":
+                content_type = "application/pdf"
+            else:
+                content_type = "text/plain; charset=utf-8"
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            with path.open("rb") as source:
+                while True:
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
 
         def do_POST(self) -> None:
             if self.path.split("?", 1)[0] != "/pull":

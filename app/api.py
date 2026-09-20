@@ -4469,7 +4469,7 @@ def create_api_router(
 
     @router.post("/admin/ima-storage/backup", dependencies=[Depends(require_admin)])
     def backup_ima_storage(admin: dict = Depends(require_admin)):
-        from .cicc_collector import from_env
+        from .cicc_collector import CiccIsolatedError, from_env
 
         # 旧实现写 .vpush-backup-request 请求文件，但存储机从未有消费者（死信）；
         # 改走命令通道：dispatch 的 backup 模式直接运行 restic-backup.sh
@@ -4477,7 +4477,10 @@ def create_api_router(
         ctl = from_env()
         if ctl is None:
             raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
-        result = ctl.trigger("backup", admin["username"])
+        try:
+            result = ctl.trigger("backup", admin["username"])
+        except CiccIsolatedError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         _audit(admin, "ima_storage_backup", "", "requested")
         return {"status": "started", **result}
 
@@ -4492,13 +4495,15 @@ def create_api_router(
 
     @router.post("/admin/cicc/trigger", dependencies=[Depends(require_admin)])
     def cicc_trigger(body: CiccTriggerIn, admin: dict = Depends(require_admin)):
-        from .cicc_collector import from_env
+        from .cicc_collector import CiccIsolatedError, from_env
 
         ctl = from_env()
         if ctl is None:
             raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
         try:
             result = ctl.trigger(body.mode, admin["username"])
+        except CiccIsolatedError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         _audit(admin, "cicc_trigger", "", body.mode)
@@ -4515,16 +4520,19 @@ def create_api_router(
 
     @router.put("/admin/cicc/schedule", dependencies=[Depends(require_admin)])
     def cicc_set_schedule(body: CiccScheduleIn, admin: dict = Depends(require_admin)):
-        from .cicc_collector import from_env, validate_time_of_day
+        from .cicc_collector import CiccIsolatedError, from_env, validate_time_of_day
 
         ctl = from_env()
         if ctl is None:
             raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
         if body.time is not None and not validate_time_of_day(body.time):
             raise HTTPException(status_code=400, detail="时间格式应为 HH:mm（00:00-23:59）")
-        result = ctl.set_schedule(body.enabled)
-        if body.time is not None:
-            result.update(ctl.set_schedule_time(body.time, admin["username"]))
+        try:
+            result = ctl.set_schedule(body.enabled)
+            if body.time is not None:
+                result.update(ctl.set_schedule_time(body.time, admin["username"]))
+        except CiccIsolatedError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         _audit(admin, "cicc_schedule", "",
                f"{'enabled' if body.enabled else 'disabled'} time={body.time or '-'}")
         return result

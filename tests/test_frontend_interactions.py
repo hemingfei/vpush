@@ -3731,7 +3731,7 @@ assert.doesNotMatch(weibo, /#e6162d|#ff8200|#287DFF/i);
 
 const truth = html("truth", { kol_external_id: "realDonaldTrump" });
 assert.match(truth, /data-platform="truth"/);
-assert.match(truth, /rect x="4\.4"/);
+assert.match(truth, /rect x="2\.5"/);
 assert.match(truth, /fill="#1668e0"/);
 assert.match(truth, /@realDonaldTrump/);
 

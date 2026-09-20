@@ -31,6 +31,13 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from .archive_guard import (
+    arm_circuit,
+    fetch_missing_archive_file,
+    is_remote_nfs,
+    path_without_stat,
+    pull_timeout_seconds,
+)
 from .arm_middleware import ima_staging_relpath
 from .arm_middleware import middleware_enabled as arm_middleware_enabled
 from .arm_middleware import resolve_staging_root as resolve_arm_staging_root
@@ -44,6 +51,8 @@ logger = logging.getLogger(__name__)
 
 @contextmanager
 def archive_lock(root: Path):
+    if is_remote_nfs(root):
+        raise RuntimeError("IMA archive is remote NFS; refuse lock to keep the host up")
     fd = os.open(root / ".vpush-pdf.lock", os.O_RDWR | os.O_CREAT, 0o660)
     try:
         fcntl.lockf(fd, fcntl.LOCK_EX)
@@ -1313,7 +1322,8 @@ class ImaPureClient:
             raise RuntimeError("IMA signed URL missing")
         headers = {str(k): str(v) for k, v in (info.get("headers") or {}).items()}
         pull_url = os.environ.get("IMA_PULL_URL", "").strip()
-        # ARM staging writes locally; IMA_PULL_URL is the storage-host NFS puller.
+        # ARM staging writes locally. IMA_PULL_URL is HTTP to ARM (or legacy
+        # storage puller); never a kernel NFS mount on the production host.
         if pull_url and not arm_middleware_enabled():
             archive_root_text = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
             if not archive_root_text:
@@ -1338,9 +1348,13 @@ class ImaPureClient:
                     "Authorization": "Bearer " + os.environ.get("IMA_PULL_TOKEN", "").strip(),
                 },
             )
+            breaker = arm_circuit()
+            if not breaker.allow():
+                raise RuntimeError("IMA pull circuit open")
             try:
-                with urllib.request.urlopen(request, timeout=120) as response:
+                with urllib.request.urlopen(request, timeout=pull_timeout_seconds()) as response:
                     body = json.loads(response.read().decode())
+                breaker.success()
             except urllib.error.HTTPError as exc:
                 detail = ""
                 try:
@@ -1349,6 +1363,9 @@ class ImaPureClient:
                     detail = ""
                 suffix = f" {detail}" if detail else ""
                 raise RuntimeError(f"IMA PDF HTTP {exc.code}{suffix}") from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                breaker.failure()
+                raise RuntimeError("IMA pull unreachable") from exc
             return {
                 "size": int(body.get("size") or 0),
                 "md5": str(body.get("md5") or ""),
@@ -1583,14 +1600,20 @@ class ImaDocumentStore:
     ):
         raw_index = Path(root).expanduser()
         raw_archive = Path(archive_root).expanduser() if archive_root is not None else raw_index
-        if raw_archive.exists() and raw_archive.is_symlink():
-            raise ValueError("archive root must not be a symlink")
         self.root = raw_index.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.storage_status = storage_status or ImaStorageStatus(None, remote=False)
-        self.archive_root = raw_archive.resolve()
-        if not self.storage_status.remote:
-            self.archive_root.mkdir(parents=True, exist_ok=True)
+        # Never resolve/stat a remote NFS mount: that is how a dead storage
+        # box put the production host into uninterruptible I/O.
+        self._nfs_isolated = is_remote_nfs(raw_archive)
+        if self._nfs_isolated:
+            self.archive_root = path_without_stat(raw_archive)
+        else:
+            if raw_archive.exists() and raw_archive.is_symlink():
+                raise ValueError("archive root must not be a symlink")
+            self.archive_root = raw_archive.resolve()
+            if not self.storage_status.remote:
+                self.archive_root.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.root / "manifest.json"
         self.state_path = self.root / "state.json"
         self._state_lock = threading.Lock()
@@ -1665,24 +1688,38 @@ class ImaDocumentStore:
         return f"{stem}__{token}{suffix}"
 
     def _marker_present(self) -> bool:
+        if self._nfs_isolated or is_remote_nfs(self.archive_root):
+            return False
         try:
             return (self.archive_root / self._ARCHIVE_MARKER).is_file()
         except OSError:
             return False
 
     def archive_readable(self) -> bool:
+        if self._nfs_isolated or is_remote_nfs(self.archive_root):
+            return False
         if not self.storage_status.remote:
             return True
         return self.storage_status.can_read() and self._marker_present()
 
     def archive_writable(self) -> bool:
+        if self._nfs_isolated or is_remote_nfs(self.archive_root):
+            return False
         if not self.storage_status.remote:
             return True
         return self.storage_status.can_write() and self._marker_present()
 
     def authorized_archive_file(self, relative: Any) -> Path | None:
         """Resolve a stored archive-relative path. Caller must gate on archive_readable()."""
-        return self._state_path(relative)
+        if self._nfs_isolated or is_remote_nfs(self.archive_root):
+            return None
+        path = self._state_path(relative)
+        if path is not None and self._path_is_file(path):
+            return path
+        if not isinstance(relative, str) or not relative:
+            return path
+        fetched = fetch_missing_archive_file(self.archive_root, relative)
+        return fetched if fetched is not None else path
 
     def _archive_path(self, relative: str) -> Path:
         day_path = self.archive_root / Path(relative).parent
@@ -1758,6 +1795,8 @@ class ImaDocumentStore:
         media_id: str,
         occupied: set[str],
     ) -> Path | None:
+        if self._nfs_isolated or is_remote_nfs(self.archive_root):
+            return None
         day = _safe_component(str(record.get("day") or item.get("day") or "unknown"))
         candidates: list[Path] = []
         current = self._state_path(item.get("pdf"))

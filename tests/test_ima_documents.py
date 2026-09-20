@@ -4019,6 +4019,40 @@ def test_download_includes_puller_error_body(tmp_path, monkeypatch):
         )
 
 
+def test_download_pull_circuit_opens_on_unreachable(tmp_path, monkeypatch):
+    from app.archive_guard import reset_arm_circuit
+
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    reset_arm_circuit()
+    monkeypatch.setenv("IMA_PULL_URL", "http://10.80.0.2:8743/pull")
+    monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive))
+    monkeypatch.setenv("IMA_PULL_TIMEOUT", "2")
+
+    def fake_urlopen(req, timeout=20):
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(ima_documents.urllib.request, "urlopen", fake_urlopen)
+    media = {
+        "jump_url_info": {
+            "url": "https://res-skb.ima.qq.com/file.pdf?sign=1",
+            "headers": {"X-IMA-Sign": "sig"},
+        }
+    }
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    dest = archive / "g" / "a.pdf"
+    try:
+        with pytest.raises(RuntimeError, match="unreachable"):
+            client.download(media, dest)
+        with pytest.raises(RuntimeError, match="unreachable"):
+            client.download(media, dest)
+        with pytest.raises(RuntimeError, match="circuit open"):
+            client.download(media, dest)
+    finally:
+        reset_arm_circuit()
+
+
 def test_download_uses_cdn_when_pull_url_unset(tmp_path, monkeypatch):
     seen = {}
 

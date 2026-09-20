@@ -214,7 +214,7 @@ docker compose up -d --build
 
 ## ARM 中间层
 
-ARM（Oracle-SJ-ARM）可作为采集与对象存储之间的中间层：采集只写 staging，由宿主机权威 `scripts/puller_loop.py`（及 `lab_common.py` / `manifest.py`，部署到 `/opt/vpush-ima-lab/scripts/`）上传 115，存储恢复后再用 `scripts/arm_nfs_sync.py` 做 NFS 兼容同步（**默认关**，开关独立于中间层）。OpenList 只读 `/lab-hot`，不暴露 115。**默认关闭**（`VPUSH_ARM_MIDDLEWARE=1` / `--arm-middleware` 才打开），生产 compose 与存储机采集行为不变。中金与 IMA 新下载均可直接写 `$VPUSH_ARM_STAGING_ROOT/local/.../YYYY/MM/DD/`；实验室限量入口是 `ima_arm_lab_sync` / `cicc_arm_lab_sync`。实验室运维面板见 [arm-lab-ops/README.md](arm-lab-ops/README.md)（phase 3：同步时钟 / limit / `PULLER_BATCH_SIZE` 旋钮；hot 文件 `0664`）。说明见 [docs/arm-middleware.md](docs/arm-middleware.md)。
+ARM（Oracle-SJ-ARM）是采集 + 中间层：只做增量采集，热缓存与 HTTP 拉取给 vpush；115 / 存储机是冷备。生产只连 ARM HTTP（超时 + 熔断），**禁止把 ARM/存储 NFS 挂进现网**。实验室脚本在 `/opt/vpush-ima-lab/`；运维见 [arm-lab-ops/README.md](arm-lab-ops/README.md)。说明见 [docs/ARM中间层架构.md](docs/ARM中间层架构.md)。
 
 ## 推送渠道配置
 

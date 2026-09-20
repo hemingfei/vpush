@@ -269,6 +269,8 @@ def test_wrappers_read_settings_file():
     assert "ops-lab-settings.json" in ima
     assert "ima_limit_per_group" in ima
     assert "ima_groups_parallel" in ima
+    assert "ima_parallel" in ima
+    assert "ima_limit" in ima
     assert 'DRY_RUN:-1' in ima
     assert 'MODE="--dry-run"' in ima
     assert 'MODE="--apply"' in ima

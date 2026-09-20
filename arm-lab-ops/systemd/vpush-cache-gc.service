@@ -1,0 +1,10 @@
+[Unit]
+Description=V Push ARM cache GC (lab only; staging+hot watermark 30/35G)
+
+[Service]
+Type=oneshot
+User=ubuntu
+Environment=CACHE_ROOT=/data/vpush-ima-cache
+ExecStart=/opt/vpush-ima-lab/venv/bin/python /opt/vpush-ima-lab/scripts/cache_gc.py --warn-gb 30 --force-gb 35
+Nice=10
+IOSchedulingClass=idle

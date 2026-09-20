@@ -4280,13 +4280,43 @@ def test_img_proxy_allows_transparent_proxy_range(monkeypatch):
     assert resp.status_code == 200
 
 
+def _stub_img_proxy_ok(monkeypatch):
+    import httpx as _httpx
+
+    fake_resp = _httpx.Response(
+        200, content=b"\xff\xd8\xffok", headers={"content-type": "image/jpeg"}
+    )
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.headers = {}
+
+        def stream(self, method, url, **kwargs):
+            class Stream:
+                def __enter__(self):
+                    return fake_resp
+
+                def __exit__(self, *args):
+                    return False
+
+            fake_resp.iter_bytes = lambda: iter([fake_resp.content])
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["198.18.0.1"])
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+
+
 def test_img_proxy_rate_limit_per_ip(monkeypatch):
     """匿名 img-proxy 按 IP 限速，避免公网刷带宽。"""
     monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 3)
+    _stub_img_proxy_ok(monkeypatch)
     client = make_client()
-    params = {"url": "https://example-cdn.com/x.jpg"}
+    params = {"url": "https://pbs.twimg.com/media/x.jpg"}
     for _ in range(3):
-        assert client.get("/api/img-proxy", params=params).status_code == 400
+        assert client.get("/api/img-proxy", params=params).status_code == 200
     blocked = client.get("/api/img-proxy", params=params)
     assert blocked.status_code == 429
     assert blocked.headers.get("retry-after")
@@ -4296,14 +4326,15 @@ def test_img_proxy_rate_limit_per_ip(monkeypatch):
 def test_img_proxy_xff_cannot_bypass_rate_limit(monkeypatch):
     """未信任反代时，轮换 X-Forwarded-For 不能绕过 img-proxy 限速。"""
     monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 3)
+    _stub_img_proxy_ok(monkeypatch)
     client = make_client()
-    params = {"url": "https://example-cdn.com/x.jpg"}
+    params = {"url": "https://pbs.twimg.com/media/x.jpg"}
     for i in range(3):
         assert client.get(
             "/api/img-proxy",
             params=params,
             headers={"X-Forwarded-For": f"1.1.1.{i}"},
-        ).status_code == 400
+        ).status_code == 200
     assert client.get(
         "/api/img-proxy",
         params=params,
@@ -4314,16 +4345,17 @@ def test_img_proxy_xff_cannot_bypass_rate_limit(monkeypatch):
 def test_img_proxy_rate_limit_buckets_trusted_xff(monkeypatch):
     """信任反代后，不同 X-Forwarded-For 分桶，互不影响。"""
     monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 2)
+    _stub_img_proxy_ok(monkeypatch)
     cfg = Config()
     cfg.web.trust_proxy = True
     client = make_client(config=cfg)
-    params = {"url": "https://example-cdn.com/x.jpg"}
+    params = {"url": "https://pbs.twimg.com/media/x.jpg"}
     for _ in range(2):
         assert client.get(
             "/api/img-proxy",
             params=params,
             headers={"X-Forwarded-For": "1.1.1.1"},
-        ).status_code == 400
+        ).status_code == 200
     assert client.get(
         "/api/img-proxy",
         params=params,
@@ -4333,7 +4365,7 @@ def test_img_proxy_rate_limit_buckets_trusted_xff(monkeypatch):
         "/api/img-proxy",
         params=params,
         headers={"X-Forwarded-For": "2.2.2.2"},
-    ).status_code == 400
+    ).status_code == 200
 
 
 def test_me_subscription_count():

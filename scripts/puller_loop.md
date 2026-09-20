@@ -13,6 +13,8 @@ install -m 755 scripts/puller_loop.py /opt/vpush-ima-lab/scripts/puller_loop.py
 install -m 644 scripts/puller_retry.py /opt/vpush-ima-lab/scripts/puller_retry.py
 install -m 644 scripts/lab_common.py /opt/vpush-ima-lab/scripts/lab_common.py
 install -m 644 scripts/manifest.py /opt/vpush-ima-lab/scripts/manifest.py
+install -m 755 scripts/cache_gc.py /opt/vpush-ima-lab/scripts/cache_gc.py
+install -m 755 scripts/healthcheck.py /opt/vpush-ima-lab/scripts/healthcheck.py
 # systemd（ops 另做，不进生产 compose）：
 # python3 /opt/vpush-ima-lab/scripts/puller_loop.py          # 循环 poll
 # python3 /opt/vpush-ima-lab/scripts/puller_loop.py --once   # timer 一轮

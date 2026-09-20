@@ -1,6 +1,6 @@
 # V Push：ARM 中间层（NFS + 115 兼容）
 
-日期：2026-09-19 · 状态：仓库已落地适配（**默认关**，含 nfs-sync）· 现网仍只读浏览、不采集  
+日期：2026-09-20 · 状态：ARM = 采集 + 对接 vpush 展示/下载/缓存/NFS；115/NFS/其他池 = 冷存储；生产 compose 不开中间层开关
 主机：Oracle-SJ-ARM（约 45G）· OpenList 实验根 `/lab-hot`（**不暴露 115**）
 
 采集默认仍写存储机 POSIX/NFS 布局。打开中间层后，采集器只写 ARM staging；上传只走仓库内的 `scripts/puller_loop.py`（部署到 `/opt/vpush-ima-lab/scripts/`，宿主机 systemd）；存储恢复后再用 `arm_nfs_sync`（默认关）生成旧 NFS 布局。生产 compose 不打开中间层或 nfs-sync 开关，也不跑 puller。
@@ -80,6 +80,9 @@ IMA 现网落盘是 `<group_id>__<hash>/<MMDD>/`（无年份）。中间层负�
 | ima lab sync | ARM 限量 list+download → staging，默认关 | `scripts/ima_arm_lab_sync.py` |
 | ima remap | 旧归档树拷进 staging，默认关 | `scripts/ima_to_arm_staging.py`（不下载） |
 | nfs-sync | hot/staging → 旧 NFS 布局 | **已落地（默认关）** `scripts/arm_nfs_sync.py`（`--enable` / `VPUSH_ARM_NFS_SYNC=1`；独立于中间层开关） |
+| cache_gc | 水位清理 hot + **已上传** staging | **已入库** `scripts/cache_gc.py`（`vpush-cache-gc.timer` 每 30 分钟；未上传 staging 不删） |
+| healthcheck | 目录 + sqlite + 列 `/vpush` | **已入库** `scripts/healthcheck.py`（compose healthcheck；写 `manifest/` 与 `logs/health.json`） |
+| lab helpers | demo / smoke / 单文件上传 | **已入库** `upload_once.py` `demo_collect.py` `chinese_pdf.py` `smoke_upload.py`；`openlist_bootstrap_115.py` 仅存档，v3 **不要**给 OpenList 挂 115 |
 | arm-lab-ops | 实验室看板 + 115 QR + 确认后的限量动作 + 同步/并发旋钮 | **phase 3** `arm-lab-ops/`（优先 Tailscale `:8055`；备选 loopback + SSH；不是生产后台；**不要**写进生产 compose） |
 
 ## 6. 开关
@@ -183,12 +186,13 @@ $VPUSH_ARM_STAGING_ROOT/local/ima/<group_id>/YYYY/MM/DD/<safe_filename>.pdf
 6. 实验室 puller 入库 — **已落地（宿主机原件）** `scripts/puller_loop.py` + `lab_common.py` + `manifest.py`（见 [puller_loop.md](../scripts/puller_loop.md)）；拷到 `/opt/vpush-ima-lab/scripts/`
 7. 中金 ARM 限量同步 — **已落地（默认关）** `scripts/cicc_arm_lab_sync.py`
 8. ARM 实验室运维面板 — **phase 3 已入库** `arm-lab-ops/`（状态 + 115 QR + 确认后的 IMA/CICC 限量触发与 failed 重入 + 同步时钟/并发旋钮；不是阅读台 / 生产后台）
+9. Lab 本地脚本回仓 — **已落地** `cache_gc.py` / `healthcheck.py` / `upload_once.py` / `demo_collect.py` / `chinese_pdf.py` / `smoke_upload.py` / `openlist_bootstrap_115.py`（见 [cache_gc.md](../scripts/cache_gc.md)、[arm-lab-helpers.md](../scripts/arm-lab-helpers.md)）；`get_cid.py` 不入库
 
 ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**（脚本在仓库，timer 由 ops 另做），不是生产 compose 服务。**不要把 `VPUSH_ARM_MIDDLEWARE=1` 写进生产 compose。**
 
 ### 10.1 阅读台切流决策记录（item 5）
 
-**目标态已更新（2026-09-19 v2）：权威归档树迁 ARM 块卷，生产最终只挂 ARM 导出；存储机冻结为冷备。** 全量设计（容量/回填/切换窗口/风险）见 [ARM中间层架构.md](./ARM中间层架构.md)。本节保留 v1 历史记录：
+**v2 目标态已取消（2026-09-20）：** 不迁权威树、不挂 ARM 块卷；生产继续挂存储机。见 [ARM中间层架构.md](./ARM中间层架构.md) v3。本节只留 v1/v2 对照：
 
 | 选项 | 何时 | 本仓库 |
 |---|---|---|
@@ -209,7 +213,7 @@ ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**（脚本在�
 - **实验室旋钮：** `GET/POST /api/settings`（POST 须 `confirm:true`）。JSON 在 `$CACHE_ROOT/ops-lab-settings.json`：`daily_sync_clock`（默认 03:00 Asia/Shanghai，两个 timer 一起响）、`ima_limit_per_group` / `cicc_limit`（默认 10，CLI 上限 20）、`ima_groups_parallel`（默认 true）、`puller_batch_size`（默认 40，另写 `ops-puller.env`）。宿主机 wrapper 样例：`arm-lab-ops/bin/{ima-lab-sync-all,cicc-lab-sync,apply-lab-sync-timers}.sh`。能调 `systemctl` 时尽量自动写 drop-in；否则 UI 给出宿主机命令。审计一行 `settings-save`，无 secrets。
 - **failed 重入：** `POST /api/failed/requeue`（须登录 + `confirm:true`）。把 `$CACHE_ROOT/failed/` 下相对路径移回 `staging/`，去掉 `.retry.json`。审计写 `$CACHE_ROOT/logs/ops-audit.jsonl`（无 secrets）。
 - **限量触发：** wrap `scripts/ima_arm_lab_sync.py` / `scripts/cicc_arm_lab_sync.py`。凭据走环境变量文件路径，**不把 secrets 放到命令行**。apply 须 `confirm:true`，`limit<=5`（默认 3）。IMA group 白名单：`legacy`、`7479082602225992`、`7476629605476515`、`7437050366161003`。CICC 缺 Cookie 文件返回明确 400；不绕过采集器配额/熔断。
-- **水位：** 对照 `CACHE_WARN_GB=30` / `CACHE_FORCE_GB=35`（与 `lab_common` GC 旋钮一致）。
+- **水位：** 对照 `CACHE_WARN_GB=30` / `CACHE_FORCE_GB=35`（与 `scripts/cache_gc.py` / `lab_common` 一致；未上传 staging 不删）。
 - **挂载：** phase 2 需要 `CACHE_ROOT` **rw**（requeue / audit）。host-network 容器 bind-mount `/opt/vpush-ima-lab/src`（ro）才能 exec 宿主机脚本（`VPUSH_SCRIPTS_ROOT=/opt/vpush-ima-lab/src/scripts`），并 bind-mount `/opt/vpush-ima-lab/venv`（ro）+ `VPUSH_PYTHON=/opt/vpush-ima-lab/venv/bin/python`（镜像 Python 缺 `app.*`）。凭据文件只在宿主机 `secrets/`，容器内 `/secrets`：`115-cookies.txt`、`cicc-cookies.txt`、`ima-pure.json`、`arm-ops-password.txt`（**不要提交**）。CICC Cookie 路径 `VPUSH_CICC_COOKIE_FILE=/secrets/cicc-cookies.txt`。
 - **OpenList：** 看板上的 `/lab-hot` 链接来自 `OPENLIST_PUBLIC_URL`（只读浏览热缓存，不暴露 115）。实验室可钉 Tailscale IPv4（不要写进仓库）。
 - **日跑 timer（宿主机 systemd，不是生产 compose）：** 样本 IMA `vpush-ima-lab-sync.timer` 10:30 / CICC `vpush-cicc-lab-sync.timer` 11:00 Asia/Shanghai。wrapper 读 `$CACHE_ROOT/ops-lab-settings.json` 的 LIMIT。**IMA 与 CICC 都默认 `DRY_RUN=1`（`--dry-run`）；unit 里显式 `DRY_RUN=0` 才 apply。** CICC 日志 `$CACHE_ROOT/logs/cicc-lab-sync-*.log`。面板保存时钟后可用 `bin/apply-lab-sync-timers.sh` 把两个 timer 改成同一时刻。样本见 `arm-lab-ops/systemd/`。
