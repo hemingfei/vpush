@@ -1335,9 +1335,10 @@ def test_admin_content_group_tabs_and_redirects():
     redirects = src.split("const ADMIN_ROUTE_REDIRECTS = {", 1)[1].split("};", 1)[0]
     for old in ("dashboard", "kols", "vocab", "requests", "posts", "logs", "audit", "backup", "users", "codes"):
         assert f"{old}: " in redirects
-    # 页签点击走容器路由；待审批角标贯通侧边栏与页签
+    # 页签点击走容器路由；待审批角标贯通侧边栏与页签（角标节点按 data-${badge}-badge 模板渲染）
     assert "onclick=\"go('admin/${groupKey}?tab=${t.id}')\"" in src
-    assert 'data-request-badge' in src
+    assert "data-${item.badge}-badge" in src
+    assert "[data-requests-badge]" in src
     assert "state.pendingKolRequests = Number(st.pending_kol_requests) || 0" in (APP_JS.parent / "views" / "admin" / "dashboard.js").read_text()
     assert "state.pendingKolRequests = requests.length" in (APP_JS.parent / "views" / "admin" / "users.js").read_text()
     # vocab 内部页签改用 vtab（避免与容器 tab 参数冲突），旧深链由重定向带 vtab
@@ -4695,7 +4696,7 @@ def test_news_pagination_appends_without_replacing_existing_thumbnails():
 def test_news_source_picker_is_searchable_checkbox_dialog():
     body = _fn_body("openNewsSourcePicker", NEWS_JS)
     assert 'type="search"' in body
-    body = body + _fn_body("newsSourcePickerRows", NEWS_JS)
+    body = body + _fn_body("newsSourcePickerRows", NEWS_JS) + _fn_body("newsSourceOptionHtml", NEWS_JS)
     assert 'type="checkbox"' in body
     assert 'role="dialog"' in body
     assert "我的来源" in body

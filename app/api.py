@@ -339,11 +339,13 @@ class NewsSettingsIn(BaseModel):
 
 class NewsSourceCreateIn(BaseModel):
     name: str
+    group_name: str = ""
 
 
 class NewsSourceUpdateIn(BaseModel):
     name: str | None = None
     enabled: bool | None = None
+    group_name: str | None = None
 
 
 class NewsFeedCreateIn(BaseModel):
@@ -378,6 +380,7 @@ class MeUpdate(BaseModel):
     keywords: list[str] | None = None
     keywords_match_reports: bool | None = None
     keywords_match_news: bool | None = None
+    news_font_size: str | None = None
     llm_api_base: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
@@ -784,6 +787,7 @@ def public_user(user: dict, db=None) -> dict:
         "dnd_allow_favorite": bool(user.get("dnd_allow_favorite")),
         "keywords_match_reports": bool(user.get("keywords_match_reports")),
         "keywords_match_news": bool(user.get("keywords_match_news")),
+        "news_font_size": user.get("news_font_size") or "",
         "llm_api_base": user.get("llm_api_base") or "",
         "llm_api_key": mask_secret(user_plain_secret(user, "llm_api_key", db)),
         "llm_model": user.get("llm_model") or "",
@@ -1995,6 +1999,11 @@ def create_api_router(
             current = db.get_user(user["id"]) or {}
             if want and not current.get("keywords_match_news"):
                 updates["keywords_match_news_since"] = datetime.now(UTC).isoformat()
+        if "news_font_size" in body.model_fields_set and body.news_font_size is not None:
+            size = body.news_font_size
+            if size not in ("", "small", "large"):
+                raise HTTPException(status_code=400, detail="字号只支持空(标准)/small/large")
+            updates["news_font_size"] = size
         if "notify_enabled" in body.model_fields_set:
             updates["notify_enabled"] = body.notify_enabled
         if "daily_report_enabled" in body.model_fields_set and body.daily_report_enabled is not None:
@@ -2449,10 +2458,12 @@ def create_api_router(
                 "selected": source["id"] in selected_ids,
                 "status": status["code"],
                 "last_success_at": status["last_success_at"],
+                "group_name": source["group_name"] or "",
             })
         return {
             "items": items,
             "collection_enabled": db.get_setting("news_enabled") == "1",
+            "unread_count": db.unread_news_count(user["id"]),
         }
 
     @router.get("/news")
@@ -2461,6 +2472,7 @@ def create_api_router(
         offset: int = Query(0, ge=0),
         source_id: int | None = Query(None),
         q: str = Query("", max_length=200),
+        unread: bool = Query(False),
         user: dict = Depends(get_current_user),
     ):
         if source_id is not None:
@@ -2470,14 +2482,15 @@ def create_api_router(
         view_started_at = datetime.now(UTC).isoformat()
         anchor = (db.get_user(user["id"]) or {}).get("news_last_seen_at")
         rows = db.list_news_articles(
-            user["id"], source_id=source_id, q=q, limit=limit, offset=offset
+            user["id"], source_id=source_id, q=q, limit=limit, offset=offset,
+            unread=unread,
         )
         items = []
         for row in rows:
             row.pop("images", None)
             row["is_new"] = bool(anchor and row["published_at"] > anchor)
             items.append(row)
-        total = db.count_news_articles(user["id"], source_id=source_id, q=q)
+        total = db.count_news_articles(user["id"], source_id=source_id, q=q, unread=unread)
         return {
             "items": items,
             "offset": offset,
@@ -2502,6 +2515,12 @@ def create_api_router(
         db.advance_news_seen(user["id"], normalized)
         return {"ok": True, "news_last_seen_at": normalized}
 
+    @router.post("/news/read-all")
+    def mark_news_read_all(user: dict = Depends(get_current_user)):
+        normalized = datetime.now(UTC).isoformat()
+        db.advance_news_seen(user["id"], normalized)
+        return {"ok": True, "news_last_seen_at": normalized}
+
     @router.get("/news/{article_id}")
     def news_article(article_id: int, user: dict = Depends(get_current_user)):
         article = db.get_news_article(article_id, user_id=user["id"])
@@ -2510,6 +2529,7 @@ def create_api_router(
         article.pop("images", None)
         article.pop("has_image", None)
         article["next_id"] = db.get_next_news_article(article, user["id"])
+        article["prev_id"] = db.get_prev_news_article(article, user["id"])
         return article
 
     @router.get("/news/{article_id}/images/{index}")
@@ -2637,7 +2657,7 @@ def create_api_router(
         if not 1 <= len(name) <= 60:
             raise HTTPException(status_code=400, detail="媒体名称长度必须为 1-60 个字符")
         try:
-            source_id = db.add_news_source(name)
+            source_id = db.add_news_source(name, group_name=body.group_name or "")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
         _audit(admin, "news_source_create", str(source_id), name)
@@ -2651,6 +2671,8 @@ def create_api_router(
         kwargs = {}
         if "name" in body.model_fields_set:
             kwargs["name"] = body.name
+        if "group_name" in body.model_fields_set:
+            kwargs["group_name"] = body.group_name
         if "enabled" in body.model_fields_set:
             kwargs["enabled"] = body.enabled
         try:

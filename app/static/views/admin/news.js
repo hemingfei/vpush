@@ -57,7 +57,7 @@ export function createAdminNewsView(dependencies) {
   function adminNewsSourceRowHtml(source) {
     const status = adminNewsSourceStatus(source);
     return `<button type="button" class="news-admin-source-row ${source.id === adminNewsState.selectedId ? "is-selected" : ""} ${source.archived_at ? "is-archived" : ""}" onclick="selectAdminNewsSource(${source.id})">
-      <span class="news-admin-source-name">${escapeHtml(source.name)}</span>
+      <span class="news-admin-source-name">${escapeHtml(source.name)}${source.group_name ? `<em class="news-admin-source-group">${escapeHtml(source.group_name)}</em>` : ""}</span>
       <span class="news-admin-source-meta"><span class="news-admin-status news-admin-status-${status}">${adminNewsStatusLabel(status)}</span><span>${source.article_count || 0} 篇</span></span>
     </button>`;
   }
@@ -369,7 +369,9 @@ export function createAdminNewsView(dependencies) {
     mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-source-modal-title">
       <h3 id="news-source-modal-title">${source ? "编辑媒体" : "新增媒体"}</h3>
       <label class="form-label">媒体名称<input id="news-source-name" class="form-control" maxlength="60" value="${escapeHtml(source?.name || "")}"></label>
-      <p class="muted">新增媒体不会自动加入任何用户的新闻流；启用全文采集前请确认内容许可。</p>
+      <label class="form-label">分组<input id="news-source-group" class="form-control" maxlength="40" list="news-group-suggestions" value="${escapeHtml(source?.group_name || "")}" placeholder="如：国内宏观 / 国际 / 科技"></label>
+      <datalist id="news-group-suggestions"><option value="国内宏观"></option><option value="国际"></option><option value="科技"></option><option value="公司"></option></datalist>
+      <p class="muted">新增媒体不会自动加入任何用户的新闻流；启用全文采集前请确认内容许可。分组用于用户端来源选择器。</p>
       <div class="toolbar"><button type="button" class="btn-normal" id="news-source-save">保存</button><button type="button" class="btn-ghost" data-close>取消</button></div>
     </div>`;
     document.body.appendChild(mask);
@@ -379,13 +381,14 @@ export function createAdminNewsView(dependencies) {
     mask.querySelector("[data-close]").addEventListener("click", close);
     mask.querySelector("#news-source-save").addEventListener("click", async () => {
       const name = mask.querySelector("#news-source-name").value.trim();
+      const group_name = mask.querySelector("#news-source-group").value.trim();
       if (!name) { flash("媒体名称不能为空", "error"); return; }
       const seq = currentRouteSeq();
       const button = mask.querySelector("#news-source-save");
       button.disabled = true;
       try {
         await api(source ? `/api/admin/news/sources/${source.id}` : "/api/admin/news/sources", {
-          method: source ? "PATCH" : "POST", body: JSON.stringify({ name }),
+          method: source ? "PATCH" : "POST", body: JSON.stringify({ name, group_name }),
         });
         if (!routeStillActive(seq)) return;
         close();

@@ -785,6 +785,7 @@ CREATE TABLE IF NOT EXISTS news_sources (
     enabled INTEGER NOT NULL DEFAULT 1,
     built_in INTEGER NOT NULL DEFAULT 0,
     default_selected INTEGER NOT NULL DEFAULT 0,
+    group_name TEXT NOT NULL DEFAULT '',
     archived_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -1292,6 +1293,10 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE users ADD COLUMN keywords_match_news_since TEXT NOT NULL DEFAULT ''"
             )
+        if "news_font_size" not in user_cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN news_font_size TEXT NOT NULL DEFAULT ''"
+            )
         self._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_feed_token "
             "ON users(feed_token) WHERE feed_token != ''"
@@ -1696,6 +1701,12 @@ class DB:
         self._apply_schema_migrations()
 
     def _migrate_news(self) -> None:
+        # 列迁移必须先于 v1 早退：老库补列与 seed 无关，不能被一次性 gate 跳过。
+        source_cols = {row["name"] for row in self._rows("PRAGMA table_info(news_sources)")}
+        if "group_name" not in source_cols:
+            self._conn.execute(
+                "ALTER TABLE news_sources ADD COLUMN group_name TEXT NOT NULL DEFAULT ''"
+            )
         # 内置源只在首次 seed（news_default_sources_v1 置位后整体跳过）：
         # 否则 INSERT OR IGNORE 拦不住已删除的行，管理员「彻底删除」内置源
         # 会在每次重启时复活。新增内置源时需换新 key（如 news_default_sources_v2）。
@@ -2802,6 +2813,7 @@ class DB:
         "token_version", "last_login_at",
         "keywords_match_reports", "keywords_match_reports_since",
         "keywords_match_news", "keywords_match_news_since",
+        "news_font_size",
     })
 
     def _build_user_sets(self, updates: dict) -> tuple[list, list]:
@@ -3207,15 +3219,15 @@ class DB:
         rows = self._rows("SELECT * FROM news_sources WHERE id = ?", (source_id,))
         return rows[0] if rows else None
 
-    def add_news_source(self, name: str) -> int:
+    def add_news_source(self, name: str, group_name: str = "") -> int:
         name = (name or "").strip()
         if not name or len(name) > 60:
             raise ValueError("媒体名称长度必须为 1-60 个字符")
         try:
             return self._execute(
-                "INSERT INTO news_sources (slug, name, built_in, default_selected) "
-                "VALUES (?, ?, 0, 0)",
-                (f"custom-{uuid.uuid4().hex}", name),
+                "INSERT INTO news_sources (slug, name, built_in, default_selected, group_name) "
+                "VALUES (?, ?, 0, 0, ?)",
+                (f"custom-{uuid.uuid4().hex}", name, (group_name or "").strip()[:40]),
             )
         except sqlite3.IntegrityError:
             raise ValueError("媒体名称已存在") from None
@@ -3226,6 +3238,7 @@ class DB:
         *,
         name: str | None = None,
         enabled: bool | None = None,
+        group_name: str | None = None,
     ) -> dict | None:
         current = self.get_news_source(source_id)
         if current is None:
@@ -3238,6 +3251,9 @@ class DB:
                 raise ValueError("媒体名称长度必须为 1-60 个字符")
             sets.append("name = ?")
             params.append(name)
+        if group_name is not None:
+            sets.append("group_name = ?")
+            params.append(group_name.strip()[:40])
         if enabled is not None:
             sets.append("enabled = ?")
             params.append(1 if enabled else 0)
@@ -3620,9 +3636,12 @@ class DB:
             return cur.rowcount
 
     def _news_article_filter(
-        self, user_id: int, source_id: int | None, q: str
+        self, user_id: int, source_id: int | None, q: str, *, unread: bool = False
     ) -> tuple[str, list[object]]:
-        """source_id 给定时按源浏览（源未归档即可读），否则限定用户订阅圈。"""
+        """source_id 给定时按源浏览（源未归档即可读），否则限定用户订阅圈。
+
+        unread 以 news_last_seen_at 水位线为准；从未打开过新闻页视为全部未读。
+        """
         conds = [
             "s.id = a.source_id",
             "s.archived_at IS NULL",
@@ -3633,6 +3652,12 @@ class DB:
             params.append(source_id)
         else:
             conds.append("u.user_id = ?")
+            params.append(user_id)
+        if unread:
+            conds.append(
+                "a.published_at > COALESCE("
+                "(SELECT news_last_seen_at FROM users WHERE id = ?), '')"
+            )
             params.append(user_id)
         if q:
             conds.append("(a.title LIKE ? OR a.summary LIKE ?)")
@@ -3648,8 +3673,11 @@ class DB:
         q: str,
         limit: int,
         offset: int,
+        unread: bool = False,
     ) -> list[dict]:
-        where, params = self._news_article_filter(user_id, source_id, (q or "").strip())
+        where, params = self._news_article_filter(
+            user_id, source_id, (q or "").strip(), unread=unread
+        )
         params.extend([max(1, min(int(limit), 100)), max(0, int(offset))])
         rows = self._rows(
             "SELECT a.id, a.title, a.url, a.author, a.summary, a.published_at, "
@@ -3669,14 +3697,32 @@ class DB:
         )
         return _to_int(rows[0]["n"]) if rows else 0
 
-    def count_news_articles(self, user_id: int, *, source_id: int | None, q: str) -> int:
-        where, params = self._news_article_filter(user_id, source_id, (q or "").strip())
+    def count_news_articles(
+        self, user_id: int, *, source_id: int | None, q: str, unread: bool = False
+    ) -> int:
+        where, params = self._news_article_filter(
+            user_id, source_id, (q or "").strip(), unread=unread
+        )
         rows = self._rows(
             "SELECT COUNT(*) AS n FROM news_articles a "
             "LEFT JOIN user_news_sources u ON u.source_id = a.source_id "
             "JOIN news_sources s ON s.id = a.source_id "
             f"WHERE {where}",
             params,
+        )
+        return _to_int(rows[0]["n"]) if rows else 0
+
+    def unread_news_count(self, user_id: int) -> int:
+        """订阅圈内、水位线之后的文章总数；从未打开过 = 全部未读。"""
+        rows = self._rows(
+            "SELECT COUNT(*) AS n FROM news_articles a "
+            "JOIN news_sources s ON s.id = a.source_id "
+            "WHERE s.archived_at IS NULL "
+            "AND EXISTS (SELECT 1 FROM user_news_sources u "
+            "WHERE u.source_id = a.source_id AND u.user_id = ?) "
+            "AND a.published_at > COALESCE("
+            "(SELECT news_last_seen_at FROM users WHERE id = ?), '')",
+            (user_id, user_id),
         )
         return _to_int(rows[0]["n"]) if rows else 0
 
@@ -3704,16 +3750,40 @@ class DB:
         self, article: dict, user_id: int
     ) -> int | None:
         """阅读顺序中的下一篇（同排序规则下的后一行）。"""
+        return self._adjacent_news_article(article, user_id, newer=False)
+
+    def get_prev_news_article(
+        self, article: dict, user_id: int
+    ) -> int | None:
+        """阅读顺序中的上一篇（同排序规则下的前一行）。"""
+        return self._adjacent_news_article(article, user_id, newer=True)
+
+    def _adjacent_news_article(
+        self, article: dict, user_id: int, *, newer: bool
+    ) -> int | None:
+        if newer:
+            boundary = (
+                " AND (a.published_at > ? OR (a.published_at = ? AND a.id > ?)) "
+            )
+            order = "ORDER BY a.published_at ASC, a.id ASC LIMIT 1"
+        else:
+            boundary = (
+                " AND (a.published_at < ? OR (a.published_at = ? AND a.id < ?)) "
+            )
+            order = "ORDER BY a.published_at DESC, a.id DESC LIMIT 1"
         sql = (
             self._NEWS_ARTICLE_VISIBLE
-            + " AND (a.published_at < ? OR (a.published_at = ? AND a.id < ?))"
-            + " AND (s.enabled = 1 OR EXISTS ("
-            + "SELECT 1 FROM user_news_sources u WHERE u.user_id = ? AND u.source_id = a.source_id))"
-            + " ORDER BY a.published_at DESC, a.id DESC LIMIT 1"
+            + boundary
+            + "AND (s.enabled = 1 OR EXISTS ("
+            + "SELECT 1 FROM user_news_sources u WHERE u.user_id = ? AND u.source_id = a.source_id)) "
+            + order
         )
         rows = self._rows(
             sql,
-            (article["published_at"], article["published_at"], article["id"], user_id),
+            (
+                article["published_at"], article["published_at"], article["id"],
+                user_id,
+            ),
         )
         return rows[0]["id"] if rows else None
 

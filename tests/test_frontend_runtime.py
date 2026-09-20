@@ -175,7 +175,7 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
     payload = json.dumps({
         "delayed": delayed,
         "failImage": fail_image,
-        "sources": {"items": [{"id": 1, "name": "Test", "selected": True}], "collection_enabled": True},
+        "sources": {"items": [{"id": 1, "name": "Test", "selected": True, "group_name": "测试组"}], "collection_enabled": True, "unread_count": 2},
         "news": {"items": [{
             "id": 7, "has_image": True, "source_name": "Test",
             "published_at": "2026-09-04T00:00:00Z", "title": "Title",
@@ -185,8 +185,10 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
     page.context.add_init_script(
         "const data = " + payload + """;
           localStorage.setItem('dav_token', 'test-token');
+          window.__newsRequests = [];
           window.fetch = async (input) => {
             const url = String(input);
+            if (url.includes('/api/news')) window.__newsRequests.push(url);
             if (url.includes('/api/me')) {
               return { ok: true, status: 200, json: async () => ({ id: 1, username: 'test', news_visible: true }) };
             }
@@ -1108,3 +1110,19 @@ def test_kol_editor_uses_shared_focus_and_dirty_close_guard(page: Page):
     page.keyboard.press("Escape")
     expect(page.locator(".modal-mask")).to_have_count(0)
     expect(page.locator("#kol-edit-trigger")).to_be_focused()
+
+
+def test_news_list_groups_by_day_and_unread_toggle_sends_param(page: Page, static_origin: str):
+    install_news_bootstrap(page)
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
+    # 未读徽标：侧栏与底栏入口显示来源接口返回的未读数
+    badge = page.locator("[data-news-badge]:not([hidden])")
+    expect(badge.first).to_have_text("2")
+    # 未读开关：点击后列表请求带 unread=1 且开关进入选中态
+    toggle = page.locator(".news-unread-toggle")
+    expect(toggle).to_be_visible()
+    toggle.click()
+    expect(toggle).to_have_class(re.compile(r"is-on"))
+    expect(page.locator("#news-list .news-day-sep").first).to_be_visible()
+    sent = page.evaluate("() => window.__newsRequests")
+    assert any("unread=1" in url for url in sent)

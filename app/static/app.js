@@ -52,7 +52,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.223";
+const APP_VERSION = "1.12.224";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -83,6 +83,9 @@ const state = {
   newsListKey: "",
   newsScrollY: 0,
   newsCollectionEnabled: true,
+  newsUnreadOnly: false,
+  newsUnreadCount: 0,
+  newsProgressHandler: null,
   adminKolsPlatform: "",
   adminKols: [],
   adminKolsQ: "",
@@ -374,7 +377,7 @@ function avatarHtml(name, url, platform) {
 const NAV = [
   { group: "订阅", items: [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
-    { route: "news", icon: NEWS_ICON, label: "财经新闻" },
+    { route: "news", icon: NEWS_ICON, label: "财经新闻", badge: "news" },
     { route: "knowledge", icon: BOOK_ICON, label: "研报中心" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
     { route: "settings", icon: GEAR_ICON, label: "个人设置" },
@@ -419,7 +422,7 @@ function renderSidebar(user) {
         <button class="nav-item" data-route="${item.route}" onclick="go('${item.route}')" title="${item.label}">
           <span class="nav-icon">${item.icon}</span>
           <span class="nav-label">${item.label}</span>
-          ${item.badge ? `<span class="nav-badge" data-request-badge hidden></span>` : ""}
+          ${item.badge ? `<span class="nav-badge" data-${item.badge}-badge hidden></span>` : ""}
         </button>`;
   const html = NAV.filter((g) => !g.admin || user.is_admin)
     .map((group) => `
@@ -447,7 +450,7 @@ function renderSidebar(user) {
 
 const MOBILE_NAV = [
   { route: "timeline", icon: HOME_ICON, label: "动态" },
-  { route: "news", icon: NEWS_ICON, label: "财经新闻" },
+  { route: "news", icon: NEWS_ICON, label: "财经新闻", badge: "news" },
   { route: "home", icon: GRID_ICON, label: "广场" },
   { route: "settings", icon: USER_ICON, label: "个人设置" },
 ];
@@ -514,7 +517,7 @@ function renderBottomNav(user) {
   bottomNavRouteSignature = routeSignature;
   nav.innerHTML = tabs.map((t) => `
     <button class="bnav-item" data-route="${t.route}" aria-label="${t.label}" title="${t.label}" onclick="goFromBottomNav(this, '${t.route}')">
-      <span class="bnav-icon">${t.icon}</span>
+      <span class="bnav-icon">${t.icon}${t.badge ? `<span class="bnav-badge" data-${t.badge}-badge hidden></span>` : ""}</span>
     </button>`).join("");
   ensureMobilePlatformSwipe();
 }
@@ -3796,9 +3799,18 @@ function mountAdminGroupTabs(groupKey, active) {
 
 function syncRequestBadges() {
   const count = Number(state.pendingKolRequests) || 0;
-  document.querySelectorAll("[data-request-badge]").forEach((el) => {
+  document.querySelectorAll("[data-requests-badge]").forEach((el) => {
     el.textContent = count ? String(count) : "";
     el.hidden = !count;
+  });
+}
+
+function updateNewsBadge() {
+  const count = Number(state.newsUnreadCount) || 0;
+  const label = count > 99 ? "99+" : (count ? String(count) : "");
+  document.querySelectorAll("[data-news-badge]").forEach((el) => {
+    el.textContent = label;
+    el.hidden = !label;
   });
 }
 
@@ -4955,6 +4967,7 @@ const { exportPostCard } = createPostCardExport({
 const {
   clearNewsReaderState,
   loadFinancialNews,
+  markAllNewsRead,
   openNewsArticle,
   openNewsSourcePicker,
   queueNewsSearch,
@@ -4963,6 +4976,8 @@ const {
   renderNewsCenter,
   saveNewsSources,
   selectNewsSource,
+  setNewsFontSize,
+  toggleNewsUnreadOnly,
 } = createNewsView({
   $,
   state,
@@ -4978,6 +4993,9 @@ const {
   trapFocus,
   fmtPublished,
   externalLinkIcon: EXTERNAL_LINK_ICON,
+  renderSidebar: () => renderSidebar(state.user),
+  renderBottomNav: () => renderBottomNav(state.user),
+  updateNewsBadge,
 });
 
 const {
@@ -6142,6 +6160,7 @@ const INLINE_HANDLERS = {
   loadMoreFeishuTimeline,
   loadProxyAdmin,
   logout,
+  markAllNewsRead,
   onAclSearchKey,
   onAskLinkInput,
   onKnowledgeTabsKey,
@@ -6232,6 +6251,7 @@ const INLINE_HANDLERS = {
   selectPlatformTab,
   setFeishuSourceDisplay,
   setImaGroupInterval,
+  setNewsFontSize,
   setPlazaSourceMode,
   setSubscribeType,
   setTheme,
@@ -6249,6 +6269,7 @@ const INLINE_HANDLERS = {
   testBackupWebDAV,
   testProxyNode,
   tlApplyFilter,
+  toggleNewsUnreadOnly,
   tlApplyRailSearch,
   tlFilterPanel,
   tlOnSearchInput,

@@ -227,6 +227,83 @@ def test_news_keywords_match_news_toggle_roundtrip():
     assert db.get_user(uid)["keywords_match_news"] == 0
 
 
+def test_news_unread_filter_read_all_and_badge_count():
+    client = make_client("news-unread.db")
+    headers = user_headers(client, "unread_user")
+    db = client.app.state.db
+    uid = db.get_user_by_username("unread_user")["id"]
+    source_id = db.add_news_source("未读源")
+    feed_id = db.add_news_feed(
+        source_id, "主源", "https://feed.example/rss", "https://feed.example/rss"
+    )
+    db.set_user_news_sources(uid, [source_id])
+    old_id = db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "old",
+        "title": "旧文", "url": "https://example.com/old", "author": "A",
+        "summary": "S", "content_html": "", "images": [],
+        "published_at": "2026-09-01T10:00:00+00:00",
+        "fetched_at": "2026-09-01T10:00:00+00:00", "content_hash": "old",
+    })
+    new_id = db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "new",
+        "title": "新文", "url": "https://example.com/new", "author": "A",
+        "summary": "S", "content_html": "", "images": [],
+        "published_at": "2026-09-19T10:00:00+00:00",
+        "fetched_at": "2026-09-19T10:00:00+00:00", "content_hash": "new",
+    })
+    # 从未打开过新闻页：全部未读
+    sources = client.get("/api/news/sources", headers=headers).json()
+    assert sources["unread_count"] == 2
+    unread = client.get("/api/news?unread=1", headers=headers).json()
+    assert {i["id"] for i in unread["items"]} == {old_id, new_id}
+    # 水位推进到两篇之间：只剩新文未读
+    assert db.advance_news_seen(uid, "2026-09-15T00:00:00+00:00")
+    sources = client.get("/api/news/sources", headers=headers).json()
+    assert sources["unread_count"] == 1
+    unread = client.get("/api/news?unread=1", headers=headers).json()
+    assert [i["id"] for i in unread["items"]] == [new_id]
+    # read-all 后：无未读
+    assert client.post("/api/news/read-all", headers=headers).status_code == 200
+    sources = client.get("/api/news/sources", headers=headers).json()
+    assert sources["unread_count"] == 0
+    assert client.get("/api/news?unread=1", headers=headers).json()["items"] == []
+
+
+def test_news_font_size_roundtrip_and_validation():
+    client = make_client("news-font.db")
+    headers = user_headers(client, "font_user")
+    assert client.put(
+        "/api/me", headers=headers, json={"news_font_size": "large"}
+    ).status_code == 200
+    assert client.get("/api/me", headers=headers).json()["news_font_size"] == "large"
+    assert client.put(
+        "/api/me", headers=headers, json={"news_font_size": "huge"}
+    ).status_code == 400
+    assert client.put(
+        "/api/me", headers=headers, json={"news_font_size": ""}
+    ).status_code == 200
+
+
+def test_admin_news_source_group_name_roundtrip():
+    client = make_client("news-group.db")
+    headers = auth_headers(client)
+    db = client.app.state.db
+    source_id = db.add_news_source("分组源", group_name="国际")
+    assert db.get_news_source(source_id)["group_name"] == "国际"
+    response = client.patch(
+        f"/api/admin/news/sources/{source_id}",
+        headers=headers, json={"group_name": "宏观"},
+    )
+    assert response.status_code == 200
+    assert db.get_news_source(source_id)["group_name"] == "宏观"
+    created = client.post(
+        "/api/admin/news/sources", headers=headers,
+        json={"name": "新建分组源", "group_name": "科技"},
+    )
+    assert created.status_code == 200
+    assert db.get_news_source(created.json()["id"])["group_name"] == "科技"
+
+
 def test_news_seen_rejects_naive_timestamp_and_moves_forward_only():
     client = make_client("news-seen-api.db")
     headers = user_headers(client, "news_seen_user")
