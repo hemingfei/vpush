@@ -6882,6 +6882,7 @@ const {
   mxcRecentInput,
   mxcRecentChange,
   mxcSetSort,
+  mxcToggleClosed,
 } = createMxKolHoldingsView({
   $,
   state,
@@ -9298,6 +9299,7 @@ const INLINE_HANDLERS = {
   mxcRecentInput,
   mxcRecentChange,
   mxcSetSort,
+  mxcToggleClosed,
   mxvAdminKolToggle,
   mxvAdminKolAll,
   mxvAdminKolNone,

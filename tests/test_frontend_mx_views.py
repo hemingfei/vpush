@@ -768,6 +768,16 @@ def test_mx_kol_pnl_panel_contract():
     assert "mxcRenderPnl()" in set_sort
     # 无收益率归因区分：行情不全 vs 无卖出事件（被动出仓没有成交可算）
     assert "无卖出事件" in pnl_fn
+    # 已了结默认折叠：超出 5 条折叠进「更多」，点击 toggle 全量/收起
+    assert "MXC_CLOSED_LIMIT" in pnl_fn and "slice(0, MXC_CLOSED_LIMIT)" in pnl_fn
+    assert "closedExpanded" in pnl_fn and "mxcToggleClosed()" in pnl_fn
+    toggle = _fn_body("mxcToggleClosed", mxc)
+    assert "closedExpanded = !_mxc.closedExpanded" in toggle and "mxcRenderPnl()" in toggle
+    # window 注册（内联 onclick 可达）
+    handlers = APP_JS[APP_JS.index("const INLINE_HANDLERS"):]
+    assert "mxcToggleClosed" in handlers
+    # 折叠按钮样式存在
+    assert ".mxc-more" in mxc_css
     # available=true 且无个股操作：中性空态（不再误报「待行情接入」）
     assert "窗口内无个股操作" in pnl_fn
     # 持仓行第 5 列徽章：grid 必须有 5 列，否则徽章掉到下一行首列

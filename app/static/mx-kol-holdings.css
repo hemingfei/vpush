@@ -143,6 +143,10 @@
   border-radius:4px;padding:0 5px;white-space:nowrap;}
 .mxc-pnl-sub{color:var(--hd-muted);font-size:11px;margin:10px 0 2px;}
 .mxc-pnl-note{color:var(--hd-faint);font-size:11px;margin:10px 0 0;}
+/* 已了结折叠的「更多/收起」按钮：无边框文字钮，居中成块与列表分段对齐 */
+.mxc-more{background:none;border:none;color:var(--hd-accent);cursor:pointer;
+  font-size:var(--text-xs);padding:4px 6px;white-space:nowrap;display:block;margin:4px auto 0;}
+.mxc-more:hover{color:var(--hd-accent-deep);}
 /* 盈亏行内操作时间线（建仓/加仓/减仓/清仓/翻空 各带时间）：徽章复用时间线
    .mxc-kind 配色（买=红系/卖=绿系），整行折行铺开吃满行宽 */
 .mxc-pnl-acts{display:flex;flex-wrap:wrap;gap:3px 6px;flex-basis:100%;padding-top:2px;}
