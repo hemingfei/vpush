@@ -1696,6 +1696,11 @@ class DB:
         self._apply_schema_migrations()
 
     def _migrate_news(self) -> None:
+        # 内置源只在首次 seed（news_default_sources_v1 置位后整体跳过）：
+        # 否则 INSERT OR IGNORE 拦不住已删除的行，管理员「彻底删除」内置源
+        # 会在每次重启时复活。新增内置源时需换新 key（如 news_default_sources_v2）。
+        if self.get_setting("news_default_sources_v1") == "1":
+            return
         for slug, name, feeds in _BUILTIN_NEWS:
             self._conn.execute(
                 "INSERT OR IGNORE INTO news_sources "

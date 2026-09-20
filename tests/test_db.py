@@ -2184,6 +2184,22 @@ def test_news_keyword_notify_helpers(tmp_path):
     db.close()
 
 
+def test_news_builtin_source_hard_delete_survives_reopen(tmp_path):
+    db = DB(str(tmp_path / "builtin.db"))
+    builtin = db._rows(
+        "SELECT id, slug FROM news_sources WHERE built_in = 1 ORDER BY id LIMIT 1"
+    )[0]
+    db.delete_news_source(builtin["id"])
+    db.reopen()  # 触发 _migrate_news：已删除的内置源不得复活
+    assert db.get_news_source(builtin["id"]) is None
+    assert not db._rows(
+        "SELECT id FROM news_sources WHERE slug = ?", (builtin["slug"],)
+    )
+    # 其余内置源不受影响
+    assert db._rows("SELECT id FROM news_sources WHERE built_in = 1")
+    db.close()
+
+
 def test_news_article_upsert_updates_without_duplicate(tmp_path):
     db = DB(str(tmp_path / "article.db"))
     source_id = db.add_news_source("测试媒体")
