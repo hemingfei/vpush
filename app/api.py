@@ -377,6 +377,7 @@ class MeUpdate(BaseModel):
     dnd_allow_favorite: bool | None = None
     keywords: list[str] | None = None
     keywords_match_reports: bool | None = None
+    keywords_match_news: bool | None = None
     llm_api_base: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
@@ -782,6 +783,7 @@ def public_user(user: dict, db=None) -> dict:
         "dnd_end": user.get("dnd_end") or "",
         "dnd_allow_favorite": bool(user.get("dnd_allow_favorite")),
         "keywords_match_reports": bool(user.get("keywords_match_reports")),
+        "keywords_match_news": bool(user.get("keywords_match_news")),
         "llm_api_base": user.get("llm_api_base") or "",
         "llm_api_key": mask_secret(user_plain_secret(user, "llm_api_key", db)),
         "llm_model": user.get("llm_model") or "",
@@ -1987,6 +1989,12 @@ def create_api_router(
             current = db.get_user(user["id"]) or {}
             if want and not current.get("keywords_match_reports"):
                 updates["keywords_match_reports_since"] = datetime.now(UTC).isoformat()
+        if "keywords_match_news" in body.model_fields_set and body.keywords_match_news is not None:
+            want = bool(body.keywords_match_news)
+            updates["keywords_match_news"] = want
+            current = db.get_user(user["id"]) or {}
+            if want and not current.get("keywords_match_news"):
+                updates["keywords_match_news_since"] = datetime.now(UTC).isoformat()
         if "notify_enabled" in body.model_fields_set:
             updates["notify_enabled"] = body.notify_enabled
         if "daily_report_enabled" in body.model_fields_set and body.daily_report_enabled is not None:
@@ -2455,9 +2463,10 @@ def create_api_router(
         q: str = Query("", max_length=200),
         user: dict = Depends(get_current_user),
     ):
-        selected_ids = set(db.list_user_news_source_ids(user["id"]))
-        if source_id is not None and source_id not in selected_ids:
-            raise HTTPException(status_code=400, detail="只能筛选已选择的新闻来源")
+        if source_id is not None:
+            browse = db.get_news_source(source_id)
+            if browse is None or browse["archived_at"]:
+                raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
         view_started_at = datetime.now(UTC).isoformat()
         anchor = (db.get_user(user["id"]) or {}).get("news_last_seen_at")
         rows = db.list_news_articles(
@@ -2500,11 +2509,16 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="文章不存在")
         article.pop("images", None)
         article.pop("has_image", None)
+        article["next_id"] = db.get_next_news_article(article, user["id"])
         return article
 
     @router.get("/news/{article_id}/images/{index}")
     def news_article_image(
-        article_id: int, index: int, user: dict = Depends(get_download_user)
+        article_id: int,
+        index: int,
+        response: Response,
+        if_none_match: str | None = Header(None),
+        user: dict = Depends(get_download_user),
     ):
         try:
             body, content_type = _news_service_or_503().fetch_image(
@@ -2516,14 +2530,15 @@ def create_api_router(
             raise HTTPException(status_code=400, detail="图片地址不安全或类型不受支持") from None
         except NewsUpstreamError:
             raise HTTPException(status_code=502, detail="图片暂时无法加载") from None
-        return Response(
-            content=body,
-            media_type=content_type,
-            headers={
-                "Cache-Control": "private, max-age=86400",
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
+        etag = f'"news-img-{hashlib.sha256(body).hexdigest()[:16]}"'
+        headers = {
+            "Cache-Control": "private, max-age=86400",
+            "ETag": etag,
+            "X-Content-Type-Options": "nosniff",
+        }
+        if if_none_match and if_none_match.strip() == etag:
+            return Response(status_code=304, headers=headers)
+        return Response(content=body, media_type=content_type, headers=headers)
 
     # ---- 管理员财经新闻 ----
     def _admin_news_source_row(source: dict, include_archived: bool = True) -> dict:
@@ -2763,6 +2778,28 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="Feed 不存在")
         db.delete_news_feed(feed_id)
         _audit(admin, "news_feed_delete", str(feed_id), feed["name"])
+        return {"ok": True}
+
+    @router.get("/admin/news/articles")
+    def admin_news_articles(
+        source_id: int | None = Query(None),
+        q: str = Query("", max_length=200),
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+        admin: dict = Depends(require_admin),
+    ):
+        del admin
+        items = db.list_admin_news_articles(
+            source_id=source_id, q=q, limit=limit, offset=offset
+        )
+        return {"items": items}
+
+    @router.delete("/admin/news/articles/{article_id}")
+    def delete_admin_news_article(article_id: int, admin: dict = Depends(require_admin)):
+        deleted = db.delete_news_article(article_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="文章不存在")
+        _audit(admin, "news_article_delete", str(article_id))
         return {"ok": True}
 
     @router.post("/admin/news/feeds/{feed_id}/refresh")

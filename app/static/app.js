@@ -79,7 +79,10 @@ const state = {
   newsHasMore: false,
   newsRequestSeq: 0,
   newsObserver: null,
-  newsImageUrls: new Set(),
+  newsImageUrls: new Map(),
+  newsListKey: "",
+  newsScrollY: 0,
+  newsCollectionEnabled: true,
   adminKolsPlatform: "",
   adminKols: [],
   adminKolsQ: "",
@@ -5092,6 +5095,7 @@ const {
   enableWebPush,
   disableWebPush,
   saveKeywords,
+  saveKeywordsMatchNews,
   saveKeywordsMatchReports,
   toggleReportKeyword,
   saveLlm,
@@ -5144,7 +5148,7 @@ let codesView, loadAdminCodes, adminCodesBatch, adminCodesClearSelect, adminCode
 
 // admin 视图懒加载：news 由 ensureAdminViews() 赋值，求值期读到的是 undefined
 let newsView, loadAdminNews, loadAdminPosts, selectAdminNewsSource, saveAdminNewsSettings, refreshAllAdminNews, refreshAdminNewsFeed, toggleAdminNewsSource,
-  toggleAdminNewsFeed, archiveAdminNewsSource, restoreAdminNewsSource, deleteAdminNewsSource, archiveAdminNewsFeed, restoreAdminNewsFeed, deleteAdminNewsFeed, openNewsSourceModal, openNewsFeedModal,
+  toggleAdminNewsFeed, archiveAdminNewsSource, restoreAdminNewsSource, deleteAdminNewsSource, archiveAdminNewsFeed, restoreAdminNewsFeed, deleteAdminNewsFeed, loadAdminNewsArticles, deleteAdminNewsArticle, openNewsSourceModal, openNewsFeedModal,
   updateAdminNewsQuery, updateAdminNewsStatus, updateAdminNewsArchived, adminFilterPosts, adminPostsLoadMore, adminTogglePost;
 
 // admin 视图懒加载：users 由 ensureAdminViews() 赋值，求值期读到的是 undefined
@@ -5261,6 +5265,8 @@ async function ensureAdminViews() {
   archiveAdminNewsFeed,
   restoreAdminNewsFeed,
   deleteAdminNewsFeed,
+  loadAdminNewsArticles,
+  deleteAdminNewsArticle,
   openNewsSourceModal,
   openNewsFeedModal,
   updateAdminNewsQuery,
@@ -6096,6 +6102,7 @@ const INLINE_HANDLERS = {
   copyText,
   createProxyPool,
   cycleTheme,
+  deleteAdminNewsArticle,
   deleteAdminNewsFeed,
   deleteAdminNewsSource,
   deleteProxyNode,
@@ -6195,6 +6202,7 @@ const INLINE_HANDLERS = {
   markTurnstileDirty,
   clearImgbedSettings,
   saveKeywords,
+  saveKeywordsMatchNews,
   saveKeywordsMatchReports,
   saveKolEdit,
   saveLlm,

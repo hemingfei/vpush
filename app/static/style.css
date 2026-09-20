@@ -4698,6 +4698,7 @@ details.bind-steps[open] > summary .ui-icon { transform: rotate(90deg); }
 .news-article-body th,
 .news-article-body td { padding: 6px 10px; border: var(--border-default); white-space: nowrap; }
 .news-article-body a { color: var(--color-accent); }
+.news-article-next { display: flex; justify-content: flex-end; margin-top: 28px; padding-top: 16px; border-top: var(--border-default); }
 .news-source-modal .modal-card { width: min(520px, calc(100vw - 28px)); }
 .news-source-options { display: grid; max-height: 360px; gap: 4px; margin: 12px 0; overflow-y: auto; }
 .news-source-option { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 8px; border-radius: var(--radius-control); }

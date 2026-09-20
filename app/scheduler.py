@@ -1944,6 +1944,7 @@ class Scheduler:
         self._last_health_check = time.monotonic()
         self._last_cicc_alert_check = 0.0
         self._last_knowledge_notify = 0.0
+        self._last_news_notify = 0.0
         self._last_proxy_tick = 0.0
         self._last_imgbed = 0.0
         self._last_truth_backfill = 0.0
@@ -2207,6 +2208,16 @@ class Scheduler:
                     )
                 except Exception:  # noqa: BLE001
                     logger.exception("研报关键词提醒异常")
+            if now_mono - self._last_news_notify >= 60:
+                self._last_news_notify = now_mono
+                try:
+                    from .news_notify import maybe_notify_news_keywords
+
+                    await asyncio.to_thread(
+                        maybe_notify_news_keywords, self.db, self.notifiers_config
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("财经新闻关键词提醒异常")
             if now_mono - self._last_proxy_tick >= PROXY_TICK_INTERVAL:
                 self._last_proxy_tick = now_mono
                 try:

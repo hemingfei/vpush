@@ -327,10 +327,15 @@ export function createPushSettingsView(dependencies) {
             <span class="track"></span>
             <span>匹配研报中心</span>
           </label>
+          <label class="switch kw-report-switch">
+            <input id="set-kw-news" type="checkbox" ${state.user.keywords_match_news ? "checked" : ""} onchange="saveKeywordsMatchNews()">
+            <span class="track"></span>
+            <span>匹配财经新闻</span>
+          </label>
           <div class="toolbar" style="margin-top:10px">
             <button class="btn-normal" onclick="saveKeywords()">保存关键词</button>
           </div>
-          <p class="muted">动态命中即实时送达。开启「匹配研报中心」后，每日研报入库结束会把命中篇目合成一条推送；需要管理员已授权对应研报库。</p>
+          <p class="muted">动态命中即实时送达。开启「匹配研报中心」后，每日研报入库结束会把命中篇目合成一条推送；需要管理员已授权对应研报库。开启「匹配财经新闻」后，新入库的财经新闻命中关键词会合并推送（约每分钟一批）。</p>
         </section>
         <section class="section-panel">
           <header class="section-head">

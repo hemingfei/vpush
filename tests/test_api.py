@@ -94,8 +94,18 @@ def test_news_list_and_seen_anchor_are_user_scoped():
         "/api/news/seen", headers=first_headers,
         json={"view_started_at": first["view_started_at"]},
     ).status_code == 200
-    assert client.get(f"/api/news/{article_id}", headers=second_headers).status_code == 404
+    # 未订阅可读启用源（浏览模式），但默认信息流仍只含已订阅源
+    assert client.get(f"/api/news/{article_id}", headers=second_headers).status_code == 200
     assert client.get("/api/news", headers=second_headers).json()["items"] == []
+    db.set_news_source_archived(source_ids[0], True)
+    assert client.get(f"/api/news/{article_id}", headers=second_headers).status_code == 404
+    assert client.get(f"/api/news/{article_id}", headers=first_headers).status_code == 404
+    browse = client.get(f"/api/news?source_id={source_ids[0]}", headers=second_headers)
+    assert browse.status_code == 400
+    db.set_news_source_archived(source_ids[0], False)
+    browse = client.get(f"/api/news?source_id={source_ids[0]}", headers=second_headers)
+    assert browse.status_code == 200
+    assert browse.json()["items"][0]["id"] == article_id
 
 
 def test_news_source_selection_and_invalid_selection_are_authenticated():
@@ -153,6 +163,68 @@ def test_admin_news_feed_hard_delete_cascades_articles():
     assert client.delete(
         f"/api/admin/news/feeds/{feed_id}", headers=headers
     ).status_code == 404
+
+
+def test_news_article_next_id_and_admin_delete():
+    client = make_client("news-admin-article.db")
+    headers = auth_headers(client)
+    user = user_headers(client, "news_reader")
+    db = client.app.state.db
+    source_id = db.add_news_source("下一篇源")
+    feed_id = db.add_news_feed(
+        source_id, "主源", "https://feed.example/rss", "https://feed.example/rss"
+    )
+    first = db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "g1",
+        "title": "旧文", "url": "https://example.com/1", "author": "A",
+        "summary": "S", "content_html": "<p>1</p>", "images": [],
+        "published_at": "2026-09-01T10:00:00+00:00",
+        "fetched_at": "2026-09-01T10:00:00+00:00", "content_hash": "g1",
+    })
+    second = db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "g2",
+        "title": "新文", "url": "https://example.com/2", "author": "A",
+        "summary": "S", "content_html": "<p>2</p>", "images": [],
+        "published_at": "2026-09-01T11:00:00+00:00",
+        "fetched_at": "2026-09-01T11:00:00+00:00", "content_hash": "g2",
+    })
+    detail = client.get(f"/api/news/{second}", headers=user)
+    assert detail.status_code == 200
+    assert detail.json()["next_id"] == first
+    assert client.delete(
+        f"/api/admin/news/articles/{second}", headers={"Authorization": "Bearer nope"}
+    ).status_code == 401
+    listing = client.get(
+        f"/api/admin/news/articles?source_id={source_id}", headers=headers
+    )
+    assert listing.status_code == 200
+    assert {r["id"] for r in listing.json()["items"]} == {first, second}
+    assert client.delete(
+        f"/api/admin/news/articles/{second}", headers=headers
+    ).status_code == 200
+    assert db.get_news_article(second) is None
+    assert client.delete(f"/api/admin/news/articles/{second}", headers=headers).status_code == 404
+    assert client.get(f"/api/news/{second}", headers=user).status_code == 404
+
+
+def test_news_keywords_match_news_toggle_roundtrip():
+    client = make_client("news-kw-toggle.db")
+    headers = user_headers(client, "news_kw_user")
+    response = client.put(
+        "/api/me", headers=headers, json={"keywords_match_news": True}
+    )
+    assert response.status_code == 200
+    db = client.app.state.db
+    uid = db.get_user_by_username("news_kw_user")["id"]
+    assert db.get_user(uid)["keywords_match_news"] == 1
+    assert db.get_user(uid)["keywords_match_news_since"]
+    me = client.get("/api/me", headers=headers).json()
+    assert me["keywords_match_news"] is True
+    response = client.put(
+        "/api/me", headers=headers, json={"keywords_match_news": False}
+    )
+    assert response.status_code == 200
+    assert db.get_user(uid)["keywords_match_news"] == 0
 
 
 def test_news_seen_rejects_naive_timestamp_and_moves_forward_only():
