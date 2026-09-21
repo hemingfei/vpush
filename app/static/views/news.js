@@ -534,6 +534,7 @@ export function createNewsView(dependencies) {
   function selectNewsSource(sourceId) {
     state.newsFilterSourceId = sourceId;
     state.newsListKey = newsListKey();
+    renderNewsListShell(state.newsCollectionEnabled !== false);
     return loadFinancialNews(true, currentRouteSeq());
   }
 

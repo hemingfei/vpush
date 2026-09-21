@@ -4694,6 +4694,7 @@ def test_news_stream_layout_uses_responsive_source_navigation():
     assert "news-source-mobile" in src
     assert "news-source-filter" not in src
     assert 'id="news-source-filter"' not in src
+    assert "renderNewsListShell" in _fn_body("selectNewsSource", NEWS_JS)
 
 
 def test_news_pagination_appends_without_replacing_existing_thumbnails():
