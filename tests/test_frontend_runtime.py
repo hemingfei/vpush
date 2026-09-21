@@ -24,6 +24,24 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "app" / "static"
 
 
+def _wait_for_call(page: Page, state: dict, method: str, timeout_ms: int = 5000):
+    """轮询等待 page.route 网络桩捕获指定 method 的调用，超时返回 None。
+
+    sync Playwright 的 route 回调只在 wait_* 调用期间派发；点击/evaluate 返回后
+    立即读 state["calls"] 会在请求未到达时偶发空——CI 慢机上必现竞态
+    （run 35615024544 实测）。本机 Playwright 无 expect.poll，手写同语义轮询。
+    """
+    import time as _time
+
+    deadline = _time.monotonic() + timeout_ms / 1000
+    while _time.monotonic() < deadline:
+        found = next((c for c in state["calls"] if c["method"] == method), None)
+        if found:
+            return found
+        page.wait_for_timeout(50)
+    return next((c for c in state["calls"] if c["method"] == method), None)
+
+
 @pytest.fixture
 def cicc_page(page: Page):
     page.clock.install()
@@ -1561,9 +1579,11 @@ def test_action_mark_modal_flow_and_chip_refresh(page: Page, static_origin: str)
     assert page.evaluate('document.getElementById("am-target").value') == "贵州茅台"
     page.locator('#action-mark-mask .am-act-btn[data-action="清仓"]').click()
     page.locator("#action-mark-mask .tag-vote-actions .btn-normal").click()
-    # POST body 断言（弹窗重绘出现两行标注即说明响应已落地）
+    # POST body 断言：弹窗重绘出现两行标注即说明响应已落地；calls 读取改
+    # 轮询等待网络桩捕获——expect(to_have_count(1)) 提交前后同值，同步无效，
+    # 直接读会在 POST 未到达时偶发空（CI 慢机竞态，run 35615024544 实测）
     expect(page.locator("#action-mark-mask .am-mark-row")).to_have_count(1)
-    post = next((c for c in state["calls"] if c["method"] == "POST"), None)
+    post = _wait_for_call(page, state, "POST")
     assert post and post["path"] == "/api/posts/77/action-mark"
     assert post["body"] == {"target_name": "贵州茅台", "action": "清仓"}
     # 达成一致后（响应带 effective 列表）角标就地翻已生效
@@ -1579,7 +1599,7 @@ def test_action_mark_modal_flow_and_chip_refresh(page: Page, static_origin: str)
     # 逐条撤销走 DELETE?target_name=，回落「标注中」虚线角标
     state["effective"] = []
     page.evaluate("deleteActionMark(77, '贵州茅台', 0)")
-    deleted = next((c for c in state["calls"] if c["method"] == "DELETE"), None)
+    deleted = _wait_for_call(page, state, "DELETE")
     assert deleted and deleted["path"] == "/api/posts/77/action-mark"
     chip = page.locator('.am-chip[data-post-id="77"]')
     expect(chip).to_have_class(re.compile("is-pending"))
@@ -1650,9 +1670,9 @@ def test_action_mark_modal_multi_target_marks(page: Page, static_origin: str):
     expect(mark_tags.nth(0)).to_have_text("赛力斯")
     expect(mark_tags.nth(1)).to_have_text("比亚迪")
     expect(page.locator('.am-chip[data-post-id="88"]')).to_have_count(0)
-    # 逐条撤销：点比亚迪的 ×
+    # 逐条撤销：点比亚迪的 ×（calls 读取轮询等待网络桩捕获，理由同上）
     page.locator("#action-mark-mask .am-mark-del").nth(1).click()
-    deleted = next((c for c in state["calls"] if c["method"] == "DELETE"), None)
+    deleted = _wait_for_call(page, state, "DELETE")
     assert deleted and "target_name=" in deleted["query"]
     page.evaluate("closeActionMarkModal()")
 
