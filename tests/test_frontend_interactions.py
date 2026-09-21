@@ -4701,6 +4701,14 @@ def test_news_mark_all_read_reattaches_images():
     body = _fn_body("markAllNewsRead", NEWS_JS)
     assert "attachListImages" in body
     assert "startNewsAutoLoad" in body
+    assert "routeStillActive" in body
+    assert "routeStillActive" in _fn_body("markNewsItemRead", NEWS_JS)
+
+
+def test_news_article_page_posts_read():
+    body = _fn_body("renderFinancialNewsArticle", NEWS_JS)
+    assert "/read" in body
+    assert 'method: "POST"' in body
 
 
 def test_news_pagination_appends_without_replacing_existing_thumbnails():

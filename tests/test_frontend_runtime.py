@@ -135,7 +135,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if logical:
             query = f"?{parsed.query}" if parsed.query else ""
             self.path = f"/{logical}{query}"
-        elif path in {"/news", "/news/"}:
+        elif path == "/news" or path.startswith("/news/"):
             self.path = "/index.html"
         super().do_GET()
 
@@ -220,6 +220,9 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
             }
             if (url.includes('/read')) {
               return { ok: true, status: 200, json: async () => ({ ok: true }) };
+            }
+            if (url.includes('/api/news/') && !url.includes('/images') && !url.includes('/sources')) {
+              return { ok: true, status: 200, json: async () => ({ id: 7, title: 'Title', summary: 'Summary', content_html: '<p>Body</p>', source_name: '华尔街见闻', published_at: '2026-09-04T00:00:00Z', url: 'https://example.com', prev_id: 6, next_id: 8 }) };
             }
             if (url.includes('/api/news')) {
               if (data.delayed) {
@@ -1197,6 +1200,13 @@ def test_news_item_mark_read_updates_counts_without_navigation(page: Page, stati
     expect(page.locator('[data-news-id="7"] .news-mark-read')).to_have_count(0)
     assert page.url.endswith("/news")
     assert any("/api/news/7/read" in call["url"] for call in page.evaluate("window.__newsRequests"))
+
+
+def test_news_article_page_marks_read_on_open(page: Page, static_origin: str):
+    install_news_bootstrap(page)
+    page.goto(f"{static_origin}/news/7", wait_until="domcontentloaded")
+    expect(page.get_by_role("heading", name="Title")).to_be_visible()
+    page.wait_for_function("() => (window.__newsRequests || []).some((call) => String(call.url).includes('/api/news/7/read') && String(call.method || 'GET').toUpperCase() === 'POST')")
 
 
 def test_news_read_all_offers_five_second_undo(page: Page, static_origin: str):

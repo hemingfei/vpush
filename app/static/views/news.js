@@ -385,6 +385,11 @@ export function createNewsView(dependencies) {
     try {
       const article = await api(`/api/news/${articleId}`);
       if (!routeStillActive(seq)) return;
+      void api(`/api/news/${articleId}/read`, { method: "POST" }).then(() => {
+        if (!routeStillActive(seq)) return;
+        applyNewsItemRead(articleId);
+        syncUnreadBadge();
+      }).catch(() => {});
       const pager = (article.prev_id || article.next_id) ? `
         <div class="news-article-nav">
           ${article.prev_id ? `<button type="button" class="btn-ghost" onclick="openNewsArticle(${article.prev_id})">← 上一篇</button>` : "<span></span>"}
@@ -427,20 +432,23 @@ export function createNewsView(dependencies) {
   }
 
   async function markNewsItemRead(articleId, { navigate = false } = {}) {
+    const seq = currentRouteSeq();
     const item = state.newsItems.find((entry) => Number(entry.id) === Number(articleId));
     const changed = item && !item.is_read;
     if (changed) applyNewsItemRead(articleId);
     try {
       if (changed) await api(`/api/news/${articleId}/read`, { method: "POST" });
+      if (!routeStillActive(seq)) return;
       syncUnreadBadge();
       if (navigate) return go(`news/${articleId}`);
+      if (!$("#news-list")) return;
       renderNewsListShell(state.newsCollectionEnabled !== false);
       const list = $("#news-list");
       list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : emptyState("没有符合条件的财经新闻");
-      attachListImages(currentRouteSeq());
-      startNewsAutoLoad(currentRouteSeq());
+      attachListImages(seq);
+      startNewsAutoLoad(seq);
     } catch (err) {
-      if (changed) await renderFinancialNewsList(currentRouteSeq());
+      if (changed && routeStillActive(seq)) await renderFinancialNewsList(seq);
       flash(err.message, "error");
     }
   }
@@ -465,6 +473,7 @@ export function createNewsView(dependencies) {
   }
 
   async function markAllNewsRead() {
+    const seq = currentRouteSeq();
     try {
       const data = await api("/api/news/read-all", { method: "POST" });
       state.newsUnreadCount = 0;
@@ -475,12 +484,14 @@ export function createNewsView(dependencies) {
         previous_seen_at: data.previous_seen_at || null,
       };
       syncUnreadBadge();
-      renderNewsListShell(state.newsCollectionEnabled !== false);
+      if (!routeStillActive(seq)) return;
       const list = $("#news-list");
-      list.innerHTML = state.newsUnreadOnly ? emptyState("没有未读文章，已经全部看完了") : newsListHtml(state.newsItems);
+      if (!list) return;
+      renderNewsListShell(state.newsCollectionEnabled !== false);
+      $("#news-list").innerHTML = state.newsUnreadOnly ? emptyState("没有未读文章，已经全部看完了") : newsListHtml(state.newsItems);
       if (!state.newsUnreadOnly) {
-        attachListImages(currentRouteSeq());
-        startNewsAutoLoad(currentRouteSeq());
+        attachListImages(seq);
+        startNewsAutoLoad(seq);
       }
       const banner = $("#news-read-undo");
       banner.hidden = false;
