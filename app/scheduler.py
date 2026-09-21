@@ -13,7 +13,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import datetime, time as time_, timedelta
 
 from .backup import run_scheduled
 from .channels import channel_bound, channel_enabled, is_permanent_push_error
@@ -2126,6 +2126,7 @@ class Scheduler:
         self._last_proxy_tick = 0.0
         self._last_mx_view_check = 0.0
         self._mx_view_check_running = False
+        self._kol_pnl_refresh_running = False
         self._last_image_backfill = 0.0
         self._image_backfill_running = False
         self._mx_sync_service = None
@@ -3504,6 +3505,20 @@ class Scheduler:
 
                     asyncio.create_task(_mx_view_tick())
 
+            # --- 大V盈亏小时缓存重算（交易日时段整点后首轮触发） ---
+            if not self._kol_pnl_refresh_running and self._kol_pnl_refresh_due():
+                self._kol_pnl_refresh_running = True
+
+                async def _kol_pnl_tick() -> None:
+                    try:
+                        await asyncio.to_thread(self._run_kol_pnl_refresh)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("大V盈亏缓存重算异常")
+                    finally:
+                        self._kol_pnl_refresh_running = False
+
+                asyncio.create_task(_kol_pnl_tick())
+
             # --- 清理旧日志（每小时一次） ---
             try:
                 if not hasattr(self.db, "_last_ai_log_cleanup") or \
@@ -4034,6 +4049,59 @@ class Scheduler:
     def _stock_alias_due(self) -> bool:
         """股票别名识别任务是否到期：每天最多一次（settings 日期键控制）。"""
         return self.db.get_setting("stock_alias_last_date") != datetime.now().strftime("%Y-%m-%d")
+
+    # 大V预估盈亏小时级重算的窗口口径：交易日（周一至周五）07:00-16:30 覆盖
+    # A 股盘前+盘中+盘后一小时；整点后首轮触发，settings 小时键控制一小时最多一次。
+    # 与 MX 消息窗口（mx_window.py）无关联：盈亏回放读的是已落库观点，不连 MX。
+    # 窗口集合与端点缓存口径同源（db.PNL_CACHE_WINDOWS）：任务不刷的键端点也不缓存。
+    KOL_PNL_REFRESH_START = time_(7, 0)
+    KOL_PNL_REFRESH_END = time_(16, 30)
+    KOL_PNL_WINDOWS = DB.PNL_CACHE_WINDOWS
+
+    def _kol_pnl_refresh_due(self, now: datetime | None = None) -> bool:
+        """盈亏重算是否到期：交易日时段内且本小时未跑过。"""
+        now = now or datetime.now(CN_TZ)
+        if now.weekday() >= 5:
+            return False
+        if not (self.KOL_PNL_REFRESH_START <= now.time() < self.KOL_PNL_REFRESH_END):
+            return False
+        hour_key = f"kol_pnl_refresh_{now.strftime('%Y%m%d_%H')}"
+        return not self.db.get_setting(hour_key)
+
+    def _run_kol_pnl_refresh(self, now: datetime | None = None) -> int:
+        """开盘时段整点任务：名单内全部大V × {30,60,90} 批量重算预估盈亏落缓存。
+
+        返回成功落库的大V数（单个大V失败只跳过，不连坐）；非交易日窗口调用
+        直接返回 0 不触发任何回放（调用方按 due 判定，这里兜底防御）。
+        """
+        now = now or datetime.now(CN_TZ)
+        if not self._kol_pnl_refresh_due(now):
+            return 0
+        from .mx_kol_pnl import build_kol_pnl
+        from .mx_view_analysis import holdings_kol_ids
+
+        kol_ids = holdings_kol_ids(self.db)
+        done = 0
+        for kol_id in kol_ids:
+            ok = True
+            for days in self.KOL_PNL_WINDOWS:
+                try:
+                    result = build_kol_pnl(self.db, kol_id, days=days)
+                except Exception:  # noqa: BLE001 - 单大V脏数据不连坐
+                    logger.exception("盈亏缓存重算失败 kol_id=%s days=%s", kol_id, days)
+                    ok = False
+                    break
+                if result is not None:
+                    self.db.upsert_kol_pnl_cache(kol_id, days, result)
+            if ok:
+                done += 1
+        hour_key = f"kol_pnl_refresh_{now.strftime('%Y%m%d_%H')}"
+        self.db.set_setting(hour_key, datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"))
+        if done:
+            logger.info("盈亏小时缓存重算：%d/%d 个大V × %d 窗口",
+                        done, len(kol_ids), len(self.KOL_PNL_WINDOWS))
+        return done
+
 
     def _run_ticker_digest_task(self) -> int:
         """标的聚合编译：把同一标的多篇研报要点汇编成一篇持续更新的综述（LLM，增量）。

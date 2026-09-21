@@ -1354,6 +1354,17 @@ CREATE TABLE IF NOT EXISTS kol_price_cache (
     fetched_ts REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (code, at)
 );
+
+-- 大V预估盈亏的小时级预计算缓存（scheduler 开盘时段每小时整批重算）。
+-- (kol_id, window_days) 为键存整份预估盈亏 JSON；已了结盈亏只依赖事件时刻
+-- 历史价（不可变），缓存唯一的新鲜度需求由重算任务满足。
+CREATE TABLE IF NOT EXISTS kol_pnl_cache (
+    kol_id INTEGER NOT NULL,
+    window_days INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (kol_id, window_days)
+);
 """
 
 ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq", "mx", "system", "truth"}
@@ -6101,6 +6112,36 @@ class DB:
                 params,
             )
             self._conn.commit()
+
+    # ---- 大V预估盈亏小时级缓存 ----
+    # 有重算任务保证新鲜度的窗口集合：缓存读写只允许这些键，
+    # 其余窗口（如 days=45）永远现算——落了缓存就没人刷，会永久陈旧
+    PNL_CACHE_WINDOWS = (30, 60, 90)
+
+    def get_kol_pnl_cache(self, kol_id: int, window_days: int) -> dict | None:
+        """读单大V单窗口的预估盈亏缓存；未写返回 None。"""
+        rows = self._rows(
+            "SELECT payload, computed_at FROM kol_pnl_cache WHERE kol_id = ? AND window_days = ?",
+            (int(kol_id), int(window_days)),
+        )
+        if not rows:
+            return None
+        try:
+            payload = json.loads(rows[0]["payload"])
+        except (TypeError, ValueError):
+            return None
+        return {"payload": payload, "computed_at": str(rows[0]["computed_at"] or "")}
+
+    def upsert_kol_pnl_cache(self, kol_id: int, window_days: int, payload: dict) -> None:
+        """覆盖写缓存：同 (kol_id, window_days) 键更新内容与计算时间戳。"""
+        now_text = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        self._execute(
+            "INSERT INTO kol_pnl_cache (kol_id, window_days, payload, computed_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(kol_id, window_days) DO UPDATE SET "
+            "payload = excluded.payload, computed_at = excluded.computed_at",
+            (int(kol_id), int(window_days), json.dumps(payload, ensure_ascii=False), now_text),
+        )
 
     def set_settings_atomic(self, values: dict[str, str]) -> None:
         if not values:

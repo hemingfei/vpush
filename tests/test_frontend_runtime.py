@@ -1288,6 +1288,126 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
     assert "已删除" in [f[0] for f in page.evaluate("hdTest.flashes")]
 
 
+def test_holdings_kol_board_tabs_expand_sort(page: Page):
+    """大V持股板块（工厂级打桩）：页顶 tab 切换、四榜渲染、行展开大V名单、
+    窗口钮重拉、最近观点滑动栏筛选、清仓榜盈亏排序与割肉/止盈徽。"""
+    page.evaluate("""async () => {
+      const { createHoldingsView } = await import('/views/holdings.js');
+      document.body.innerHTML = '<main id="main"></main>';
+      const h = window.hdTest = { calls: [], flashes: [] };
+      h.kolSummary = (days) => ({
+        window_days: days,
+        heavy: [
+          {target_name: '贵州茅台', kol_count: 2, kols: [
+            {kol_id: 1, name: '王哥', avatar: ''}, {kol_id: 2, name: '李哥', avatar: ''}]},
+          {target_name: '中科曙光', kol_count: 1, kols: [{kol_id: 3, name: '赵哥', avatar: ''}]},
+        ],
+        attack: [
+          {target_name: '五粮液', kol_count: 2, last_at: '2026-09-19 10:00:00', kols: [
+            {kol_id: 1, name: '王哥', avatar: ''}, {kol_id: 2, name: '李哥', avatar: ''}]},
+        ],
+        topics: [
+          {target_name: 'AI算力', kol_count: 3, kols: [
+            {kol_id: 1, name: '王哥', avatar: ''}, {kol_id: 2, name: '李哥', avatar: ''},
+            {kol_id: 3, name: '赵哥', avatar: ''}]},
+        ],
+        clears: [
+          {target_name: '贵州茅台', kol_count: 2, kols: [
+            {kol_id: 1, name: '王哥', avatar: ''}, {kol_id: 2, name: '李哥', avatar: ''}],
+           entries: [
+            {kol_id: 1, name: '王哥', avatar: '', at: '2026-09-19 14:30:00', realized_pnl_pct: -12.5, signal: 'cut'},
+            {kol_id: 2, name: '李哥', avatar: '', at: '2026-09-19 15:00:00', realized_pnl_pct: 8.3, signal: 'profit'},
+            {kol_id: 4, name: '孙哥', avatar: '', at: '2026-09-18 10:00:00', realized_pnl_pct: null, signal: ''},
+           ]},
+        ],
+        generated_at: '2026-09-20 10:00',
+      });
+      h.holdings = [];
+      h.view = createHoldingsView({
+        $: (sel) => document.querySelector(sel),
+        state: {token: ''},
+        api: async (path, options = {}) => {
+          h.calls.push(path);
+          if (path.startsWith('/api/my/holdings/kol-summary')) {
+            const u = new URL(path, location.origin);
+            return h.kolSummary(Number(u.searchParams.get('days')) || 30);
+          }
+          if (path === '/api/my/holdings') return h.holdings;
+          return {items: [], summary: {targets: []}, max_id: 0};
+        },
+        escapeHtml: (s) => String(s ?? ''),
+        setPageTitle: () => {},
+        routeStillActive: () => true,
+        flash: (msg, type) => h.flashes.push([msg, type || 'success']),
+        showConfirm: async () => true,
+      });
+      Object.assign(window, h.view);
+      await h.view.renderHoldings(1);
+    }""")
+    # 页顶 tab：默认我的持股（空清单空态），切到大V持股后四榜骨架出现
+    expect(page.locator(".hd-view-tabs")).to_have_count(1)
+    page.locator(".hd-view-tabs").get_by_role("button", name="大V持股").click()
+    expect(page.locator(".hd-kol-board")).to_have_count(1)
+    # 重仓票榜：人数降序（后端排好），行显示票名 + 人数
+    rows = page.locator(".hd-krow")
+    expect(rows).to_have_count(2)
+    expect(rows.nth(0).locator(".hd-krow-name")).to_have_text("贵州茅台")
+    expect(rows.nth(0).locator(".hd-kcount")).to_have_text("2 人")
+    # 行展开：显示持有大V名单（头像 + 名字），再点收起
+    rows.nth(0).click()
+    expect(page.locator(".hd-kol-chip")).to_have_count(2)
+    expect(page.locator(".hd-kol-chip").first).to_contain_text("王哥")
+    # 下钻走现有单大V页路由（带前导斜杠）
+    href_like = page.locator(".hd-kol-chip").first.get_attribute("onclick")
+    assert "go('/mx-kol/1')" in href_like
+    rows.nth(0).click()
+    expect(page.locator(".hd-kol-chip")).to_have_count(0)
+    # 窗口钮：切 90 天重拉（请求带 days=90）
+    page.locator(".hd-pills").get_by_role("button", name="90天").click()
+    assert any("days=90" in c for c in page.evaluate("hdTest.calls"))
+    # 共同进攻榜：≥2 人才上榜，带最近动作时间
+    page.locator(".hd-kol-controls").get_by_role("button", name="共同进攻").click()
+    expect(rows).to_have_count(1)
+    expect(rows.nth(0).locator(".hd-krow-name")).to_have_text("五粮液")
+    expect(rows.nth(0).locator(".hd-kmeta")).to_contain_text("09-19")
+    # 题材方向榜
+    page.locator(".hd-kol-controls").get_by_role("button", name="题材方向").click()
+    expect(rows).to_have_count(1)
+    expect(rows.nth(0).locator(".hd-krow-name")).to_have_text("AI算力")
+    # 清仓榜：行内汇总（平均盈亏 + 割肉/止盈计数徽）；展开后按盈亏排序、无价沉底
+    page.locator(".hd-kol-controls").get_by_role("button", name="清仓").click()
+    expect(rows).to_have_count(1)
+    expect(rows.nth(0).locator(".hd-badge.cut")).to_contain_text("割肉 1")
+    expect(rows.nth(0).locator(".hd-badge.win")).to_contain_text("止盈 1")
+    rows.nth(0).click()
+    chips = page.locator(".hd-kol-chip.static")
+    expect(chips).to_have_count(3)
+    # 默认亏多的在前：王哥 -12.5% → 李哥 +8.3% → 孙哥无价（—）沉底
+    expect(chips.nth(0)).to_contain_text("王哥")
+    expect(chips.nth(0).locator(".hd-kol-pct.cut")).to_have_text("-12.5%")
+    expect(chips.nth(1)).to_contain_text("李哥")
+    expect(chips.nth(1).locator(".hd-kol-pct.win")).to_have_text("+8.3%")
+    expect(chips.nth(2)).to_contain_text("孙哥")
+    expect(chips.nth(2).locator(".hd-kol-pct")).to_have_text("—")
+    # 切排序「盈↑」：赚的在前，无价仍沉底
+    page.locator(".hd-kol-controls").get_by_role("button", name="盈↑").click()
+    chips = page.locator(".hd-kol-chip.static")
+    expect(chips.nth(0)).to_contain_text("李哥")
+    expect(chips.nth(1)).to_contain_text("王哥")
+    expect(chips.nth(2)).to_contain_text("孙哥")
+    # 最近观点滑动栏（回共同进攻榜验证筛选）：0=不筛；大值滤掉旧动作
+    page.locator(".hd-kol-controls").get_by_role("button", name="共同进攻").click()
+    page.locator("#hd-kol-recent-range").evaluate("el => { el.value = 0; el.dispatchEvent(new Event('change')); }")
+    expect(rows).to_have_count(1)
+    page.locator("#hd-kol-recent-range").evaluate("el => { el.value = 30; el.dispatchEvent(new Event('change')); }")
+    # 桩 last_at 2026-09-19、时钟 2026-09-20：30 天内仍在
+    expect(rows).to_have_count(1)
+    page.locator("#hd-kol-recent-range").evaluate("el => { el.value = 0; el.dispatchEvent(new Event('change')); }")
+    # 回我的持股：tab 状态保持，渲染我的持股空态
+    page.locator(".hd-view-tabs").get_by_role("button", name="我的持股").click()
+    expect(page.locator(".hd-kol-board")).to_have_count(0)
+
+
 def test_mx_kol_holdings_slider_drags_while_held_and_sorts(page: Page):
     """预估持仓「最近观点」滑块按住可整程左右拖动，松手（change）才刷新汇总并持久化；
     排序段控按仓位/按时间（last_at 新→旧）可切换。抽屉宿主装配（mxcOpenDrawer 桩依赖）。

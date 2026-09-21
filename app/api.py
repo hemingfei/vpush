@@ -7035,6 +7035,8 @@ def create_api_router(
         """MX 大V预估盈亏：持仓回放叠加价格台账（事件时刻价≈成本/卖价）。
 
         与 mx-holdings 分端点：行情查询可能慢，前端持仓先渲染、盈亏后到。
+        结果优先读小时级缓存（scheduler 交易日时段每小时整批重算），缓存缺失
+        时兜底现算一次并回填——页面永远有数，且盘内数据保持小时级新鲜度。
         行情源未接入时 available=false（空结构不是错误）。
         同步 def 走线程池：build_kol_pnl 内的行情查询是同步 httpx，
         不能放 async def 里阻塞整个事件循环（SSE 等长连接会被卡死）。
@@ -7052,9 +7054,16 @@ def create_api_router(
         if kol_id not in holdings_kol_ids(db):
             raise HTTPException(status_code=404, detail="该大V不在持仓分析范围内")
         days = min(max(int(days), 7), 90)
+        # 缓存只覆盖有重算任务的窗口（30/60/90）：其余窗口现算不落库，
+        # 否则一次性回填的快照没人刷新，之后永远返回这份数
+        if days in db.PNL_CACHE_WINDOWS:
+            cached = db.get_kol_pnl_cache(kol_id, days)
+            if cached is not None:
+                return cached["payload"]
         result = build_kol_pnl(db, kol_id, days=days)
         if not result:
-            # 窗口内无任何信号：不涉及行情，available 如实为 true
+            # 窗口内无任何信号：不涉及行情，available 如实为 true；不缓存
+            # （None 是「暂无数据」而非数据，缓存住会挡住后续真实重算）
             return {
                 "kol": {"kol_id": kol_id, "name": kol.get("name") or "",
                         "avatar": kol.get("avatar_url") or "", "platform": "mx"},
@@ -7064,7 +7073,28 @@ def create_api_router(
                             "losers": 0, "total_return_pct": None, "coverage": 1.0},
                 "generated_at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M"),
             }
+        if days in db.PNL_CACHE_WINDOWS:
+            db.upsert_kol_pnl_cache(kol_id, days, result)
         return result
+
+    @router.get("/my/holdings/kol-summary")
+    def holdings_kol_summary(
+        days: int = 30, user: dict = Depends(get_current_user),
+    ):
+        """大V持股汇总：分析范围内全部大V的预估持仓聚合四榜（纯计算不落库）。
+
+        重仓票/共同进攻/题材方向/清仓榜口径见 CONTEXT.md「大V持股」；
+        days 仅接受 30/60/90（与单大V页窗口钮同档），聚合结果进程内 60s 防抖。
+        同步 def 走线程池：缓存 miss 时的全量回放是秒级同步计算，
+        不能放 async def 里阻塞事件循环（SSE 等长连接会被卡死）。
+        """
+        from . import kol_holdings_summary
+        from .mx_view_analysis import holdings_kol_ids
+
+        if days not in kol_holdings_summary.WINDOW_CHOICES:
+            raise HTTPException(status_code=422,
+                                detail="days 仅支持 30/60/90")
+        return kol_holdings_summary.cached_summary(db, lambda: holdings_kol_ids(db), days=days)
 
     @router.get("/mx-views/stream")
     async def mx_views_stream(request: Request,

@@ -16,6 +16,12 @@ HD_HANDLERS = [
     "hdMore", "hdFeedTab", "hdPostExpand", "hdTagMore", "hdWatchToggle",
 ]
 
+# 大V持股板块（聚合四榜）新增的内联 handler：同一四处同步契约
+HD_KOL_HANDLERS = [
+    "hdSwitchView", "hdKolChangeDays", "hdKolRecentInput", "hdKolRecentChange",
+    "hdKolSetTab", "hdKolToggleKol", "hdKolSetSort",
+]
+
 
 def _fn_body(name: str, src: str = APP_JS) -> str:
     m = re.search(rf"async\s+function\s+{name}\b|function\s+{name}\b", src)
@@ -119,9 +125,30 @@ def test_holdings_factory_wiring_and_inline_handlers():
     assert "export function createHoldingsView(dependencies)" in HOLDINGS_JS
     assert "HOLDINGS_ICON" in APP_JS and "HOLDINGS_ICON" in (STATIC / "core" / "icons.js").read_text(encoding="utf-8")
     inline = APP_JS[APP_JS.index("const INLINE_HANDLERS"):]
-    for name in HD_HANDLERS:
+    for name in HD_HANDLERS + HD_KOL_HANDLERS:
         assert re.search(rf"export function {name}\b|function {name}\b", HOLDINGS_JS), name
         assert re.search(rf"^\s+{name},$", inline, re.M), name
+
+
+def test_holdings_kol_board_contract():
+    """大V持股板块：页顶 tab、四榜页签、窗口钮、滑动栏、行展开下钻、盈亏排序。"""
+    # 页顶视图切换（我的持股/大V持股），我的持股零改动
+    assert "hdSwitchView('mine')" in HOLDINGS_JS and "hdSwitchView('kol')" in HOLDINGS_JS
+    assert "/api/my/holdings/kol-summary" in HOLDINGS_JS  # 聚合端点
+    assert "hdKolChangeDays" in HOLDINGS_JS  # 30/60/90 窗口钮
+    assert "hdKolRecentChange" in HOLDINGS_JS  # 最近观点滑动栏
+    assert 'localStorage.setItem("hd_kol_recent"' in HOLDINGS_JS  # 滑动栏跨路由保留
+    assert "hdKolSetTab" in HOLDINGS_JS and '"attack"' in HOLDINGS_JS  # 四榜页签
+    assert "hdKolToggleKol" in HOLDINGS_JS  # 行展开
+    # 下钻：大V chip 跳现有单大V页（go 路由带前导斜杠），不新建页面
+    assert "go('/mx-kol/" in HOLDINGS_JS
+    # 清仓榜：割肉/止盈徽 + 盈亏排序
+    assert "hdKolSetSort" in HOLDINGS_JS and '"cut"' in HOLDINGS_JS and '"profit"' in HOLDINGS_JS
+    assert "realized_pnl_pct" in HOLDINGS_JS
+    # 防注入：行展开大V走下标索引（window._hdKolsBoard），不拼标的/大V名字符串
+    assert "window._hdKolsBoard" in HOLDINGS_JS
+    # 空态/加载态
+    assert "hdKolBoardEmpty" in HOLDINGS_JS or "加载中…" in HOLDINGS_JS
 
 
 def test_holdings_page_contract_basics():

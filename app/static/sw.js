@@ -1,8 +1,8 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-a581d6f11bee";
+const CACHE = "dav-shell-fb30d61f1522";
 const SHELL = [
   "/",
-  "/app.4a2d4decab32.js",
+  "/app.d3bdd39be011.js",
   // asset-modules:start
   "/core/dialog.3b30511c3cfd.js",
   "/core/html.817ab2339b89.js",
@@ -19,7 +19,7 @@ const SHELL = [
   "/views/admin/news.87a48772f4f2.js",
   "/views/admin/users.4c25d9b3d37e.js",
   "/views/feishu-personal.d34f03bb7da2.js",
-  "/views/holdings.84fe8f636d1c.js",
+  "/views/holdings.fb75da0cfbda.js",
   "/views/ima.4ee73e107acf.js",
   "/views/market.b64771017dd0.js",
   "/views/mx-kol-holdings.9340733cf11d.js",
@@ -30,7 +30,7 @@ const SHELL = [
   // asset-modules:end
   "/style.35c6aff1d155.css",
   "/mx-views.8ae995d2c259.css",
-  "/holdings.59c65f69f658.css",
+  "/holdings.d7f3f0bf647c.css",
   "/mx-kol-holdings.a38a07eb5449.css",
   "/vendor/design-tokens.965639a4e5c3.css",
   "/logo-mark.svg",

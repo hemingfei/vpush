@@ -4,7 +4,7 @@
 
 ### Issue tracker
 
-GitHub Issues（`hemingfei/vpush`），经 `gh` CLI 读写；`gh` 当前未安装，安装登录后技能才可发布。见 `docs/agents/issue-tracker.md`。
+GitHub Issues（`hemingfei/vpush`），经 `gh` CLI 读写；仓库有 upstream fork（`icekale/vpush`）作为第二个 remote，`gh` 默认解析到 upstream——所有 issue/label 操作必须显式 `-R hemingfei/vpush`。见 `docs/agents/issue-tracker.md`。
 
 ### Triage labels
 

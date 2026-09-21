@@ -1,6 +1,7 @@
-// 持股研判页（/holdings）：顶部用户持股管理（个股/题材），下方最近一个月相关观点
-// 聚合卡 + 双页签流（观点=LLM 研判 / 快讯=标签命中帖），SSE 版本变更 + 60s 兜底轮询
-// 增量上屏。样式全部 .hd- 前缀（holdings.css，跟随全局主题）
+// 持股研判页（/holdings）：页顶 tab 切「我的持股」（关注列表+相关观点流）与
+// 「大V持股」（分析范围内全部大V的预估持仓聚合四榜：重仓票/共同进攻/题材方向/
+// 清仓割肉）。我的持股：SSE 版本变更 + 60s 兜底轮询增量上屏；大V持股：窗口钮
+// 调后端回放窗口 + 最近观点滑动栏前端再筛。样式全部 .hd- 前缀（holdings.css）
 export function createHoldingsView(dependencies) {
   const {
     $, state, api, escapeHtml, setPageTitle, routeStillActive, flash, showConfirm,
@@ -8,6 +9,7 @@ export function createHoldingsView(dependencies) {
 
   window._hdTargets = []; // 聚合卡下标索引：onclick 传下标，避免标的名称注入 JS 字符串
   window._hdSug = []; // 输入建议下标索引，同上
+  window._hdKols = []; // 大V持股行展开的大V下标索引，同上
   const _hd = {
     seq: 0, holdings: [], summary: [], items: [], maxId: 0,
     filter: null, // {type, name} 单标的筛选；null = 全部
@@ -20,10 +22,17 @@ export function createHoldingsView(dependencies) {
     tagItems: [], tagMaxId: 0, tagSummary: new Map(),
     tagExhausted: false, tagLoadingMore: false, tagFresh: new Set(),
     postOpen: new Set(), // 快讯行展开全文
+    // 大V持股板块：view=页顶 tab；days=回放窗口；recent=最近观点滑动栏（跨路由保留）；
+    // kolTab=四榜页签；kols=聚合响应；kolsLoading；kolsOpen=行展开的大V kol_id 集合
+    view: "mine", days: 30, recent: 0, kolTab: "heavy",
+    kols: null, kolsLoading: false, kolsOpen: new Set(),
+    kolsSort: "desc", // 清仓榜盈亏列排序：desc=亏最多的在前
   };
   try {
     _hd.watchOpen = localStorage.getItem("hd_watch_open") !== "0";
-  } catch (e) { /* 存储不可用：默认展开 */ }
+    const recent = Number(localStorage.getItem("hd_kol_recent"));
+    if (Number.isFinite(recent) && recent > 0) _hd.recent = Math.floor(recent);
+  } catch (e) { /* 存储不可用：默认展开/不筛 */ }
   const PAGE_SIZE = 50;
   const HD_MAX = 30;
   const WINDOW_DAYS = 30;
@@ -41,6 +50,8 @@ export function createHoldingsView(dependencies) {
       tagItems: [], tagMaxId: 0, tagSummary: new Map(),
       tagExhausted: false, tagLoadingMore: false, tagFresh: new Set(),
       postOpen: new Set(), pickedType: null,
+      view: "mine", days: 30, kolTab: "heavy", // recent 跨路由保留：不清
+      kols: null, kolsLoading: false, kolsOpen: new Set(), kolsSort: "desc",
     });
   }
 
@@ -90,6 +101,7 @@ export function createHoldingsView(dependencies) {
     hdTeardown();
     _hd.seq = seq;
     setPageTitle("持股研判");
+    // 页顶骨架：视图 tab 常驻（两视图共用导航），板块内容由 hdRenderAll 填充
     $("#main").innerHTML = `<div class="hd-root"><div class="hd-empty">加载中…</div></div>`;
     try {
       const [holdings, views, tagPosts] = await Promise.all([
@@ -255,8 +267,16 @@ export function createHoldingsView(dependencies) {
   }
 
   function hdRenderAll() {
+    // 页顶视图 tab 常驻：两个视图共用导航，切换即换板块内容
+    const tabs = `
+      <div class="hd-view-tabs" role="tablist" aria-label="持股研判视图">
+        <button type="button" class="hd-seg-btn${_hd.view === "mine" ? " on" : ""}" onclick="hdSwitchView('mine')">我的持股</button>
+        <button type="button" class="hd-seg-btn${_hd.view === "kol" ? " on" : ""}" onclick="hdSwitchView('kol')">大V持股</button>
+      </div>`;
+    if (_hd.view === "kol") { hdRenderKolRoot(tabs); return; }
     $("#main").innerHTML = `
       <div class="hd-root">
+        ${tabs}
         <section class="hd-panel" id="hd-manage"></section>
         <section class="hd-cards-wrap" id="hd-cards"></section>
         <section class="hd-feed" id="hd-feed"></section>
@@ -270,6 +290,275 @@ export function createHoldingsView(dependencies) {
   function hdTypeBadge(t) {
     return `<span class="hd-badge ${t === "stock" ? "stock" : "topic"}">${t === "stock" ? "股" : "题"}</span>`;
   }
+
+  // ---- 大V持股板块（聚合四榜） ----
+
+  const HD_KOL_TABS = [
+    ["heavy", "重仓票", "当前持有同一标的大V人数排名"],
+    ["attack", "共同进攻", "窗口内 ≥2 位大V建仓/加仓同一标的"],
+    ["topics", "题材方向", "大V们共同关注的板块"],
+    ["clears", "清仓", "窗口内清仓的票 · 割肉/止盈"],
+  ];
+
+  async function hdLoadKols(force) {
+    if (_hd.kols && !force) return;
+    _hd.kolsLoading = true;
+    hdRenderKolRoot();
+    try {
+      const data = await api(`/api/my/holdings/kol-summary?days=${_hd.days}`);
+      if (!routeStillActive(_hd.seq)) return;
+      _hd.kols = data;
+    } catch (err) {
+      if (!routeStillActive(_hd.seq)) return;
+      _hd.kols = null;
+      flash(`大V持股加载失败: ${err.message}`, "error");
+    } finally {
+      _hd.kolsLoading = false;
+      if (routeStillActive(_hd.seq)) hdRenderKolRoot();
+    }
+  }
+
+  function hdSwitchView(view) {
+    if (_hd.view === view) return;
+    _hd.view = view;
+    if (view === "kol") {
+      hdLoadKols(true); // 进入大V板块：按当前窗口拉聚合（无缓存即拉）
+    } else {
+      renderHoldings(_hd.seq);
+    }
+  }
+
+  function hdKolChangeDays(days) {
+    if (_hd.days === days) return;
+    _hd.days = days;
+    hdLoadKols(true);
+  }
+
+  function hdKolRecentInput(value) {
+    const n = Number(value) || 0;
+    document.getElementById("hd-kol-recent-val").textContent = String(Math.floor(n));
+  }
+
+  function hdKolRecentChange(value) {
+    const n = Math.max(0, Math.floor(Number(value) || 0));
+    _hd.recent = n;
+    try { localStorage.setItem("hd_kol_recent", String(n)); } catch (e) { /* 本页生效即可 */ }
+    hdRenderKolBoard();
+  }
+
+  function hdKolSetTab(tab) {
+    _hd.kolTab = tab;
+    hdRenderKolRoot();
+  }
+
+  // onclick 传的是榜行下标（window._hdKolsBoard[idx] = 该行的大V/清仓明细数组）：
+  // 展开集合按 kol_id 记，跨重渲染稳定；再次点击整行收起
+  function hdKolToggleKol(idx) {
+    const members = window._hdKolsBoard[idx] || [];
+    const ids = members.map((k) => k.kol_id);
+    const allOpen = ids.length && ids.every((id) => _hd.kolsOpen.has(id));
+    for (const id of ids) {
+      if (allOpen) _hd.kolsOpen.delete(id);
+      else _hd.kolsOpen.add(id);
+    }
+    hdRenderKolBoard();
+  }
+
+  function hdKolSetSort(sort) {
+    _hd.kolsSort = sort;
+    hdRenderKolBoard();
+  }
+
+  // 最近观点滑动栏过滤：标的在窗口内最近 N 天被提及才显示（0=不筛）。
+  // 重仓/题材看 last_at（最近提及），进攻看 last_at，清仓看各笔 at（任一清仓在窗内即保留）
+  function hdKolRecentPass(lastAt) {
+    if (!_hd.recent) return true;
+    const day = String(lastAt || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return true; // 无时间锚点不筛掉
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - _hd.recent);
+    return new Date(`${day}T00:00:00`) >= cutoff;
+  }
+
+  function hdKolAva(k) {
+    return k.avatar
+      ? `<img class="hd-kava" src="${escapeHtml(k.avatar)}" alt="" loading="lazy">`
+      : `<span class="hd-kava ava-fallback">${escapeHtml((k.name || "?")[0])}</span>`;
+  }
+
+  function hdKolKolsRow(k) {
+    window._hdKols.push(k.kol_id);
+    return `<button type="button" class="hd-kol-chip" onclick="go('/mx-kol/${k.kol_id}')" title="查看 ${escapeHtml(k.name)} 的预估持仓">
+      ${hdKolAva(k)}<span>${escapeHtml(k.name)}</span></button>`;
+  }
+
+  function hdKolRow(key, kols, metaHtml) {
+    const idx = window._hdKolsBoard.length;
+    window._hdKolsBoard.push(kols);
+    const open = kols.some((k) => _hd.kolsOpen.has(k.kol_id));
+    return `<div class="hd-krow${open ? " open" : ""}" onclick="hdKolToggleKol(${idx})">
+      <div class="hd-krow-main">
+        <b class="hd-krow-name" title="${escapeHtml(key)}">${escapeHtml(key)}</b>
+        <span class="hd-kcount" title="持有/共振大V数">${kols.length} 人</span>
+        ${metaHtml}
+      </div>
+      ${open ? `<div class="hd-krow-kols">${kols.map(hdKolKolsRow).join("")}</div>` : ""}
+    </div>`;
+  }
+
+  // 清仓行：entries 按盈亏列排序（亏多的在前/盈多的在前），行展开显示每笔
+  // 清仓的大V + 时间 + 已了结盈亏（无价占位）
+  function hdKolClearRow(row) {
+    const entries = row.entries || [];
+    const miss = entries.filter((e) => e.realized_pnl_pct === null).length;
+    const sorted = [...entries].sort((a, b) => {
+      const av = a.realized_pnl_pct, bv = b.realized_pnl_pct;
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1; // 无价沉底
+      if (bv === null) return -1;
+      return _hd.kolsSort === "desc" ? av - bv : bv - av;
+    });
+    const priced = entries.filter((e) => e.realized_pnl_pct !== null);
+    const avgPct = priced.length
+      ? (priced.reduce((s, e) => s + e.realized_pnl_pct, 0) / priced.length).toFixed(1)
+      : null;
+    const cuts = entries.filter((e) => e.signal === "cut").length;
+    const wins = entries.filter((e) => e.signal === "profit").length;
+    const meta = `<span class="hd-krow-pct${avgPct === null ? "" : avgPct < 0 ? " cut" : " win"}">${
+      avgPct === null ? `—${miss ? `(${miss}笔无行情)` : ""}` : `${avgPct > 0 ? "+" : ""}${avgPct}%`}</span>`
+      + `${cuts ? `<span class="hd-badge cut" title="浮亏清仓 ${cuts} 笔">割肉 ${cuts}</span>` : ""}`
+      + `${wins ? `<span class="hd-badge win" title="盈利清仓 ${wins} 笔">止盈 ${wins}</span>` : ""}`;
+    const open = sorted.some((e) => _hd.kolsOpen.has(e.kol_id));
+    const idx = window._hdKolsBoard.push(sorted) - 1;
+    return `<div class="hd-krow${open ? " open" : ""}" onclick="hdKolToggleKol(${idx})">
+      <div class="hd-krow-main">
+        <b class="hd-krow-name" title="${escapeHtml(row.target_name)}">${escapeHtml(row.target_name)}</b>
+        <span class="hd-kcount" title="清仓大V数">${row.kol_count} 人清仓</span>
+        ${meta}
+      </div>
+      ${open ? `<div class="hd-krow-kols">${sorted.map((e) => {
+        const cls = e.signal === "cut" ? " cut" : e.signal === "profit" ? " win" : "";
+        const pct = e.realized_pnl_pct === null
+          ? `<span class="hd-kol-pct" title="行情缺失，无法估算">—</span>`
+          : `<span class="hd-kol-pct${cls}">${e.realized_pnl_pct > 0 ? "+" : ""}${e.realized_pnl_pct}%</span>`;
+        return `<span class="hd-kol-chip static" onclick="event.stopPropagation()">
+          ${hdKolAva(e)}<span>${escapeHtml(e.name)}</span>
+          <span class="hd-kol-at" title="清仓时间">${escapeHtml(fmtTime(e.at))}</span>${pct}</span>`;
+      }).join("")}</div>` : ""}
+    </div>`;
+  }
+
+  function hdKolBoardRows() {
+    const data = _hd.kols;
+    if (!data) return "";
+    const tab = _hd.kolTab;
+    if (tab === "heavy") {
+      return data.heavy
+        .filter((r) => hdKolRecentPass(r.last_at))
+        .map((r) => hdKolRow(r.target_name, r.kols, "")).join("");
+    }
+    if (tab === "attack") {
+      return data.attack
+        .filter((r) => hdKolRecentPass(r.last_at))
+        .map((r) => hdKolRow(r.target_name, r.kols,
+          `<span class="hd-kmeta" title="最近一次动作时间">${escapeHtml(fmtTime(r.last_at))}</span>`))
+        .join("");
+    }
+    if (tab === "topics") {
+      return data.topics
+        .filter((r) => hdKolRecentPass(r.last_at))
+        .map((r) => hdKolRow(r.target_name, r.kols, "")).join("");
+    }
+    if (tab === "clears") {
+      return data.clears
+        .filter((row) => (row.entries || []).some((e) => hdKolRecentPass(e.at)))
+        .map(hdKolClearRow).join("");
+    }
+    return "";
+  }
+
+  function hdKolBoardEmpty() {
+    const map = {
+      heavy: "范围内大V近一段时间没有可推演的在持个股",
+      attack: "窗口内没有 ≥2 位大V建仓/加仓同一标的的共振",
+      topics: "范围内大V暂无题材关注",
+      clears: "窗口内没有大V清仓动作",
+    };
+    return `<div class="mxv-empty">${map[_hd.kolTab] || "暂无数据"}</div>`;
+  }
+
+  function hdKolBoard() {
+    const el = document.getElementById("hd-kol-board");
+    if (!el) return;
+    window._hdKolsBoard = [];
+    const data = _hd.kols;
+    let html;
+    if (!data) {
+      html = _hd.kolsLoading ? `<div class="hd-empty">加载中…</div>` : `<div class="hd-empty">加载失败，切一次窗口重试</div>`;
+    } else {
+      const lists = {
+        heavy: data.heavy || [], attack: data.attack || [],
+        topics: data.topics || [], clears: data.clears || [],
+      };
+      const rows = lists[_hd.kolTab] || [];
+      html = rows.length ? hdKolBoardRows() : hdKolBoardEmpty();
+      html += `<div class="hd-hint gen">生成于 ${escapeHtml(data.generated_at || "")} · 回放近 ${data.window_days} 天</div>`;
+    }
+    el.innerHTML = html;
+  }
+
+  function hdRenderKolBoard() {
+    hdKolBoard();
+  }
+
+  function hdRenderKolRoot(tabs) {
+    const data = _hd.kols;
+    tabs = tabs || `
+      <div class="hd-view-tabs" role="tablist" aria-label="持股研判视图">
+        <button type="button" class="hd-seg-btn${_hd.view === "mine" ? " on" : ""}" onclick="hdSwitchView('mine')">我的持股</button>
+        <button type="button" class="hd-seg-btn${_hd.view === "kol" ? " on" : ""}" onclick="hdSwitchView('kol')">大V持股</button>
+      </div>`;
+    const tabsHtml = tabs;
+    const boardTabs = HD_KOL_TABS.map(([key, label, title]) =>
+      `<button type="button" class="hd-seg-btn${_hd.kolTab === key ? " on" : ""}" title="${title}"
+        onclick="hdKolSetTab('${key}')">${label}</button>`).join("");
+    const daysBtns = [30, 60, 90].map((n) =>
+      `<button type="button" class="hd-seg-btn${(data ? data.window_days : _hd.days) === n ? " on" : ""}"
+        onclick="hdKolChangeDays(${n})">${n}天</button>`).join("");
+    const recentHint = _hd.recent ? `仅显示最近 ${_hd.recent} 天内被提及的标的` : "不筛选（显示全部）";
+    $("#main").innerHTML = `
+      <div class="hd-root">
+        ${tabsHtml}
+        <section class="hd-panel">
+          <div class="hd-panel-head">
+            <b>大V持股</b>
+            <span class="hd-hint">分析范围内全部大V的预估持仓聚合</span>
+            <span class="hd-pills">
+              <span class="hd-seg" role="tablist" aria-label="回放窗口">${daysBtns}</span>
+            </span>
+          </div>
+          <div class="hd-kol-controls">
+            <span class="hd-seg" role="tablist" aria-label="榜单页签">${boardTabs}</span>
+            <span class="hd-recent">
+              <span class="lab">最近观点</span>
+              <input type="range" id="hd-kol-recent-range" min="0" max="30" step="1" value="${_hd.recent}"
+                aria-label="最近观点天数，0 为不筛选"
+                oninput="hdKolRecentInput(this.value)" onchange="hdKolRecentChange(this.value)">
+              <span class="val"><b id="hd-kol-recent-val">${_hd.recent}</b> 天</span>
+              <span class="hd-hint">${recentHint}</span>
+            </span>
+            ${_hd.kolTab === "clears" ? `
+            <span class="hd-seg" role="tablist" aria-label="盈亏排序">
+              <button type="button" class="hd-seg-btn${_hd.kolsSort === "desc" ? " on" : ""}" title="亏得最多的在前" onclick="hdKolSetSort('desc')">亏↑</button>
+              <button type="button" class="hd-seg-btn${_hd.kolsSort === "asc" ? " on" : ""}" title="赚得最多的在前" onclick="hdKolSetSort('asc')">盈↑</button>
+            </span>` : ""}
+          </div>
+        </section>
+        <section class="hd-kol-board" id="hd-kol-board"></section>
+      </div>`;
+    hdKolBoard();
+  }
+
 
   function hdWatchToggle() {
     _hd.watchOpen = !_hd.watchOpen;
@@ -685,5 +974,12 @@ export function createHoldingsView(dependencies) {
     hdPostExpand,
     hdTagMore,
     hdWatchToggle,
+    hdSwitchView,
+    hdKolChangeDays,
+    hdKolRecentInput,
+    hdKolRecentChange,
+    hdKolSetTab,
+    hdKolToggleKol,
+    hdKolSetSort,
   };
 }
