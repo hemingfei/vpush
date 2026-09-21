@@ -1918,9 +1918,11 @@ def test_replace_database_failure_wakes_waiting_readers(tmp_path, monkeypatch):
     assert reader_errors == []
     assert reader_done.is_set()
     assert db.get_setting("marker") == "old"
+    # replace-failure.sqlite.lock 是 DB init 的跨进程锁载体（_init_lock），合法存在
     assert {path.name for path in tmp_path.iterdir()} == {
         "candidate.sqlite",
         "replace-failure.sqlite",
+        "replace-failure.sqlite.lock",
     }
 
 
