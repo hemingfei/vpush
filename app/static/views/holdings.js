@@ -343,7 +343,9 @@ export function createHoldingsView(dependencies) {
     const n = Math.max(0, Math.floor(Number(value) || 0));
     _hd.recent = n;
     try { localStorage.setItem("hd_kol_recent", String(n)); } catch (e) { /* 本页生效即可 */ }
-    hdRenderKolBoard();
+    // 松手（change）才重渲染根：控制带的「仅显示最近 N 天」提示随之更新；
+    // oninput 只改数字不重绘——innerHTML 换掉 range 元素会打断按住拖动
+    hdRenderKolRoot();
   }
 
   function hdKolSetTab(tab) {
@@ -362,8 +364,10 @@ export function createHoldingsView(dependencies) {
   }
 
   function hdKolSetSort(sort) {
+    if (_hd.kolsSort === sort) return;
     _hd.kolsSort = sort;
-    hdRenderKolBoard();
+    // 必须重渲染根（含控制带）：只刷榜体的话按钮 on 态不动，看起来像没反应
+    hdRenderKolRoot();
   }
 
   // 最近观点滑动栏过滤：标的在窗口内最近 N 天被提及才显示（0=不筛）。
@@ -470,7 +474,22 @@ export function createHoldingsView(dependencies) {
         .map((r) => hdKolRow(tab, r.target_name, r.kols, "")).join("");
     }
     if (tab === "clears") {
-      return data.clears
+      // 行级排序（spec：把最大亏损/盈利的清仓翻到最前）：按该票各笔清仓的
+      // 平均已了结盈亏排，全部无价沉底；行内 chip 同方向排保持一致观感
+      const avgOf = (row) => {
+        const priced = (row.entries || []).filter((e) => e.realized_pnl_pct !== null);
+        return priced.length
+          ? priced.reduce((s, e) => s + e.realized_pnl_pct, 0) / priced.length
+          : null;
+      };
+      return [...data.clears]
+        .sort((a, b) => {
+          const av = avgOf(a), bv = avgOf(b);
+          if (av === null && bv === null) return 0;
+          if (av === null) return 1;
+          if (bv === null) return -1;
+          return _hd.kolsSort === "desc" ? av - bv : bv - av;
+        })
         .filter((row) => (row.entries || []).some((e) => hdKolRecentPass(e.at)))
         .map(hdKolClearRow).join("");
     }

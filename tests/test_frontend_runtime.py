@@ -1338,6 +1338,12 @@ def test_holdings_kol_board_tabs_expand_sort(page: Page):
             {kol_id: 2, name: '李哥', avatar: '', at: '2026-09-19 15:00:00', realized_pnl_pct: 8.3, signal: 'profit'},
             {kol_id: 4, name: '孙哥', avatar: '', at: '2026-09-18 10:00:00', realized_pnl_pct: null, signal: ''},
            ]},
+          {target_name: '五粮液', kol_count: 2, kols: [
+            {kol_id: 1, name: '王哥', avatar: ''}, {kol_id: 2, name: '李哥', avatar: ''}],
+           entries: [
+            {kol_id: 1, name: '王哥', avatar: '', at: '2026-09-19 16:00:00', realized_pnl_pct: 21.0, signal: 'profit'},
+            {kol_id: 2, name: '李哥', avatar: '', at: '2026-09-19 16:30:00', realized_pnl_pct: 5.0, signal: 'profit'},
+           ]},
         ],
         generated_at: '2026-09-20 10:00',
       });
@@ -1404,27 +1410,43 @@ def test_holdings_kol_board_tabs_expand_sort(page: Page):
     page.locator(".hd-kol-controls").get_by_role("button", name="题材方向").click()
     expect(rows).to_have_count(1)
     expect(rows.nth(0).locator(".hd-krow-name")).to_have_text("AI算力")
-    # 清仓榜：行内汇总（平均盈亏 + 割肉/止盈计数徽）；展开后按盈亏排序、无价沉底
+    # 清仓榜：行级排序（默认亏多在前：茅台 avg -2.1 < 五粮液 avg +13）+ 行内徽章
     page.locator(".hd-kol-controls").get_by_role("button", name="清仓").click()
-    expect(rows).to_have_count(1)
+    expect(rows).to_have_count(2)
+    expect(rows.nth(0).locator(".hd-krow-name")).to_have_text("贵州茅台")
     expect(rows.nth(0).locator(".hd-badge.cut")).to_contain_text("割肉 1")
     expect(rows.nth(0).locator(".hd-badge.win")).to_contain_text("止盈 1")
+    expect(rows.nth(1).locator(".hd-krow-name")).to_have_text("五粮液")
+    # 展开茅台：chip 同方向排——亏多在前、无价沉底
     rows.nth(0).click()
     chips = page.locator(".hd-kol-chip.static")
     expect(chips).to_have_count(3)
-    # 默认亏多的在前：王哥 -12.5% → 李哥 +8.3% → 孙哥无价（—）沉底
     expect(chips.nth(0)).to_contain_text("王哥")
     expect(chips.nth(0).locator(".hd-kol-pct.cut")).to_have_text("-12.5%")
     expect(chips.nth(1)).to_contain_text("李哥")
     expect(chips.nth(1).locator(".hd-kol-pct.win")).to_have_text("+8.3%")
     expect(chips.nth(2)).to_contain_text("孙哥")
     expect(chips.nth(2).locator(".hd-kol-pct")).to_have_text("—")
-    # 切排序「盈↑」：赚的在前，无价仍沉底
+    # 切「盈↑」：行序翻转（五粮液到最前）+ 按钮 on 态迁移（Regression：曾只刷
+    # 榜体不刷控制带，按钮高亮纹丝不动、行收起时整榜毫无变化＝点了没反应）
     page.locator(".hd-kol-controls").get_by_role("button", name="盈↑").click()
+    expect(rows.nth(0).locator(".hd-krow-name")).to_have_text("五粮液")
+    expect(rows.nth(1).locator(".hd-krow-name")).to_have_text("贵州茅台")
+    assert "on" in page.locator(".hd-kol-controls").get_by_role(
+        "button", name="盈↑").get_attribute("class")
+    assert "on" not in page.locator(".hd-kol-controls").get_by_role(
+        "button", name="亏↑").get_attribute("class")
+    # 茅台行仍处于展开（行键跨重渲染保持），chip 反序：赚多在前、无价仍沉底
     chips = page.locator(".hd-kol-chip.static")
+    expect(chips).to_have_count(3)
     expect(chips.nth(0)).to_contain_text("李哥")
     expect(chips.nth(1)).to_contain_text("王哥")
     expect(chips.nth(2)).to_contain_text("孙哥")
+    # 切回「亏↑」：行序复原
+    page.locator(".hd-kol-controls").get_by_role("button", name="亏↑").click()
+    expect(rows.nth(0).locator(".hd-krow-name")).to_have_text("贵州茅台")
+    chips = page.locator(".hd-kol-chip.static")
+    expect(chips.nth(0)).to_contain_text("王哥")
     # 最近观点滑动栏（回共同进攻榜验证筛选）：0=不筛；大值滤掉旧动作
     page.locator(".hd-kol-controls").get_by_role("button", name="共同进攻").click()
     page.locator("#hd-kol-recent-range").evaluate("el => { el.value = 0; el.dispatchEvent(new Event('change')); }")

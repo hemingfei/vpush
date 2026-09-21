@@ -145,6 +145,11 @@ def test_holdings_kol_board_contract():
     # 清仓榜：割肉/止盈徽 + 盈亏排序
     assert "hdKolSetSort" in HOLDINGS_JS and '"cut"' in HOLDINGS_JS and '"profit"' in HOLDINGS_JS
     assert "realized_pnl_pct" in HOLDINGS_JS
+    # 排序切换必须重渲染根（含控制带）：只刷榜体按钮 on 态不动＝看起来没反应
+    assert "hdRenderKolRoot()" in _fn_body("hdKolSetSort", HOLDINGS_JS)
+    # 行级排序：clears 分支对 data.clears 做 sort（把最大亏损/盈利的清仓翻到最前）
+    clears_body = _fn_body("hdKolBoardRows", HOLDINGS_JS)
+    assert "[...data.clears]" in clears_body and "avgOf" in clears_body
     # 防注入：行展开大V走下标索引（window._hdKolsBoard），不拼标的/大V名字符串
     assert "window._hdKolsBoard" in HOLDINGS_JS
     # 空态/加载态
