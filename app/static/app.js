@@ -6179,6 +6179,7 @@ const INLINE_HANDLERS = {
   loadProxyAdmin,
   logout,
   markAllNewsRead,
+  markNewsItemRead,
   onAclSearchKey,
   onAskLinkInput,
   onKnowledgeTabsKey,

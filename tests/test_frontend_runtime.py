@@ -175,11 +175,18 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
     payload = json.dumps({
         "delayed": delayed,
         "failImage": fail_image,
-        "sources": {"items": [{"id": 1, "name": "Test", "selected": True, "group_name": "测试组"}], "collection_enabled": True, "unread_count": 2},
+        "sources": {
+            "items": [
+                {"id": 1, "name": "华尔街见闻", "selected": True, "group_name": "宏观与市场", "unread_count": 2},
+                {"id": 2, "name": "财联社", "selected": True, "group_name": "宏观与市场", "unread_count": 0},
+            ],
+            "collection_enabled": True,
+            "unread_count": 2,
+        },
         "news": {"items": [{
-            "id": 7, "has_image": True, "source_name": "Test",
+            "id": 7, "has_image": True, "source_name": "华尔街见闻", "source_id": 1,
             "published_at": "2026-09-04T00:00:00Z", "title": "Title",
-            "summary": "Summary", "is_new": False,
+            "summary": "Summary", "topics": ["宏观"], "is_read": False, "is_new": True,
         }], "next_offset": 1, "has_more": False, "view_started_at": None},
     }, ensure_ascii=False)
     page.context.add_init_script(
@@ -198,6 +205,9 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
             if (url.includes('/api/news/7/images/')) {
               if (data.failImage) throw new Error('offline');
               return { ok: true, status: 200, blob: async () => new Blob(['x']) };
+            }
+            if (url.includes('/read-all/undo') || url.includes('/read-all') || url.includes('/read')) {
+              return { ok: true, json: async () => ({}) };
             }
             if (url.includes('/api/news')) {
               if (data.delayed) {
@@ -1126,3 +1136,20 @@ def test_news_list_groups_by_day_and_unread_toggle_sends_param(page: Page, stati
     expect(page.locator("#news-list .news-day-sep").first).to_be_visible()
     sent = page.evaluate("() => window.__newsRequests")
     assert any("unread=1" in url for url in sent)
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_news_stream_switches_source_navigation_by_viewport(page, static_origin, width):
+    install_news_bootstrap(page)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
+    expect(page.get_by_role("heading", name="资讯流")).to_be_visible()
+    expect(page.locator(".news-stream-search input")).to_be_visible()
+    expect(page.locator(".news-item-unread-dot")).to_have_count(1)
+    expect(page.locator(".news-item-topics i").first).to_have_text("宏观")
+    if width > 768:
+        expect(page.locator(".news-source-rail")).to_be_visible()
+        expect(page.locator(".news-source-mobile")).to_be_hidden()
+    else:
+        expect(page.locator(".news-source-rail")).to_be_hidden()
+        expect(page.locator(".news-source-mobile")).to_be_visible()

@@ -125,15 +125,22 @@ export function createNewsView(dependencies) {
   }
 
   function newsListItemHtml(item) {
+    const unread = !item.is_read;
     const thumbnail = item.has_image
-      ? `<img class="news-list-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 64'%3E%3C/svg%3E" data-news-thumbnail="${item.id}" alt="" loading="lazy" onerror="this.style.display='none'">`
+      ? `<img class="news-list-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 84'%3E%3C/svg%3E" data-news-thumbnail="${item.id}" alt="" loading="lazy" onerror="this.style.display='none'">`
       : "";
     const topics = Array.isArray(item.topics) && item.topics.length
-      ? `<span class="news-item-topics">${item.topics.map((topic) => `<i>${escapeHtml(topic)}</i>`).join("")}</span>` : "";
-    return `<article class="news-list-item" data-news-id="${item.id}" tabindex="0" role="link" onclick="openNewsArticle(${item.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNewsArticle(${item.id})}">
-      <div class="news-list-copy"><div class="news-list-meta"><span>${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${item.is_new ? '<span class="news-new-label">新</span>' : ""}${topics}</div>
-      <h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary || "暂无摘要")}</p></div>${thumbnail}
-    </article>`;
+      ? `<span class="news-item-topics">${item.topics.map((topic) => `<i>${escapeHtml(topic)}</i>`).join("")}</span>`
+      : "";
+    return `<article class="news-list-item ${unread ? "is-unread" : ""}" data-news-id="${item.id}" tabindex="0" role="link" onclick="openNewsArticle(${item.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNewsArticle(${item.id})}">
+    <div class="news-list-copy">
+      ${topics}
+      <div class="news-item-title-row">${unread ? '<i class="news-item-unread-dot" aria-label="未读"></i>' : ""}<h3>${escapeHtml(item.title)}</h3></div>
+      <p>${escapeHtml(item.summary || "暂无摘要")}</p>
+      <div class="news-list-meta"><span>${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time></div>
+      ${unread ? `<button type="button" class="news-mark-read" onclick="event.stopPropagation();markNewsItemRead(${item.id})">${CHECK_ICON}<span>标为已读</span></button>` : ""}
+    </div>${thumbnail}
+  </article>`;
   }
 
   function newsListHtml(items) {
@@ -142,19 +149,40 @@ export function createNewsView(dependencies) {
       ${group.items.map(newsListItemHtml).join("")}`).join("");
   }
 
-  function newsGroupedOptions() {
+  function selectedNewsSources() {
+    return state.newsSources.filter((source) => source.selected);
+  }
+
+  function newsSourceNavigationHtml() {
     const groups = new Map();
-    for (const source of state.newsSources) {
-      const label = source.group_name || "未分组";
+    for (const source of selectedNewsSources()) {
+      const label = source.group_name || "其他来源";
       if (!groups.has(label)) groups.set(label, []);
       groups.get(label).push(source);
     }
-    const ordered = [...groups.entries()].sort((a, b) => (a[0] === "未分组") - (b[0] === "未分组"));
-    return `<option value="">全部来源</option>${ordered.map(([label, sources]) => `
-      <optgroup label="${escapeHtml(label)}">${sources.map((source) => {
-        const suffix = source.selected ? "" : source.enabled ? "（未订阅）" : "（未订阅·已停用）";
-        return `<option value="${source.id}" ${String(state.newsFilterSourceId) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name + suffix)}</option>`;
-      }).join("")}</optgroup>`).join("")}`;
+    const allOn = !state.newsFilterSourceId;
+    const rows = [...groups.entries()].map(([label, sources]) => `
+    <details class="news-source-group" open>
+      <summary>${CHEVRON_DOWN_ICON}<span>${escapeHtml(label)}</span></summary>
+      ${sources.map((source) => `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" onclick="selectNewsSource('${source.id}')"><span>${escapeHtml(source.name)}</span><b>${Number(source.unread_count) || ""}</b></button>`).join("")}
+    </details>`).join("");
+    return `<nav class="news-source-rail" aria-label="资讯来源">
+    <div class="news-source-rail-head"><strong>资讯来源</strong><button type="button" class="icon-btn" onclick="openNewsSourcePicker()" aria-label="管理资讯来源" title="管理资讯来源">${GEAR_ICON}</button></div>
+    <button type="button" class="news-source-row news-source-all ${allOn ? "is-on" : ""}" onclick="selectNewsSource('')">${NEWS_ICON}<span>全部资讯</span><b>${Number(state.newsUnreadCount) || ""}</b></button>
+    ${rows || '<p class="muted">尚未选择资讯来源</p>'}
+  </nav>`;
+  }
+
+  function newsGroupedOptions() {
+    const groups = new Map();
+    for (const source of selectedNewsSources()) {
+      const label = source.group_name || "其他来源";
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(source);
+    }
+    const options = [...groups.entries()].map(([label, sources]) => `
+      <optgroup label="${escapeHtml(label)}">${sources.map((source) => `<option value="${source.id}" ${String(state.newsFilterSourceId) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}</optgroup>`).join("");
+    return `<option value="">全部资讯</option>${options}`;
   }
 
   function newsListSkeletonHtml() {
@@ -168,20 +196,29 @@ export function createNewsView(dependencies) {
     const unreadOn = !!state.newsUnreadOnly;
     const unreadCount = Number(state.newsUnreadCount) || 0;
     main.innerHTML = `<section class="news-page" id="news-page">
-      <header class="news-page-head"><div><h2 class="section-title">财经新闻</h2><p class="section-meta news-page-desc">${unreadCount ? `${unreadCount} 篇未读` : "按媒体聚合的长文阅读，原文链接保留。"}</p></div><button type="button" class="btn-ghost" onclick="openNewsSourcePicker()">我的来源</button></header>
-      ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
-      <div class="news-list-toolbar">
-        <div class="news-toolbar-filters">
-          <button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}">只看未读${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</button>
-          <select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="selectNewsSource(this.value)">${newsGroupedOptions()}</select>
-          <div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)"></div>
-          ${unreadCount ? '<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()">全部已读</button>' : ""}
-        </div>
-      </div>
-      ${newsTopicBarHtml()}
+  <header class="news-stream-head">
+    <div><h2 class="section-title">资讯流</h2><p class="section-meta">实时更新的财经资讯聚合</p></div>
+    <div class="news-stream-actions">
+      <label class="news-stream-search">${SEARCH_ICON}<input id="news-query" type="search" placeholder="搜索资讯..." value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)" aria-label="搜索资讯"></label>
+      ${unreadCount ? `<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()">${CHECK_CHECK_ICON} 全部已读</button>` : ""}
+      <button type="button" class="btn-ghost news-source-manage" onclick="openNewsSourcePicker()">${GEAR_ICON} 我的来源</button>
+    </div>
+  </header>
+  ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
+  <div class="news-stream-topbar">
+    <div class="news-source-mobile"><select aria-label="资讯来源" onchange="selectNewsSource(this.value)">${newsGroupedOptions()}</select>${CHEVRON_DOWN_ICON}</div>
+    ${newsTopicBarHtml()}
+    <button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}">${EYE_ICON}<span>未读</span>${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</button>
+  </div>
+  <div class="news-stream-layout">
+    ${newsSourceNavigationHtml()}
+    <main class="news-stream-main">
       <div id="news-list" class="news-list">${newsListSkeletonHtml()}</div>
       <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
-    </section>`;
+    </main>
+  </div>
+  <div id="news-read-undo" class="news-read-undo" role="status" aria-live="polite" hidden></div>
+</section>`;
   }
 
   function attachListImages(seq) {
@@ -275,12 +312,6 @@ export function createNewsView(dependencies) {
         list.insertAdjacentHTML("beforeend", newsListHtml(items));
       }
       attachListImages(seq);
-      if (state.newsItems.length && !state.newsUnreadOnly) {
-        const seenAt = data.view_started_at;
-        await Promise.resolve();
-        if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
-        if (seenAt) api("/api/news/seen", { method: "POST", body: JSON.stringify({ view_started_at: seenAt }) }).catch(() => {});
-      }
       startNewsAutoLoad(seq);
     } catch (err) {
       if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;

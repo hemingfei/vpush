@@ -4674,6 +4674,7 @@ def test_mobile_bottom_navigation_has_d1_feedback_contract():
     assert "transform: none" not in keyframes
 
 
+def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
     src = NEWS_JS.read_text()
     for name in (
         "renderNewsCenter", "loadFinancialNews", "openNewsSourcePicker",
@@ -4681,10 +4682,18 @@ def test_mobile_bottom_navigation_has_d1_feedback_contract():
     ):
         assert f"function {name}" in src or f"async function {name}" in src
     seen = _fn_body("loadFinancialNews", NEWS_JS)
-    assert '"/api/news/seen"' in seen
-    assert "view_started_at" in seen
+    assert '"/api/news/seen"' not in seen
     images = _fn_body("clearNewsImageUrls", NEWS_JS)
     assert "URL.revokeObjectURL" in images
+
+
+def test_news_stream_layout_uses_responsive_source_navigation():
+    src = NEWS_JS.read_text()
+    assert "news-stream-layout" in src
+    assert "news-source-rail" in src
+    assert "news-source-mobile" in src
+    assert "news-source-filter" not in src
+    assert 'id="news-source-filter"' not in src
 
 
 def test_news_pagination_appends_without_replacing_existing_thumbnails():
