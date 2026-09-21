@@ -1735,44 +1735,63 @@ class DB:
         # 内置源只在首次 seed（news_default_sources_v1 置位后整体跳过）：
         # 否则 INSERT OR IGNORE 拦不住已删除的行，管理员「彻底删除」内置源
         # 会在每次重启时复活。新增内置源时需换新 key（如 news_default_sources_v2）。
-        if self.get_setting("news_default_sources_v1") == "1":
-            return
-        for slug, name, feeds in _BUILTIN_NEWS:
+        if self.get_setting("news_default_sources_v1") != "1":
+            for slug, name, feeds in _BUILTIN_NEWS:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO news_sources "
+                    "(slug, name, built_in, default_selected) VALUES (?, ?, 1, ?)",
+                    (slug, name, 1 if slug == "caixin" else 0),
+                )
+                source = self._conn.execute(
+                    "SELECT id FROM news_sources WHERE slug = ?", (slug,)
+                ).fetchone()
+                for feed_name, url in feeds:
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO news_feeds "
+                        "(source_id, name, url, normalized_url) VALUES (?, ?, ?, ?)",
+                        (source["id"], feed_name, url, url),
+                    )
             self._conn.execute(
-                "INSERT OR IGNORE INTO news_sources "
-                "(slug, name, built_in, default_selected) VALUES (?, ?, 1, 1)",
-                (slug, name),
+                "INSERT OR IGNORE INTO settings (key, value) VALUES "
+                "('news_enabled', '1'), ('news_visible', '1'), ('news_refresh_interval_seconds', '600')"
             )
-            source = self._conn.execute(
-                "SELECT id FROM news_sources WHERE slug = ?", (slug,)
-            ).fetchone()
-            for feed_name, url in feeds:
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO news_feeds "
-                    "(source_id, name, url, normalized_url) VALUES (?, ?, ?, ?)",
-                    (source["id"], feed_name, url, url),
+            default_ids = [
+                row["id"] for row in self._rows(
+                    "SELECT id FROM news_sources WHERE built_in = 1 "
+                    "AND default_selected = 1 AND archived_at IS NULL ORDER BY id"
                 )
-        self._conn.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES "
-            "('news_enabled', '1'), ('news_visible', '1'), ('news_refresh_interval_seconds', '600')"
-        )
-        if self.get_setting("news_default_sources_v1") == "1":
+            ]
+            for user in self._rows("SELECT id FROM users"):
+                for source_id in default_ids:
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO user_news_sources (user_id, source_id) "
+                        "VALUES (?, ?)",
+                        (user["id"], source_id),
+                    )
+            self._conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('news_default_sources_v1', '1') "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+            )
+        self._ensure_default_caixin()
+
+    def _ensure_default_caixin(self) -> None:
+        if self.get_setting("news_default_caixin_v1") == "1":
             return
-        default_ids = [
-            row["id"] for row in self._rows(
-                "SELECT id FROM news_sources WHERE built_in = 1 "
-                "AND default_selected = 1 AND archived_at IS NULL ORDER BY id"
-            )
-        ]
-        for user in self._rows("SELECT id FROM users"):
-            for source_id in default_ids:
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO user_news_sources (user_id, source_id) "
-                    "VALUES (?, ?)",
-                    (user["id"], source_id),
-                )
         self._conn.execute(
-            "INSERT INTO settings (key, value) VALUES ('news_default_sources_v1', '1') "
+            "UPDATE news_sources SET default_selected = CASE WHEN slug = 'caixin' THEN 1 ELSE 0 END "
+            "WHERE built_in = 1"
+        )
+        row = self._conn.execute(
+            "SELECT id FROM news_sources WHERE slug = 'caixin' AND archived_at IS NULL"
+        ).fetchone()
+        if row:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO user_news_sources (user_id, source_id) "
+                "SELECT id, ? FROM users",
+                (row["id"],),
+            )
+        self._conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('news_default_caixin_v1', '1') "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         )
 

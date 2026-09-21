@@ -15,19 +15,21 @@ def test_news_migration_seeds_builtin_sources_and_feeds(tmp_path):
     sources = db._rows("SELECT slug, default_selected FROM news_sources ORDER BY id")
     feeds = db._rows("SELECT url FROM news_feeds ORDER BY id")
     assert [row["slug"] for row in sources] == ["bloomberg", "caixin", "ft", "morganstanley"]
-    assert all(row["default_selected"] == 1 for row in sources)
+    assert {row["slug"] for row in sources if row["default_selected"] == 1} == {"caixin"}
     assert len(feeds) == 5
 
 
 def test_new_user_gets_only_builtin_news_sources(tmp_path):
     db = DB(str(tmp_path / "news-user.db"))
     uid = db.add_user("reader", "hash")
-    assert len(db.list_user_news_source_ids(uid)) == 4
+    ids = db.list_user_news_source_ids(uid)
+    assert len(ids) == 1
+    assert db._rows("SELECT slug FROM news_sources WHERE id = ?", (ids[0],))[0]["slug"] == "caixin"
     db._execute(
         "INSERT INTO news_sources (slug, name) VALUES ('custom-test', 'Custom Test')"
     )
     uid2 = db.add_user("reader2", "hash")
-    assert len(db.list_user_news_source_ids(uid2)) == 4
+    assert len(db.list_user_news_source_ids(uid2)) == 1
 
 
 def test_news_default_backfill_runs_once(tmp_path):
@@ -38,6 +40,25 @@ def test_news_default_backfill_runs_once(tmp_path):
     db.close()
     reopened = DB(str(path))
     assert reopened.list_user_news_source_ids(uid) == []
+
+
+def test_existing_users_get_caixin_without_dropping_other_sources(tmp_path):
+    path = tmp_path / "caixin-default.db"
+    db = DB(str(path))
+    uid = db.add_user("reader", "hash")
+    caixin_id = db._rows("SELECT id FROM news_sources WHERE slug = 'caixin'")[0]["id"]
+    bloomberg_id = db._rows("SELECT id FROM news_sources WHERE slug = 'bloomberg'")[0]["id"]
+    db.set_user_news_sources(uid, [bloomberg_id])
+    db._execute("DELETE FROM settings WHERE key = 'news_default_caixin_v1'")
+    db.close()
+    reopened = DB(str(path))
+    ids = reopened.list_user_news_source_ids(uid)
+    assert caixin_id in ids
+    assert bloomberg_id in ids
+    reopened.set_user_news_sources(uid, [bloomberg_id])
+    reopened.close()
+    again = DB(str(path))
+    assert again.list_user_news_source_ids(uid) == [bloomberg_id]
 
 
 def test_legacy_database_gets_news_anchor_and_default_relations(tmp_path):
@@ -80,7 +101,7 @@ def test_legacy_database_gets_news_anchor_and_default_relations(tmp_path):
     db = DB(str(path))
     user = db.get_user_by_username("old-reader")
     assert "news_last_seen_at" in {row["name"] for row in db._rows("PRAGMA table_info(users)")}
-    assert len(db.list_user_news_source_ids(user["id"])) == 4
+    assert len(db.list_user_news_source_ids(user["id"])) == 1
 
 
 
@@ -89,7 +110,9 @@ def test_transfer_subscriptions_merges_news_sources_and_seen_anchor(tmp_path):
     db = DB(str(tmp_path / "transfer-news.db"))
     source_uid = db.add_user("source-news", "hash")
     target_uid = db.add_user("target-news", "hash")
-    source_ids = db.list_user_news_source_ids(source_uid)
+    source_ids = [row["id"] for row in db._rows(
+        "SELECT id FROM news_sources WHERE archived_at IS NULL ORDER BY id"
+    )]
     db.set_user_news_sources(source_uid, source_ids[:2])
     db.set_user_news_sources(target_uid, source_ids[1:3])
     db._execute("UPDATE users SET news_last_seen_at = ? WHERE id = ?", ("2026-09-01T11:00:00+00:00", source_uid))
