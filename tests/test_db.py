@@ -2171,6 +2171,7 @@ def test_news_next_article_follows_reading_order(tmp_path):
     db = DB(str(tmp_path / "next.db"))
     uid = db.add_user("reader", "hash")
     source_id = db.add_news_source("顺序源")
+    db.set_user_news_sources(uid, [source_id])
     feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
     first = db.upsert_news_article(_news_article_row(source_id, feed_id, "g1", "2026-09-01T00:00:01+00:00"))
     second = db.upsert_news_article(_news_article_row(source_id, feed_id, "g2", "2026-09-01T00:00:02+00:00"))
@@ -2179,6 +2180,30 @@ def test_news_next_article_follows_reading_order(tmp_path):
     db.delete_news_article(first)
     assert db.get_news_article(first) is None
     assert db.get_next_news_article(db.get_news_article(second), uid) is None
+    db.close()
+
+
+def test_news_adjacent_stays_in_subscribed_enabled_sources(tmp_path):
+    db = DB(str(tmp_path / "adjacent-sub.db"))
+    uid = db.add_user("reader", "hash")
+    mine = db.add_news_source("已订")
+    other = db.add_news_source("未订")
+    paused = db.add_news_source("已订停用")
+    feed_mine = db.add_news_feed(mine, "主源", "https://mine.example/rss", "https://mine.example/rss")
+    feed_other = db.add_news_feed(other, "主源", "https://other.example/rss", "https://other.example/rss")
+    feed_paused = db.add_news_feed(paused, "主源", "https://paused.example/rss", "https://paused.example/rss")
+    older = db.upsert_news_article(_news_article_row(mine, feed_mine, "mine-old", "2026-09-01T00:00:01+00:00"))
+    current = db.upsert_news_article(_news_article_row(mine, feed_mine, "mine-now", "2026-09-01T00:00:02+00:00"))
+    skipped_other = db.upsert_news_article(_news_article_row(other, feed_other, "other", "2026-09-01T00:00:03+00:00"))
+    skipped_paused = db.upsert_news_article(_news_article_row(paused, feed_paused, "paused", "2026-09-01T00:00:04+00:00"))
+    newer = db.upsert_news_article(_news_article_row(mine, feed_mine, "mine-new", "2026-09-01T00:00:05+00:00"))
+    db.set_user_news_sources(uid, [mine, paused])
+    db.update_news_source(paused, enabled=False)
+    article = db.get_news_article(current)
+    assert db.get_next_news_article(article, uid) == older
+    assert db.get_prev_news_article(article, uid) == newer
+    assert skipped_other not in (older, newer)
+    assert skipped_paused not in (older, newer)
     db.close()
 
 

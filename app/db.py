@@ -3897,11 +3897,13 @@ class DB:
             self._NEWS_ARTICLE_VISIBLE
             + boundary
             + "AND s.enabled = 1 "
+            + "AND EXISTS (SELECT 1 FROM user_news_sources u "
+            + "WHERE u.user_id = ? AND u.source_id = a.source_id) "
             + order
         )
         rows = self._rows(
             sql,
-            (article["published_at"], article["published_at"], article["id"]),
+            (article["published_at"], article["published_at"], article["id"], user_id),
         )
         return rows[0]["id"] if rows else None
 
