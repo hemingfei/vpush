@@ -3624,8 +3624,8 @@ def test_post_card_has_image_export_button():
     assert "class=\"cat cat-export post-card-export\"" in card
     assert "p-meta-actions" in card
     assert "p-meta-tags" not in card
-    assert "图卡 ${IMAGE_CARD_ICON}" in card
-    assert "复制图卡" in card
+    assert "图卡分享 ${IMAGE_CARD_ICON}" in card
+    assert "图卡分享" in card
     assert 'from "./views/post-card-export.js"' in src
     assert "createPostCardExport({" in src
     assert "_kolPosts" in src
@@ -5154,26 +5154,33 @@ def test_admin_codes_page_has_batch_bar():
     assert ".rc-checkall" in css
 
 
-def test_register_codes_mobile_has_field_labels_and_compact_grid():
-    """注册码页移动端：每格带 data-label 字段名、备注独占整行、批次操作两列等宽。"""
+def test_register_codes_mobile_list_is_code_first_cards():
+    """注册码页移动端：码+状态一行，时间与复制/作废同行，空字段不占位。"""
     row = _fn_body("renderCodeRow")
     batch = _fn_body("renderCodeGroups")
     css = STYLE_CSS.read_text()
+    mobile = _media_block(css, "@media (max-width: 768px)")
 
-    for label in ("邀请码", "备注", "状态", "使用者", "时间", "操作"):
-        assert f'data-label="{label}"' in row
-    assert "rc-note-cell" in row
+    for cls in ("rc-code-cell", "rc-note-cell", "rc-status-cell", "rc-user-cell", "rc-time-cell", "rc-actions"):
+        assert cls in row
+    assert "rc-empty-cell" in row
+    assert "data-label=" not in row
     assert "rc-note-input" not in row
     assert "adminSaveCodeNote" not in row
-    assert "rc-counts" in batch  # 可用/已用独立元素，不再混在长行里断行
-    assert ".rc-table td::before" in css
-    assert 'content: attr(data-label)' in css
-    assert "rc-note-cell" in css
-    assert "grid-column: 1 / -1" in css
-    assert "repeat(2, minmax(0, 1fr))" in css  # 批次操作与表格均为两列等宽网格
-    assert ".settings-tabs" in css and "flex-wrap: nowrap" in css  # 筛选一行横向滚动
+    assert "rc-counts" in batch
+    assert "td.rc-empty-cell" in mobile
+    assert "td.rc-actions" in mobile and "display: flex" in mobile
+    assert "min-width: 52px" in mobile
+    assert "padding: 10px 0" in mobile
+    btn_sm = re.search(r"(?m)^\.btn-sm \{.*?\n\}", css, re.S).group(0)
+    assert "border-radius: var(--radius-control)" in btn_sm
+    assert "border-radius: var(--radius-pill)" not in btn_sm
+    assert "border-radius: var(--radius-control)" in mobile
+    assert "grid-column: 1 / -1" in mobile
+    assert "repeat(2, minmax(0, 1fr))" in css
+    assert ".settings-tabs" in css and "flex-wrap: nowrap" in css
     hide = re.search(r"([^{}]+)\{[^}]*scrollbar-width:\s*none", css)
-    assert hide and ".settings-tabs" in hide.group(1)  # 横向滑动时隐藏滚动条，避免移动端滑动框
+    assert hide and ".settings-tabs" in hide.group(1)
 
 
 def test_register_codes_desktop_controls_share_one_grid():

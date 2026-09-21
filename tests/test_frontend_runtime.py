@@ -754,7 +754,7 @@ def test_post_origin_link_aligns_with_tags(page: Page, static_origin: str, width
     page.goto(static_origin)
     page.evaluate("() => go('timeline')")
     expect(page.locator(".post-item .p-meta span.cat")).to_be_visible()
-    expect(page.get_by_role("button", name="复制图卡")).to_be_visible()
+    expect(page.get_by_role("button", name="图卡分享")).to_be_visible()
     expect(page.get_by_role("link", name="查看原文")).to_be_visible()
     geo = page.evaluate("""() => {
       const cat = document.querySelector('.p-meta span.cat');
@@ -844,8 +844,8 @@ def test_post_card_export_copies_from_timeline_and_kol(page: Page, static_origin
     page.goto(static_origin)
     _install_card_export_stub(page)
     page.evaluate("() => go('timeline')")
-    expect(page.get_by_role("button", name="复制图卡")).to_have_count(3)
-    page.get_by_role("button", name="复制图卡").first.click()
+    expect(page.get_by_role("button", name="图卡分享")).to_have_count(3)
+    page.get_by_role("button", name="图卡分享").first.click()
     page.wait_for_function("() => (window.__exportCardHtml || '').includes('X post full text')")
     expect(page.locator("#toast")).to_contain_text("已复制，去微信粘贴即可")
     twitter_html = page.evaluate("window.__exportCardHtml")
@@ -854,7 +854,7 @@ def test_post_card_export_copies_from_timeline_and_kol(page: Page, static_origin
     assert "vpush.net" not in twitter_html
     assert page.evaluate("window.__clipWrites.length") == 1
 
-    page.get_by_role("button", name="复制图卡").nth(1).click()
+    page.get_by_role("button", name="图卡分享").nth(1).click()
     page.wait_for_function("() => (window.__exportCardHtml || '').includes('超过两百字')")
     xueqiu_html = page.evaluate("window.__exportCardHtml")
     assert "哈" * 80 in xueqiu_html
@@ -862,7 +862,7 @@ def test_post_card_export_copies_from_timeline_and_kol(page: Page, static_origin
     assert "xueqiu-icon" in xueqiu_html
 
     page.evaluate("() => setTheme('dark')")
-    page.get_by_role("button", name="复制图卡").nth(2).click()
+    page.get_by_role("button", name="图卡分享").nth(2).click()
     page.wait_for_function("() => (window.__exportCardHtml || '').includes('调仓明细')")
     combo_html = page.evaluate("window.__exportCardHtml")
     assert "is-dark" in combo_html
@@ -873,9 +873,9 @@ def test_post_card_export_copies_from_timeline_and_kol(page: Page, static_origin
 
     page.evaluate("() => go('kol/2')")
     expect(page.get_by_role("heading", name="Kale · 最近动态")).to_be_visible()
-    expect(page.get_by_role("button", name="复制图卡")).to_have_count(1)
+    expect(page.get_by_role("button", name="图卡分享")).to_have_count(1)
     page.evaluate("() => { window.__exportCardHtml = ''; }")
-    page.get_by_role("button", name="复制图卡").click()
+    page.get_by_role("button", name="图卡分享").click()
     page.wait_for_function("() => (window.__exportCardHtml || '').includes('X post full text')")
     expect(page.locator("#toast")).to_contain_text("已复制，去微信粘贴即可")
     assert "@icekale" in page.evaluate("window.__exportCardHtml")
@@ -898,7 +898,7 @@ def test_post_card_export_shares_on_phone(page: Page, static_origin: str):
       navigator.share = async (data) => { window.__shares.push(data); };
     }""")
     page.evaluate("() => go('timeline')")
-    page.get_by_role("button", name="复制图卡").click()
+    page.get_by_role("button", name="图卡分享").click()
     page.wait_for_function("() => (window.__shares || []).length === 1")
     shared = page.evaluate("() => window.__shares[0]")
     assert shared["files"]
