@@ -4711,6 +4711,24 @@ def test_news_article_page_posts_read():
     assert 'method: "POST"' in body
 
 
+def test_news_list_item_does_not_nest_button_in_link():
+    body = _fn_body("newsListItemHtml", NEWS_JS)
+    assert 'role="link"' not in body
+    assert 'tabindex="0"' not in body
+    assert 'class="news-item-open"' in body
+    assert 'href="/news/' in body
+    open_at = body.find('class="news-item-open"')
+    close_at = body.find("</a>", open_at)
+    mark_at = body.find("news-mark-read")
+    assert close_at != -1 and mark_at != -1 and close_at < mark_at
+
+
+def test_news_copy_uses_stream_name():
+    src = NEWS_JS.read_text()
+    assert 'setPageTitle("资讯流"' in src
+    assert "财经新闻" not in src
+
+
 def test_news_pagination_appends_without_replacing_existing_thumbnails():
     body = _fn_body("loadFinancialNews", NEWS_JS)
     assert "insertAdjacentHTML" in body

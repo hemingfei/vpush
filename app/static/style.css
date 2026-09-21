@@ -4810,6 +4810,8 @@ details.bind-steps[open] > summary .ui-icon { transform: rotate(90deg); }
 .news-list-item:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .news-list-item.is-unread { border-left: 3px solid var(--color-accent); }
 .news-list-copy { min-width: 0; flex: 1 1 auto; }
+.news-item-open { display: block; min-width: 0; color: inherit; text-decoration: none; }
+.news-list-thumb-link { flex: 0 0 auto; line-height: 0; color: inherit; }
 .news-item-title-row { display: flex; align-items: flex-start; gap: 8px; }
 .news-item-unread-dot { width: 7px; height: 7px; flex: 0 0 7px; margin-top: 9px; border-radius: 50%; background: var(--color-accent); }
 .news-list-item h3 { margin: 6px 0 5px; color: var(--color-text-strong); font-size: var(--text-body); line-height: 1.45; overflow-wrap: anywhere; }

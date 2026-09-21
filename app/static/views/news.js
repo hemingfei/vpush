@@ -146,14 +146,16 @@ export function createNewsView(dependencies) {
     const topics = Array.isArray(item.topics) && item.topics.length
       ? `<span class="news-item-topics">${item.topics.map((topic) => `<i>${escapeHtml(topic)}</i>`).join("")}</span>`
       : "";
-    return `<article class="news-list-item ${unread ? "is-unread" : ""}" data-news-id="${item.id}" tabindex="0" role="link" onclick="openNewsArticle(${item.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNewsArticle(${item.id})}">
+    return `<article class="news-list-item ${unread ? "is-unread" : ""}" data-news-id="${item.id}">
     <div class="news-list-copy">
-      ${topics}
-      <div class="news-item-title-row">${unread ? '<i class="news-item-unread-dot" aria-label="未读"></i>' : ""}<h3>${escapeHtml(item.title)}</h3></div>
-      <p>${escapeHtml(item.summary || "暂无摘要")}</p>
-      <div class="news-list-meta"><span>${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time></div>
-      ${unread ? `<button type="button" class="news-mark-read" onclick="event.stopPropagation();markNewsItemRead(${item.id})">${CHECK_ICON}<span>标为已读</span></button>` : ""}
-    </div>${thumbnail}
+      <a class="news-item-open" href="/news/${item.id}">
+        ${topics}
+        <div class="news-item-title-row">${unread ? '<i class="news-item-unread-dot" aria-label="未读"></i>' : ""}<h3>${escapeHtml(item.title)}</h3></div>
+        <p>${escapeHtml(item.summary || "暂无摘要")}</p>
+        <div class="news-list-meta"><span>${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time></div>
+      </a>
+      ${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})">${CHECK_ICON}<span>标为已读</span></button>` : ""}
+    </div>${thumbnail ? `<a class="news-list-thumb-link" href="/news/${item.id}" tabindex="-1" aria-hidden="true">${thumbnail}</a>` : ""}
   </article>`;
   }
 
@@ -218,7 +220,7 @@ export function createNewsView(dependencies) {
       <button type="button" class="btn-ghost news-source-manage" onclick="openNewsSourcePicker()">${GEAR_ICON} 我的来源</button>
     </div>
   </header>
-  ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
+  ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停资讯采集，历史文章仍可阅读。</div>'}
   <div class="news-stream-topbar">
     <div class="news-source-mobile"><select aria-label="资讯来源" onchange="selectNewsSource(this.value)">${newsGroupedOptions()}</select>${CHEVRON_DOWN_ICON}</div>
     ${newsTopicBarHtml()}
@@ -261,12 +263,12 @@ export function createNewsView(dependencies) {
   }
 
   async function renderFinancialNewsList(seq = currentRouteSeq()) {
-    setPageTitle("财经新闻");
+    setPageTitle("资讯流");
     // 文章返回且筛选未变：直接复用已加载列表并恢复滚动位置
     if (state.newsItems.length && state.newsListKey === newsListKey()) {
       renderNewsListShell(state.newsCollectionEnabled !== false);
       const list = $("#news-list");
-      list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : emptyState("没有符合条件的财经新闻");
+      list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : emptyState("没有符合条件的资讯");
       attachListImages(seq);
       startNewsAutoLoad(seq);
       window.scrollTo(0, state.newsScrollY || 0);
@@ -319,7 +321,7 @@ export function createNewsView(dependencies) {
       if (reset) {
         const hasSource = state.newsSources.some((source) => source.selected) || state.newsFilterSourceId;
         list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : emptyState(
-          state.newsUnreadOnly ? "没有未读文章，已经全部看完了" : hasSource ? "没有符合条件的财经新闻" : "还没有选择新闻来源",
+          state.newsUnreadOnly ? "没有未读文章，已经全部看完了" : hasSource ? "没有符合条件的资讯" : "还没有选择新闻来源",
           `<div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">选择来源</button></div>`,
         );
       } else if (items.length) {
@@ -376,7 +378,7 @@ export function createNewsView(dependencies) {
   }
 
   async function renderFinancialNewsArticle(articleId, seq = currentRouteSeq()) {
-    setPageTitle("财经新闻", true, "news", "返回财经新闻");
+    setPageTitle("资讯流", true, "news", "返回资讯流");
     const main = $("#main");
     if (!main) return;
     main.innerHTML = `<article class="news-article-page"><div class="admin-skeleton" aria-hidden="true"></div></article>`;
@@ -444,7 +446,7 @@ export function createNewsView(dependencies) {
       if (!$("#news-list")) return;
       renderNewsListShell(state.newsCollectionEnabled !== false);
       const list = $("#news-list");
-      list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : emptyState("没有符合条件的财经新闻");
+      list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : emptyState("没有符合条件的资讯");
       attachListImages(seq);
       startNewsAutoLoad(seq);
     } catch (err) {
