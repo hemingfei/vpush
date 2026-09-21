@@ -2390,7 +2390,7 @@ def test_news_feed_url_change_resets_conditional_state(tmp_path):
     assert feed["consecutive_failures"] == 0
 
 
-def test_disabled_source_keeps_cached_articles_readable(tmp_path):
+def test_disabled_source_hides_articles_from_user(tmp_path):
     db = DB(str(tmp_path / "disabled.db"))
     uid = db.add_user("reader", "hash")
     source_id = db.add_news_source("测试媒体")
@@ -2404,7 +2404,9 @@ def test_disabled_source_keeps_cached_articles_readable(tmp_path):
         "fetched_at": "2026-09-01T00:01:00+00:00", "content_hash": "cached",
     })
     db.update_news_source(source_id, enabled=False)
-    assert db.list_news_articles(uid, source_id=None, q="", limit=30, offset=0)[0]["id"] == article_id
+    assert db.list_news_articles(uid, source_id=None, q="", limit=30, offset=0) == []
+    assert db.get_news_article(article_id, user_id=uid) is None
+    assert db.unread_news_count(uid) == 0
 
 
 def test_archived_source_hides_article_from_user_detail(tmp_path):

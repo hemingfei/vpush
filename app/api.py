@@ -2466,6 +2466,8 @@ def create_api_router(
         unread_by_source = db.unread_news_counts_by_source(user["id"])
         items = []
         for source in db.list_news_sources():
+            if not source["enabled"]:
+                continue
             status = statuses.get(source["id"], {"code": "paused", "last_success_at": None})
             items.append({
                 "id": source["id"],
@@ -2496,7 +2498,7 @@ def create_api_router(
     ):
         if source_id is not None:
             browse = db.get_news_source(source_id)
-            if browse is None or browse["archived_at"]:
+            if browse is None or browse["archived_at"] or not browse["enabled"]:
                 raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
         view_started_at = datetime.now(UTC).isoformat()
         rows = db.list_news_articles(

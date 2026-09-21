@@ -166,7 +166,7 @@ export function createNewsView(dependencies) {
   }
 
   function selectedNewsSources() {
-    return state.newsSources.filter((source) => source.selected);
+    return state.newsSources.filter((source) => source.selected && source.enabled !== false);
   }
 
   function newsSourceNavigationHtml() {
@@ -540,7 +540,7 @@ export function createNewsView(dependencies) {
 
   function newsSourcePickerRows(filter = "", selectedIds = null) {
     const q = filter.trim().toLowerCase();
-    const visible = state.newsSources.filter((source) => !q || source.name.toLowerCase().includes(q));
+    const visible = state.newsSources.filter((source) => source.enabled !== false && (!q || source.name.toLowerCase().includes(q)));
     if (!visible.length) return '<p class="muted">没有匹配的媒体</p>';
     if (q) {
       return visible.map((source) => newsSourceOptionHtml(source, selectedIds)).join("");

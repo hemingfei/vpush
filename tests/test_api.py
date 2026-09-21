@@ -364,23 +364,11 @@ def test_news_disabled_cache_archived_detail_and_image_headers(monkeypatch):
         "fetched_at": "2026-09-01T00:00:00+00:00", "content_hash": "permission",
     })
     db.update_news_source(source_id, enabled=False)
-    assert client.get("/api/news", headers=headers).json()["items"][0]["id"] == article_id
-
-    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
-    client.app.state.news_service.client = __import__("httpx").Client(
-        transport=__import__("httpx").MockTransport(
-            lambda request: __import__("httpx").Response(
-                200, headers={"content-type": "image/jpeg"}, content=b"jpeg"
-            )
-        ),
-        trust_env=False,
-    )
-    image = client.get(f"/api/news/{article_id}/images/0", headers=headers)
-    assert image.status_code == 200
-    assert image.headers["cache-control"] == "private, max-age=86400"
-    assert image.headers["x-content-type-options"] == "nosniff"
-    assert image.content == b"jpeg"
-    assert client.get(f"/api/news/{article_id}/images/0").status_code == 401
+    assert client.get("/api/news", headers=headers).json()["items"] == []
+    assert source_id not in [row["id"] for row in client.get("/api/news/sources", headers=headers).json()["items"]]
+    assert client.get(f"/api/news/{article_id}", headers=headers).status_code == 404
+    assert client.get(f"/api/news?source_id={source_id}", headers=headers).status_code == 400
+    assert client.get(f"/api/news/{article_id}/images/0", headers=headers).status_code == 404
 
     db.set_news_source_archived(source_id, True)
     assert client.get(f"/api/news/{article_id}", headers=headers).status_code == 404

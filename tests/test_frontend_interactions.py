@@ -4742,6 +4742,8 @@ def test_news_source_picker_is_searchable_checkbox_dialog():
     assert 'type="checkbox"' in body
     assert 'role="dialog"' in body
     assert "我的来源" in body
+    assert "enabled !== false" in _fn_body("selectedNewsSources", NEWS_JS)
+    assert "enabled !== false" in _fn_body("newsSourcePickerRows", NEWS_JS)
 
 
 def test_news_source_picker_preserves_selection_across_search():

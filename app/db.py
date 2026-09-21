@@ -3719,7 +3719,7 @@ class DB:
         self, user_id: int, source_id: int | None, q: str, *, unread: bool = False,
         topic: str = "",
     ) -> tuple[str, list[object]]:
-        """source_id 给定时按源浏览（源未归档即可读），否则限定用户订阅圈。
+        """source_id 给定时按源浏览（启用且未归档），否则限定用户订阅圈内的启用源。
 
         unread：published_at 晚于 news_last_seen_at 且无 news_article_reads。
         topic 匹配 topics JSON 数组里的标签值（带引号防子串误配）。
@@ -3727,6 +3727,7 @@ class DB:
         conds = [
             "s.id = a.source_id",
             "s.archived_at IS NULL",
+            "s.enabled = 1",
         ]
         params: list[object] = []
         if source_id is not None:
@@ -3812,7 +3813,7 @@ class DB:
         rows = self._rows(
             "SELECT COUNT(*) AS n FROM news_articles a "
             "JOIN news_sources s ON s.id = a.source_id "
-            "WHERE s.archived_at IS NULL "
+            "WHERE s.archived_at IS NULL AND s.enabled = 1 "
             "AND EXISTS (SELECT 1 FROM user_news_sources u "
             "WHERE u.source_id = a.source_id AND u.user_id = ?) "
             "AND " + self._NEWS_UNREAD_SQL,
@@ -3825,7 +3826,7 @@ class DB:
             "SELECT a.source_id, COUNT(*) AS n FROM news_articles a "
             "JOIN news_sources s ON s.id = a.source_id "
             "JOIN user_news_sources u ON u.source_id = a.source_id AND u.user_id = ? "
-            "WHERE s.archived_at IS NULL AND " + self._NEWS_UNREAD_SQL +
+            "WHERE s.archived_at IS NULL AND s.enabled = 1 AND " + self._NEWS_UNREAD_SQL +
             " GROUP BY a.source_id",
             (user_id, user_id, user_id),
         )
@@ -3844,10 +3845,7 @@ class DB:
         sql = self._NEWS_ARTICLE_VISIBLE + " AND a.id = ?"
         params: list[object] = [article_id]
         if user_id is not None:
-            # 订阅圈外可读启用源（浏览模式），归档源仅历史订阅者不可见
-            sql += " AND (s.enabled = 1 OR EXISTS (" \
-                "SELECT 1 FROM user_news_sources u WHERE u.user_id = ? AND u.source_id = a.source_id))"
-            params.append(user_id)
+            sql += " AND s.enabled = 1"
         rows = self._rows(sql, params)
         return self._normalize_news_article(rows[0]) if rows else None
 
@@ -3879,16 +3877,12 @@ class DB:
         sql = (
             self._NEWS_ARTICLE_VISIBLE
             + boundary
-            + "AND (s.enabled = 1 OR EXISTS ("
-            + "SELECT 1 FROM user_news_sources u WHERE u.user_id = ? AND u.source_id = a.source_id)) "
+            + "AND s.enabled = 1 "
             + order
         )
         rows = self._rows(
             sql,
-            (
-                article["published_at"], article["published_at"], article["id"],
-                user_id,
-            ),
+            (article["published_at"], article["published_at"], article["id"]),
         )
         return rows[0]["id"] if rows else None
 
