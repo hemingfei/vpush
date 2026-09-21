@@ -12,6 +12,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -131,6 +132,54 @@ def _secret_hash(plain: str) -> str:
     """明文凭据的唯一性指纹（sha256）；空值返回空串不参与查找。"""
     plain = (plain or "").strip()
     return hashlib.sha256(plain.encode()).hexdigest() if plain else ""
+
+
+@contextmanager
+def _init_lock(path: str):
+    """跨进程互斥锁：串行化对同一库文件的首次建库/迁移（init 临界区）。
+
+    多进程同启（CI xdist worker 各自 import app.main 的模块级 create_app、
+    健康检查脚本与主进程并发）会对同一个全新空库并发跑建表 executescript
+    与迁移，SQLite 的表级写锁互踩报 database is locked / no such table。
+    库文件旁的 .lock 文件做锁载体：flock（POSIX）/ msvcrt.locking（Windows）
+    阻塞等待，进程退出内核自动释放，不残留死锁。已初始化的库重复打开同样
+    走这里——迁移极快，串行开销可忽略。":memory:" 无文件路径，跳过。
+    """
+    if path == ":memory:":
+        yield
+        return
+    lock_path = Path(path).with_name(Path(path).name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.touch(exist_ok=True)
+    fd = os.open(str(lock_path), os.O_RDWR)
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            while True:
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    # LK_LOCK 只等 ~10 秒且不保证重试次数；失败即循环重试
+                    time.sleep(0.05)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 # ---- 大V 关键词屏蔽 ----
@@ -1393,9 +1442,12 @@ class DB:
         self._reader_condition = threading.Condition()
         self._active_readers = 0
         self._replace_pending = False
-        self._open_unlocked()
-        self._migrate()
-        self._conn.commit()
+        # 跨进程文件锁包住建库+迁移：CI xdist 多 worker 并发 import app.main
+        # 模块级 create_app() 时，对同一全新空库并发首启会互踩（见 _init_lock）
+        with _init_lock(self.path):
+            self._open_unlocked()
+            self._migrate()
+            self._conn.commit()
 
     def _open_unlocked(self) -> None:
         """建立连接。调用方须已持有 _lock，或处于 __init__ 的单线程窗口。"""
@@ -1459,11 +1511,13 @@ class DB:
                 self._conn.close()
             except sqlite3.Error:
                 pass
-            self._open_unlocked()
-            # migrate 直接写连接，必须与在线线程共用一把锁：
-            # 否则并行写入会把迁移的隐式事务提前 commit 成半迁移
-            self._migrate()
-            self._conn.commit()
+            # 重开+迁移同样要走跨进程锁：与其它进程的首启互斥（见 _init_lock）
+            with _init_lock(self.path):
+                self._open_unlocked()
+                # migrate 直接写连接，必须与在线线程共用一把锁：
+                # 否则并行写入会把迁移的隐式事务提前 commit 成半迁移
+                self._migrate()
+                self._conn.commit()
 
     def replace_database(self, candidate: str | Path) -> None:
         """等待只读连接退出，原子替换库文件后重新打开。调用方负责失败回滚。"""
@@ -1483,9 +1537,11 @@ class DB:
                 temp.replace(path)
                 Path(str(path) + "-wal").unlink(missing_ok=True)
                 Path(str(path) + "-shm").unlink(missing_ok=True)
-                self._open_unlocked()
-                self._migrate()
-                self._conn.commit()
+                # 库文件已被替换，重开+迁移须持跨进程锁（与其它进程首启互斥）
+                with _init_lock(self.path):
+                    self._open_unlocked()
+                    self._migrate()
+                    self._conn.commit()
             finally:
                 try:
                     temp.unlink(missing_ok=True)
@@ -2406,9 +2462,11 @@ class DB:
                     self._conn.execute(statement)
                 self._conn.execute(f"PRAGMA user_version = {version}")
                 self._conn.commit()
-            except Exception:
+            except Exception as exc:
                 self._conn.rollback()
-                raise RuntimeError(f"schema 迁移失败: #{version} {name}") from None
+                # 不用 from None：链上底层 sqlite 异常（locked/no such table），
+                # 否则 CI 排查只剩迁移号，根因被吞（#2026092002 曾因此误判）
+                raise RuntimeError(f"schema 迁移失败: #{version} {name}") from exc
             logging.getLogger(__name__).info("schema migration applied: #%s %s", version, name)
 
     def close(self):
