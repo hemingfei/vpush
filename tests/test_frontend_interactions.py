@@ -5254,7 +5254,7 @@ def test_register_codes_mobile_list_is_code_first_cards():
     assert "td.rc-actions" in mobile and "display: flex" in mobile
     assert "min-width: 52px" in mobile
     assert "padding: 10px 0" in mobile
-    btn_sm = re.search(r"(?m)^\.btn-sm \{.*?\n\}", css, re.S).group(0)
+    btn_sm = re.search(r"(?m)^\.btn-sm \{.*?\n\}", css, re.DOTALL).group(0)
     assert "border-radius: var(--radius-control)" in btn_sm
     assert "border-radius: var(--radius-pill)" not in btn_sm
     assert "border-radius: var(--radius-control)" in mobile
