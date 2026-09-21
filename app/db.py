@@ -834,6 +834,14 @@ CREATE TABLE IF NOT EXISTS news_articles (
 );
 CREATE INDEX IF NOT EXISTS idx_news_articles_time ON news_articles(published_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_news_articles_source_time ON news_articles(source_id, published_at DESC, id DESC);
+CREATE TABLE IF NOT EXISTS news_article_reads (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    article_id INTEGER NOT NULL REFERENCES news_articles(id) ON DELETE CASCADE,
+    read_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, article_id)
+);
+CREATE INDEX IF NOT EXISTS idx_news_article_reads_article
+ON news_article_reads(article_id);
 CREATE INDEX IF NOT EXISTS idx_news_feeds_due ON news_feeds(enabled, archived_at, last_attempt_at);
 
 CREATE TABLE IF NOT EXISTS bind_codes (
@@ -1713,6 +1721,17 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE news_articles ADD COLUMN topics TEXT NOT NULL DEFAULT '[]'"
             )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS news_article_reads ("
+            "user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
+            "article_id INTEGER NOT NULL REFERENCES news_articles(id) ON DELETE CASCADE, "
+            "read_at TEXT NOT NULL, "
+            "PRIMARY KEY (user_id, article_id))"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_news_article_reads_article "
+            "ON news_article_reads(article_id)"
+        )
         # 内置源只在首次 seed（news_default_sources_v1 置位后整体跳过）：
         # 否则 INSERT OR IGNORE 拦不住已删除的行，管理员「彻底删除」内置源
         # 会在每次重启时复活。新增内置源时需换新 key（如 news_default_sources_v2）。
@@ -3293,6 +3312,11 @@ class DB:
                     self._conn.rollback()
                     return None
                 self._conn.execute(
+                    "DELETE FROM news_article_reads WHERE article_id IN "
+                    "(SELECT id FROM news_articles WHERE source_id = ?)",
+                    (source_id,),
+                )
+                self._conn.execute(
                     "DELETE FROM news_articles WHERE source_id = ?", (source_id,)
                 )
                 self._conn.execute(
@@ -3419,6 +3443,11 @@ class DB:
                 if not rows:
                     self._conn.rollback()
                     return None
+                self._conn.execute(
+                    "DELETE FROM news_article_reads WHERE article_id IN "
+                    "(SELECT id FROM news_articles WHERE feed_id = ?)",
+                    (feed_id,),
+                )
                 self._conn.execute(
                     "DELETE FROM news_articles WHERE feed_id = ?", (feed_id,)
                 )
@@ -3607,6 +3636,9 @@ class DB:
 
     def delete_news_article(self, article_id: int) -> bool:
         with self._lock:
+            self._conn.execute(
+                "DELETE FROM news_article_reads WHERE article_id = ?", (article_id,)
+            )
             cur = self._conn.execute(
                 "DELETE FROM news_articles WHERE id = ?", (article_id,)
             )
@@ -3665,11 +3697,23 @@ class DB:
             return 0
         cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         with self._lock:
+            self._conn.execute(
+                "DELETE FROM news_article_reads WHERE article_id IN "
+                "(SELECT id FROM news_articles WHERE published_at < ?)",
+                (cutoff,),
+            )
             cur = self._conn.execute(
                 "DELETE FROM news_articles WHERE published_at < ?", (cutoff,)
             )
             self._conn.commit()
             return cur.rowcount
+
+    _NEWS_UNREAD_SQL = (
+        "a.published_at > COALESCE("
+        "(SELECT news_last_seen_at FROM users WHERE id = ?), '') "
+        "AND NOT EXISTS (SELECT 1 FROM news_article_reads r "
+        "WHERE r.user_id = ? AND r.article_id = a.id)"
+    )
 
     def _news_article_filter(
         self, user_id: int, source_id: int | None, q: str, *, unread: bool = False,
@@ -3677,7 +3721,7 @@ class DB:
     ) -> tuple[str, list[object]]:
         """source_id 给定时按源浏览（源未归档即可读），否则限定用户订阅圈。
 
-        unread 以 news_last_seen_at 水位线为准；从未打开过新闻页视为全部未读。
+        unread：published_at 晚于 news_last_seen_at 且无 news_article_reads。
         topic 匹配 topics JSON 数组里的标签值（带引号防子串误配）。
         """
         conds = [
@@ -3692,11 +3736,8 @@ class DB:
             conds.append("u.user_id = ?")
             params.append(user_id)
         if unread:
-            conds.append(
-                "a.published_at > COALESCE("
-                "(SELECT news_last_seen_at FROM users WHERE id = ?), '')"
-            )
-            params.append(user_id)
+            conds.append(self._NEWS_UNREAD_SQL)
+            params.extend([user_id, user_id])
         if topic:
             conds.append("a.topics LIKE ?")
             params.append(f'%"{topic}"%')
@@ -3720,12 +3761,17 @@ class DB:
         where, params = self._news_article_filter(
             user_id, source_id, (q or "").strip(), unread=unread, topic=topic
         )
-        params.extend([max(1, min(int(limit), 100)), max(0, int(offset))])
+        params = [user_id, user_id, *params, max(1, min(int(limit), 100)), max(0, int(offset))]
         rows = self._rows(
             "SELECT a.id, a.title, a.url, a.author, a.summary, a.published_at, "
             "a.source_id, a.topics, s.name AS source_name, s.slug AS source_slug, "
             "s.enabled AS source_enabled, "
-            "(a.images IS NOT NULL AND a.images != '[]' AND a.images != '') AS has_image "
+            "(a.images IS NOT NULL AND a.images != '[]' AND a.images != '') AS has_image, "
+            "CASE WHEN a.published_at <= COALESCE("
+            "(SELECT news_last_seen_at FROM users WHERE id = ?), '') "
+            "OR EXISTS (SELECT 1 FROM news_article_reads r "
+            "WHERE r.user_id = ? AND r.article_id = a.id) "
+            "THEN 1 ELSE 0 END AS is_read "
             "FROM news_articles a LEFT JOIN user_news_sources u ON u.source_id = a.source_id "
             "JOIN news_sources s ON s.id = a.source_id "
             f"WHERE {where} ORDER BY a.published_at DESC, a.id DESC LIMIT ? OFFSET ?",
@@ -3733,7 +3779,9 @@ class DB:
         )
         result = []
         for row in rows:
-            result.append(self._normalize_news_article(dict(row)))
+            article = self._normalize_news_article(dict(row))
+            article["is_read"] = bool(article["is_read"])
+            result.append(article)
         return result
 
     def count_news_articles_for_source(self, source_id: int) -> int:
@@ -3759,18 +3807,28 @@ class DB:
         return _to_int(rows[0]["n"]) if rows else 0
 
     def unread_news_count(self, user_id: int) -> int:
-        """订阅圈内、水位线之后的文章总数；从未打开过 = 全部未读。"""
+        """订阅圈内未读文章总数；水位线之后且无单篇已读记录。"""
         rows = self._rows(
             "SELECT COUNT(*) AS n FROM news_articles a "
             "JOIN news_sources s ON s.id = a.source_id "
             "WHERE s.archived_at IS NULL "
             "AND EXISTS (SELECT 1 FROM user_news_sources u "
             "WHERE u.source_id = a.source_id AND u.user_id = ?) "
-            "AND a.published_at > COALESCE("
-            "(SELECT news_last_seen_at FROM users WHERE id = ?), '')",
-            (user_id, user_id),
+            "AND " + self._NEWS_UNREAD_SQL,
+            (user_id, user_id, user_id),
         )
         return _to_int(rows[0]["n"]) if rows else 0
+
+    def unread_news_counts_by_source(self, user_id: int) -> dict[int, int]:
+        rows = self._rows(
+            "SELECT a.source_id, COUNT(*) AS n FROM news_articles a "
+            "JOIN news_sources s ON s.id = a.source_id "
+            "JOIN user_news_sources u ON u.source_id = a.source_id AND u.user_id = ? "
+            "WHERE s.archived_at IS NULL AND " + self._NEWS_UNREAD_SQL +
+            " GROUP BY a.source_id",
+            (user_id, user_id, user_id),
+        )
+        return {int(row["source_id"]): int(row["n"]) for row in rows}
 
     _NEWS_ARTICLE_VISIBLE = (
         "SELECT a.*, s.name AS source_name, s.slug AS source_slug, "
@@ -3839,6 +3897,28 @@ class DB:
                 "UPDATE users SET news_last_seen_at = ? WHERE id = ? "
                 "AND (news_last_seen_at IS NULL OR news_last_seen_at < ?)",
                 (view_started_at, user_id, view_started_at),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def mark_news_article_read(self, user_id: int, article_id: int) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO news_article_reads (user_id, article_id, read_at) "
+                "VALUES (?, ?, ?)",
+                (user_id, article_id, datetime.now(UTC).isoformat()),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def restore_news_seen(
+        self, user_id: int, expected_seen_at: str, previous_seen_at: str | None
+    ) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE users SET news_last_seen_at = ? "
+                "WHERE id = ? AND news_last_seen_at = ?",
+                (previous_seen_at, user_id, expected_seen_at),
             )
             self._conn.commit()
             return cur.rowcount > 0
@@ -4438,6 +4518,14 @@ class DB:
                 (source_anchor, to_user_id),
             )
         self._conn.execute(
+            "INSERT OR IGNORE INTO news_article_reads (user_id, article_id, read_at) "
+            "SELECT ?, article_id, read_at FROM news_article_reads WHERE user_id = ?",
+            (to_user_id, from_user_id),
+        )
+        self._conn.execute(
+            "DELETE FROM news_article_reads WHERE user_id = ?", (from_user_id,)
+        )
+        self._conn.execute(
             "DELETE FROM user_news_sources WHERE user_id = ?", (from_user_id,)
         )
         self._conn.execute(
@@ -4462,6 +4550,9 @@ class DB:
 
     def _delete_user_body(self, user_id: int) -> None:
         self._conn.execute("DELETE FROM bind_codes WHERE user_id = ?", (user_id,))
+        self._conn.execute(
+            "DELETE FROM news_article_reads WHERE user_id = ?", (user_id,)
+        )
         self._conn.execute("DELETE FROM user_news_sources WHERE user_id = ?", (user_id,))
         self._conn.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
         self._conn.execute("DELETE FROM push_logs WHERE user_id = ?", (user_id,))

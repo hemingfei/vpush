@@ -2279,6 +2279,68 @@ def test_news_seen_anchor_only_moves_forward(tmp_path):
     assert db.get_user(uid)["news_last_seen_at"] == "2026-09-01T10:00:00+00:00"
 
 
+def test_news_article_reads_migrate_and_are_user_scoped(tmp_path):
+    db = DB(str(tmp_path / "article-reads.db"))
+    first = db.add_user("first", "hash")
+    second = db.add_user("second", "hash")
+    source = db.add_news_source("已读测试源")
+    feed = db.add_news_feed(source, "主源", "https://feed.example/read", "https://feed.example/read")
+    article = db.upsert_news_article(
+        _news_article_row(source, feed, "read-1", "2026-09-20T10:00:00+00:00")
+    )
+    db.set_user_news_sources(first, [source])
+    db.set_user_news_sources(second, [source])
+
+    assert db.mark_news_article_read(first, article)
+    assert db.unread_news_count(first) == 0
+    assert db.unread_news_count(second) == 1
+    assert db.list_news_articles(first, source_id=None, q="", limit=10, offset=0)[0]["is_read"] is True
+    assert db.list_news_articles(second, source_id=None, q="", limit=10, offset=0)[0]["is_read"] is False
+    assert db.list_news_articles(first, source_id=None, q="", limit=10, offset=0, unread=True) == []
+    db.close()
+
+
+def test_news_article_reads_follow_merge_and_delete(tmp_path):
+    db = DB(str(tmp_path / "article-read-lifecycle.db"))
+    source_user = db.add_user("source", "hash")
+    target_user = db.add_user("target", "hash")
+    source = db.add_news_source("生命周期源")
+    feed = db.add_news_feed(source, "主源", "https://feed.example/lifecycle", "https://feed.example/lifecycle")
+    article = db.upsert_news_article(
+        _news_article_row(source, feed, "lifecycle-1", "2026-09-20T10:00:00+00:00")
+    )
+    db.mark_news_article_read(source_user, article)
+
+    db.transfer_subscriptions(source_user, target_user)
+    assert db._rows(
+        "SELECT 1 FROM news_article_reads WHERE user_id = ? AND article_id = ?",
+        (target_user, article),
+    )
+
+    db.delete_user(source_user)
+    assert not db._rows("SELECT 1 FROM news_article_reads WHERE user_id = ?", (source_user,))
+    db.delete_news_article(article)
+    assert not db._rows("SELECT 1 FROM news_article_reads WHERE article_id = ?", (article,))
+    db.close()
+
+
+def test_restore_news_seen_is_compare_and_swap(tmp_path):
+    db = DB(str(tmp_path / "restore-seen.db"))
+    uid = db.add_user("reader", "hash")
+    t1 = "2026-09-20T10:00:00+00:00"
+    t2 = "2026-09-20T11:00:00+00:00"
+    assert db.advance_news_seen(uid, t2)
+    assert db.restore_news_seen(uid, t2, t1) is True
+    assert db.get_user(uid)["news_last_seen_at"] == t1
+    assert db.restore_news_seen(uid, t2, t1) is False
+    assert db.get_user(uid)["news_last_seen_at"] == t1
+    assert db.advance_news_seen(uid, t2)
+    assert db.restore_news_seen(uid, t2, None) is True
+    raw = db._rows("SELECT news_last_seen_at FROM users WHERE id = ?", (uid,))[0]
+    assert raw["news_last_seen_at"] is None
+    db.close()
+
+
 def test_news_feed_url_change_resets_conditional_state(tmp_path):
     db = DB(str(tmp_path / "feed-reset.db"))
     source_id = db.add_news_source("测试媒体")
