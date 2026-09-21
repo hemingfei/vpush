@@ -3641,6 +3641,13 @@ def test_post_card_has_image_export_button():
     assert "button.cat-export::before" in css
 
 
+def test_parse_published_naive_datetime_is_end_anchored():
+    body = _fn_body("parsePublished")
+    assert "(?::(\\d{2}))?$/" in body
+    export_body = _fn_body("parsePublished", APP_JS.parent / "views" / "post-card-export.js")
+    assert "(?::(\\d{2}))?$/" in export_body
+
+
 def test_post_to_card_model_maps_full_text_and_platform_fields():
     """图卡用全文、跟原文/译文开关，雪球不带 handle，组合带调仓明细。"""
     js = r"""
@@ -3698,6 +3705,8 @@ assert.equal(hasCardContent(combo), true);
 
 const now = new Date(Date.UTC(2026, 8, 17, 1, 0));
 assert.match(formatCardTime("2026-09-17 09:00", now), /今天/);
+const noon = new Date("2026-09-17T15:26:00+08:00");
+assert.equal(formatCardTime("2026-09-17T07:26:00+00:00", noon), formatCardTime("2026-09-17 15:26:00", noon));
 """
     subprocess.run(["node", "--input-type=module", "-e", js], cwd=ROOT, check=True)
 

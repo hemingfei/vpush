@@ -106,7 +106,7 @@ function parseDetail(raw) {
 function parsePublished(s) {
   const raw = String(s || "").trim();
   if (!raw) return null;
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(raw);
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(raw);
   if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - 8, +m[5], +(m[6] || 0)));
   const d = new Date(raw);
   return Number.isNaN(d.getTime()) ? null : d;
