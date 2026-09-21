@@ -9,7 +9,7 @@ export function createHoldingsView(dependencies) {
 
   window._hdTargets = []; // 聚合卡下标索引：onclick 传下标，避免标的名称注入 JS 字符串
   window._hdSug = []; // 输入建议下标索引，同上
-  window._hdKols = []; // 大V持股行展开的大V下标索引，同上
+  window._hdKolsBoard = []; // 大V持股榜行下标索引：存行键（"榜:标的"），同上
   const _hd = {
     seq: 0, holdings: [], summary: [], items: [], maxId: 0,
     filter: null, // {type, name} 单标的筛选；null = 全部
@@ -351,16 +351,13 @@ export function createHoldingsView(dependencies) {
     hdRenderKolRoot();
   }
 
-  // onclick 传的是榜行下标（window._hdKolsBoard[idx] = 该行的大V/清仓明细数组）：
-  // 展开集合按 kol_id 记，跨重渲染稳定；再次点击整行收起
-  function hdKolToggleKol(idx) {
-    const members = window._hdKolsBoard[idx] || [];
-    const ids = members.map((k) => k.kol_id);
-    const allOpen = ids.length && ids.every((id) => _hd.kolsOpen.has(id));
-    for (const id of ids) {
-      if (allOpen) _hd.kolsOpen.delete(id);
-      else _hd.kolsOpen.add(id);
-    }
+  // onclick 传的是榜行下标（window._hdKolsBoard[idx] = 行键"榜:标的"）：
+  // 展开/收起只动这一行的键，与其它行（哪怕共享同一位大V）完全无关
+  function hdKolToggleRow(idx) {
+    const rowKey = window._hdKolsBoard[idx];
+    if (!rowKey) return;
+    if (_hd.kolsOpen.has(rowKey)) _hd.kolsOpen.delete(rowKey);
+    else _hd.kolsOpen.add(rowKey);
     hdRenderKolBoard();
   }
 
@@ -387,16 +384,18 @@ export function createHoldingsView(dependencies) {
   }
 
   function hdKolKolsRow(k) {
-    window._hdKols.push(k.kol_id);
-    return `<button type="button" class="hd-kol-chip" onclick="go('/mx-kol/${k.kol_id}')" title="查看 ${escapeHtml(k.name)} 的预估持仓">
+    return `<button type="button" class="hd-kol-chip" onclick="event.stopPropagation();go('/mx-kol/${k.kol_id}')" title="查看 ${escapeHtml(k.name)} 的预估持仓">
       ${hdKolAva(k)}<span>${escapeHtml(k.name)}</span></button>`;
   }
 
-  function hdKolRow(key, kols, metaHtml) {
-    const idx = window._hdKolsBoard.length;
-    window._hdKolsBoard.push(kols);
-    const open = kols.some((k) => _hd.kolsOpen.has(k.kol_id));
-    return `<div class="hd-krow${open ? " open" : ""}" onclick="hdKolToggleKol(${idx})">
+  // 展开状态按「榜:标的」行键记（kolsOpen 集合），不按大V id：同一位大V往往
+  // 持有多只票，按 id 记会让点开一行连带点亮所有含该大V的行、再点也缩不干净。
+  // onclick 传行下标（window._hdKolsBoard 里是行键），维持无字符串内联约定
+  function hdKolRow(tab, key, kols, metaHtml) {
+    const rowKey = `${tab}:${key}`;
+    const idx = window._hdKolsBoard.push(rowKey) - 1;
+    const open = _hd.kolsOpen.has(rowKey);
+    return `<div class="hd-krow${open ? " open" : ""}" onclick="hdKolToggleRow(${idx})">
       <div class="hd-krow-main">
         <b class="hd-krow-name" title="${escapeHtml(key)}">${escapeHtml(key)}</b>
         <span class="hd-kcount" title="持有/共振大V数">${kols.length} 人</span>
@@ -428,9 +427,10 @@ export function createHoldingsView(dependencies) {
       avgPct === null ? `—${miss ? `(${miss}笔无行情)` : ""}` : `${avgPct > 0 ? "+" : ""}${avgPct}%`}</span>`
       + `${cuts ? `<span class="hd-badge cut" title="浮亏清仓 ${cuts} 笔">割肉 ${cuts}</span>` : ""}`
       + `${wins ? `<span class="hd-badge win" title="盈利清仓 ${wins} 笔">止盈 ${wins}</span>` : ""}`;
-    const open = sorted.some((e) => _hd.kolsOpen.has(e.kol_id));
-    const idx = window._hdKolsBoard.push(sorted) - 1;
-    return `<div class="hd-krow${open ? " open" : ""}" onclick="hdKolToggleKol(${idx})">
+    const rowKey = `clears:${row.target_name}`;
+    const idx = window._hdKolsBoard.push(rowKey) - 1;
+    const open = _hd.kolsOpen.has(rowKey);
+    return `<div class="hd-krow${open ? " open" : ""}" onclick="hdKolToggleRow(${idx})">
       <div class="hd-krow-main">
         <b class="hd-krow-name" title="${escapeHtml(row.target_name)}">${escapeHtml(row.target_name)}</b>
         <span class="hd-kcount" title="清仓大V数">${row.kol_count} 人清仓</span>
@@ -455,19 +455,19 @@ export function createHoldingsView(dependencies) {
     if (tab === "heavy") {
       return data.heavy
         .filter((r) => hdKolRecentPass(r.last_at))
-        .map((r) => hdKolRow(r.target_name, r.kols, "")).join("");
+        .map((r) => hdKolRow(tab, r.target_name, r.kols, "")).join("");
     }
     if (tab === "attack") {
       return data.attack
         .filter((r) => hdKolRecentPass(r.last_at))
-        .map((r) => hdKolRow(r.target_name, r.kols,
+        .map((r) => hdKolRow(tab, r.target_name, r.kols,
           `<span class="hd-kmeta" title="最近一次动作时间">${escapeHtml(fmtTime(r.last_at))}</span>`))
         .join("");
     }
     if (tab === "topics") {
       return data.topics
         .filter((r) => hdKolRecentPass(r.last_at))
-        .map((r) => hdKolRow(r.target_name, r.kols, "")).join("");
+        .map((r) => hdKolRow(tab, r.target_name, r.kols, "")).join("");
     }
     if (tab === "clears") {
       return data.clears
@@ -979,7 +979,7 @@ export function createHoldingsView(dependencies) {
     hdKolRecentInput,
     hdKolRecentChange,
     hdKolSetTab,
-    hdKolToggleKol,
+    hdKolToggleRow,
     hdKolSetSort,
   };
 }

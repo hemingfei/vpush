@@ -19,7 +19,7 @@ HD_HANDLERS = [
 # 大V持股板块（聚合四榜）新增的内联 handler：同一四处同步契约
 HD_KOL_HANDLERS = [
     "hdSwitchView", "hdKolChangeDays", "hdKolRecentInput", "hdKolRecentChange",
-    "hdKolSetTab", "hdKolToggleKol", "hdKolSetSort",
+    "hdKolSetTab", "hdKolToggleRow", "hdKolSetSort",
 ]
 
 
@@ -139,7 +139,7 @@ def test_holdings_kol_board_contract():
     assert "hdKolRecentChange" in HOLDINGS_JS  # 最近观点滑动栏
     assert 'localStorage.setItem("hd_kol_recent"' in HOLDINGS_JS  # 滑动栏跨路由保留
     assert "hdKolSetTab" in HOLDINGS_JS and '"attack"' in HOLDINGS_JS  # 四榜页签
-    assert "hdKolToggleKol" in HOLDINGS_JS  # 行展开
+    assert "hdKolToggleRow" in HOLDINGS_JS  # 行展开（按行键，不跨行联动）
     # 下钻：大V chip 跳现有单大V页（go 路由带前导斜杠），不新建页面
     assert "go('/mx-kol/" in HOLDINGS_JS
     # 清仓榜：割肉/止盈徽 + 盈亏排序

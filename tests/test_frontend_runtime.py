@@ -1318,7 +1318,8 @@ def test_holdings_kol_board_tabs_expand_sort(page: Page):
         heavy: [
           {target_name: '贵州茅台', kol_count: 2, kols: [
             {kol_id: 1, name: '王哥', avatar: ''}, {kol_id: 2, name: '李哥', avatar: ''}]},
-          {target_name: '中科曙光', kol_count: 1, kols: [{kol_id: 3, name: '赵哥', avatar: ''}]},
+          {target_name: '中科曙光', kol_count: 2, kols: [
+            {kol_id: 1, name: '王哥', avatar: ''}, {kol_id: 4, name: '钱哥', avatar: ''}]},
         ],
         attack: [
           {target_name: '五粮液', kol_count: 2, last_at: '2026-09-19 10:00:00', kols: [
@@ -1371,13 +1372,24 @@ def test_holdings_kol_board_tabs_expand_sort(page: Page):
     expect(rows).to_have_count(2)
     expect(rows.nth(0).locator(".hd-krow-name")).to_have_text("贵州茅台")
     expect(rows.nth(0).locator(".hd-kcount")).to_have_text("2 人")
-    # 行展开：显示持有大V名单（头像 + 名字），再点收起
+    # 行展开：两行共享大V王哥（ Regression：曾按 kol_id 记展开态，点一行会把
+    # 所有含王哥的行连带点亮、再点缩不回）。点茅台行只开茅台，曙光保持收起
     rows.nth(0).click()
     expect(page.locator(".hd-kol-chip")).to_have_count(2)
     expect(page.locator(".hd-kol-chip").first).to_contain_text("王哥")
+    expect(page.locator(".hd-krow-kols")).to_have_count(1)  # 只有茅台一行处于展开
+    expect(rows.nth(1).locator(".hd-krow-kols")).to_have_count(0)
     # 下钻走现有单大V页路由（带前导斜杠）
     href_like = page.locator(".hd-kol-chip").first.get_attribute("onclick")
     assert "go('/mx-kol/1')" in href_like
+    # 交错开缩互不干扰：再开曙光 → 各自展开；收曙光 → 茅台不受影响仍展开
+    rows.nth(1).click()
+    expect(page.locator(".hd-kol-chip")).to_have_count(4)
+    expect(page.locator(".hd-krow-kols")).to_have_count(2)
+    rows.nth(1).click()
+    expect(page.locator(".hd-kol-chip")).to_have_count(2)  # 曙光收起，茅台仍开
+    expect(rows.nth(0).locator(".hd-krow-kols")).to_have_count(1)
+    # 再点茅台整行收起
     rows.nth(0).click()
     expect(page.locator(".hd-kol-chip")).to_have_count(0)
     # 窗口钮：切 90 天重拉（请求带 days=90）

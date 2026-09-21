@@ -6928,7 +6928,7 @@ const {
   hdKolRecentInput,
   hdKolRecentChange,
   hdKolSetTab,
-  hdKolToggleKol,
+  hdKolToggleRow,
   hdKolSetSort,
   hdTeardown,
 } = createHoldingsView({
@@ -9095,7 +9095,7 @@ const INLINE_HANDLERS = {
   hdKolRecentInput,
   hdKolSetSort,
   hdKolSetTab,
-  hdKolToggleKol,
+  hdKolToggleRow,
   hdMore,
   hdPostExpand,
   hdSugInput,
