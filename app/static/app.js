@@ -1,6 +1,6 @@
 import { escapeHtml, imgOnError, imgProxyUrl, imgSrcFor, jsString } from "./core/html.js";
 import {
-  ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, CHEVRON_DOWN_ICON, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON,
+  ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, CHECK_CHECK_ICON, CHECK_ICON, CHEVRON_DOWN_ICON, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON,
   CHEVRON_UP_ICON, COPY_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
   EYE_ICON, EYE_OFF_ICON, EXTERNAL_LINK_ICON, FEISHU_DATE_ICON, FILE_TEXT_ICON, FILTER_ICON,
   IMAGE_CARD_ICON,
@@ -4974,6 +4974,7 @@ const {
   clearNewsReaderState,
   loadFinancialNews,
   markAllNewsRead,
+  markNewsItemRead,
   openNewsArticle,
   openNewsSourcePicker,
   queueNewsSearch,
@@ -4985,6 +4986,7 @@ const {
   selectNewsTopic,
   setNewsFontSize,
   toggleNewsUnreadOnly,
+  undoNewsReadAll,
 } = createNewsView({
   $,
   state,
@@ -5003,6 +5005,13 @@ const {
   renderSidebar: () => renderSidebar(state.user),
   renderBottomNav: () => renderBottomNav(state.user),
   updateNewsBadge,
+  SEARCH_ICON,
+  GEAR_ICON,
+  NEWS_ICON,
+  EYE_ICON,
+  CHEVRON_DOWN_ICON,
+  CHECK_ICON,
+  CHECK_CHECK_ICON,
 });
 
 const {
@@ -6170,6 +6179,7 @@ const INLINE_HANDLERS = {
   loadProxyAdmin,
   logout,
   markAllNewsRead,
+  markNewsItemRead,
   onAclSearchKey,
   onAskLinkInput,
   onKnowledgeTabsKey,
@@ -6316,6 +6326,7 @@ const INLINE_HANDLERS = {
   triggerCicc,
   triggerImaCollector,
   unbindChannel,
+  undoNewsReadAll,
   unsubscribeKnowledge,
   updateAdminNewsArchived,
   updateAdminNewsQuery,

@@ -4710,6 +4710,19 @@ def test_news_source_picker_preserves_selection_across_search():
     assert "newsSourcePickerRows(event.target.value" in open_picker
 
 
+def test_news_stream_uses_shared_line_icons_and_handlers():
+    icons = (ROOT / "app/static/core/icons.js").read_text()
+    app = APP_JS.read_text()
+    news = NEWS_JS.read_text()
+    for name in ("CHECK_ICON", "CHECK_CHECK_ICON"):
+        assert f"export const {name}" in icons
+        assert name in app
+        assert name in news
+    for name in ("markNewsItemRead", "undoNewsReadAll"):
+        assert name in app
+        assert name in news
+
+
 def test_admin_news_tab_is_full_feed_manager():
     src = APP_JS.read_text() + ADMIN_NEWS_JS.read_text()
     assert 'const STATS_TABS = ["config", "cookies", "imgbed", "plaza", "news", "proxies"]' in src

@@ -17,6 +17,13 @@ export function createNewsView(dependencies) {
     renderSidebar,
     renderBottomNav,
     updateNewsBadge,
+    SEARCH_ICON,
+    GEAR_ICON,
+    NEWS_ICON,
+    EYE_ICON,
+    CHEVRON_DOWN_ICON,
+    CHECK_ICON,
+    CHECK_CHECK_ICON,
   } = dependencies;
   let searchTimer = null;
 
@@ -380,6 +387,10 @@ export function createNewsView(dependencies) {
     await loadFinancialNews(true, currentRouteSeq());
   }
 
+  function markNewsItemRead(articleId) {}
+
+  function undoNewsReadAll() {}
+
   async function markAllNewsRead() {
     if (!confirm("把全部文章标记为已读？")) return;
     try {
@@ -515,6 +526,7 @@ export function createNewsView(dependencies) {
     clearNewsReaderState,
     loadFinancialNews,
     markAllNewsRead,
+    markNewsItemRead,
     openNewsArticle,
     openNewsSourcePicker,
     queueNewsSearch,
@@ -526,5 +538,6 @@ export function createNewsView(dependencies) {
     selectNewsTopic,
     setNewsFontSize,
     toggleNewsUnreadOnly,
+    undoNewsReadAll,
   };
 }
