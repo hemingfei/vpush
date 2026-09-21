@@ -161,15 +161,15 @@ export function createNewsView(dependencies) {
     const unreadOn = !!state.newsUnreadOnly;
     const unreadCount = Number(state.newsUnreadCount) || 0;
     main.innerHTML = `<section class="news-page" id="news-page">
-      <header class="news-page-head"><div><h2 class="section-title">财经新闻</h2><p class="section-meta">${unreadCount ? `${unreadCount} 篇未读` : "按媒体聚合的长文阅读，原文链接保留。"}</p></div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">我的来源</button></header>
+      <header class="news-page-head"><div><h2 class="section-title">财经新闻</h2><p class="section-meta news-page-desc">${unreadCount ? `${unreadCount} 篇未读` : "按媒体聚合的长文阅读，原文链接保留。"}</p></div><button type="button" class="btn-ghost" onclick="openNewsSourcePicker()">我的来源</button></header>
       ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
       <div class="news-list-toolbar">
         <div class="news-toolbar-filters">
           <button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}">只看未读${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</button>
           <select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="selectNewsSource(this.value)">${newsGroupedOptions()}</select>
           <div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)"></div>
+          ${unreadCount ? '<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()">全部已读</button>' : ""}
         </div>
-        ${unreadCount ? '<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()">全部已读</button>' : ""}
       </div>
       ${newsTopicBarHtml()}
       <div id="news-list" class="news-list">${newsListSkeletonHtml()}</div>

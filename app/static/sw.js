@@ -1,8 +1,8 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-61fe84430c93";
+const CACHE = "dav-shell-2c344d66163b";
 const SHELL = [
   "/",
-  "/app.139346cde5b7.js",
+  "/app.65e242911c72.js",
   // asset-modules:start
   "/core/dialog.9c1fa70ae93e.js",
   "/core/html.817ab2339b89.js",
@@ -10,7 +10,7 @@ const SHELL = [
   "/core/lightbox.63db409ddbd8.js",
   "/core/platforms.e3f9b30aa971.js",
   "/views/admin/cicc.0cd7529b8514.js",
-  "/views/admin/codes.bd8f3a1c76c8.js",
+  "/views/admin/codes.2b9b97a7ba6e.js",
   "/views/admin/dashboard.6b1c5955b790.js",
   "/views/admin/ima-collector.4bdac32b43a8.js",
   "/views/admin/infra.2fc8582f4c21.js",
@@ -21,11 +21,11 @@ const SHELL = [
   "/views/feishu-personal.d34f03bb7da2.js",
   "/views/ima.4ee73e107acf.js",
   "/views/market.0a97a470169d.js",
-  "/views/news.13fba15868ac.js",
+  "/views/news.b3822f33baed.js",
   "/views/post-card-export.877af7956711.js",
   "/views/push-settings.c6dcb9dee07b.js",
   // asset-modules:end
-  "/style.a552019fec61.css",
+  "/style.747710670520.css",
   "/vendor/design-tokens.965639a4e5c3.css",
   "/logo-mark.svg",
   "/icon-192.png",
