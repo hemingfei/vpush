@@ -150,6 +150,11 @@ def test_holdings_kol_board_contract():
     # 行级排序：clears 分支对 data.clears 做 sort（把最大亏损/盈利的清仓翻到最前）
     clears_body = _fn_body("hdKolBoardRows", HOLDINGS_JS)
     assert "[...data.clears]" in clears_body and "avgOf" in clears_body
+    # 盈亏配色跟 A 股口径红涨绿跌、走主题变量（--hd-bull*=涨红 / --hd-bear*=跌绿，
+    # 与 mx-kol-holdings 的 .mxc-pnl-pct.up/.down 同源）：禁止硬编码西式色值回归
+    assert "#c0392b" not in HOLDINGS_CSS and "#1e8449" not in HOLDINGS_CSS
+    assert ".hd-krow-pct.cut{color:var(--hd-bear-text)" in HOLDINGS_CSS.replace(" ", "")
+    assert ".hd-krow-pct.win{color:var(--hd-bull-text)" in HOLDINGS_CSS.replace(" ", "")
     # 防注入：行展开大V走下标索引（window._hdKolsBoard），不拼标的/大V名字符串
     assert "window._hdKolsBoard" in HOLDINGS_JS
     # 空态/加载态

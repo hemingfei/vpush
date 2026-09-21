@@ -160,11 +160,13 @@
 .hd-kcount{font-size:12px;color:var(--hd-muted);background:var(--hd-btn-line);border-radius:6px;padding:1px 8px;}
 .hd-kmeta{font-size:12px;color:var(--hd-faint);}
 .hd-krow-pct{font-size:13px;font-weight:700;color:var(--hd-muted);}
-.hd-krow-pct.cut{color:var(--mxv-bear-deep,#c0392b);}
-.hd-krow-pct.win{color:var(--mxv-bull-deep,#1e8449);}
-.hd-badge.cut{background:rgba(192,57,43,.12);color:#c0392b;border:1px solid rgba(192,57,43,.3);
+/* 盈亏配色跟 A 股口径（红涨绿跌），与 mx-kol-holdings 的 .mxc-pnl-pct.up/.down
+   同源变量：盈利/止盈走 bull 红系，亏损/割肉走 bear 绿系，明暗主题各自取色 */
+.hd-krow-pct.cut{color:var(--hd-bear-text);}
+.hd-krow-pct.win{color:var(--hd-bull-text);}
+.hd-badge.cut{background:var(--hd-bear-soft);color:var(--hd-bear-text);border:1px solid var(--hd-bear-line);
   border-radius:6px;font-size:11px;padding:1px 6px;}
-.hd-badge.win{background:rgba(30,132,73,.12);color:#1e8449;border:1px solid rgba(30,132,73,.3);
+.hd-badge.win{background:var(--hd-bull-soft);color:var(--hd-bull-text);border:1px solid var(--hd-bull-line);
   border-radius:6px;font-size:11px;padding:1px 6px;}
 .hd-krow-kols{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
 .hd-kol-chip{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12px;
@@ -176,8 +178,8 @@
   font-size:11px;color:var(--hd-muted);}
 .hd-kol-at{color:var(--hd-faint);}
 .hd-kol-pct{font-weight:700;}
-.hd-kol-pct.cut{color:#c0392b;}
-.hd-kol-pct.win{color:#1e8449;}
+.hd-kol-pct.cut{color:var(--hd-bear-text);}
+.hd-kol-pct.win{color:var(--hd-bull-text);}
 .hd-hint.gen{margin-top:6px;text-align:right;}
 
 @media (max-width: 760px){
