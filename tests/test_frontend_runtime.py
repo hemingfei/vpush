@@ -1167,6 +1167,27 @@ def test_news_stream_switches_source_navigation_by_viewport(page, static_origin,
         expect(page.locator(".news-source-mobile")).to_be_visible()
 
 
+@pytest.mark.parametrize("width", [390, 768, 1280])
+def test_news_stream_does_not_overflow_or_overlap(page, static_origin, width):
+    install_news_bootstrap(page)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
+    expect(page.get_by_role("heading", name="资讯流")).to_be_visible()
+    assert page.evaluate("() => document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    assert page.evaluate("""() => {
+      const item = document.querySelector('.news-list-item');
+      const title = item && item.querySelector('h3');
+      const thumb = item && item.querySelector('.news-list-thumb');
+      const mark = item && item.querySelector('.news-mark-read');
+      if (!item || !title || !thumb) return false;
+      const overlap = (a, b) => {
+        const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+        return !(ra.right <= rb.left || ra.left >= rb.right || ra.bottom <= rb.top || ra.top >= rb.bottom);
+      };
+      return !overlap(title, thumb) && (!mark || !overlap(title, mark));
+    }""")
+
+
 def test_news_item_mark_read_updates_counts_without_navigation(page: Page, static_origin: str):
     install_news_bootstrap(page)
     page.goto(f"{static_origin}/news", wait_until="domcontentloaded")

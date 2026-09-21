@@ -4739,6 +4739,18 @@ def test_news_stream_uses_shared_line_icons_and_handlers():
         assert name in news
 
 
+def test_news_stream_css_has_two_column_and_mobile_contract():
+    css = STYLE_CSS.read_text()
+    assert ".news-stream-layout" in css
+    assert "grid-template-columns: 180px minmax(0, 1fr)" in css
+    assert ".news-list-thumb" in css and "width: 120px" in css and "height: 84px" in css
+    assert ".news-item-unread-dot" in css and "width: 7px" in css
+    assert ".news-read-undo" in css
+    mobile = _media_block(css, "@media (max-width: 768px)", last=False)
+    assert ".news-source-rail" in mobile and "display: none" in mobile
+    assert ".news-source-mobile" in mobile and "display:" in mobile
+
+
 def test_admin_news_tab_is_full_feed_manager():
     src = APP_JS.read_text() + ADMIN_NEWS_JS.read_text()
     assert 'const STATS_TABS = ["config", "cookies", "imgbed", "plaza", "news", "proxies"]' in src
