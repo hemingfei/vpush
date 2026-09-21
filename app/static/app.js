@@ -6326,6 +6326,7 @@ const INLINE_HANDLERS = {
   triggerCicc,
   triggerImaCollector,
   unbindChannel,
+  undoNewsReadAll,
   unsubscribeKnowledge,
   updateAdminNewsArchived,
   updateAdminNewsQuery,

@@ -26,6 +26,19 @@ export function createNewsView(dependencies) {
     CHECK_CHECK_ICON,
   } = dependencies;
   let searchTimer = null;
+  let readAllUndoTimer = null;
+  let readAllUndoPayload = null;
+
+  function clearNewsReadUndo() {
+    clearTimeout(readAllUndoTimer);
+    readAllUndoTimer = null;
+    readAllUndoPayload = null;
+    const banner = $("#news-read-undo");
+    if (banner) {
+      banner.hidden = true;
+      banner.innerHTML = "";
+    }
+  }
 
   function newsImageUrlKey(articleId, index) {
     return `${articleId}:${index}`;
@@ -51,6 +64,7 @@ export function createNewsView(dependencies) {
   function clearNewsReaderState() {
     stopNewsAutoLoad();
     stopReadProgress();
+    clearNewsReadUndo();
     clearNewsImageUrls();
     state.newsSources = [];
     state.newsFilterSourceId = "";
@@ -401,11 +415,43 @@ export function createNewsView(dependencies) {
     }
   }
 
+  function applyNewsItemRead(articleId) {
+    const item = state.newsItems.find((entry) => Number(entry.id) === Number(articleId));
+    if (!item || item.is_read) return false;
+    item.is_read = true;
+    item.is_new = false;
+    state.newsUnreadCount = Math.max(0, Number(state.newsUnreadCount) - 1);
+    const source = state.newsSources.find((entry) => Number(entry.id) === Number(item.source_id));
+    if (source) source.unread_count = Math.max(0, Number(source.unread_count) - 1);
+    return true;
+  }
+
+  async function markNewsItemRead(articleId, { navigate = false } = {}) {
+    const item = state.newsItems.find((entry) => Number(entry.id) === Number(articleId));
+    const changed = item && !item.is_read;
+    if (changed) applyNewsItemRead(articleId);
+    try {
+      if (changed) await api(`/api/news/${articleId}/read`, { method: "POST" });
+      syncUnreadBadge();
+      if (navigate) return go(`news/${articleId}`);
+      renderNewsListShell(state.newsCollectionEnabled !== false);
+      const list = $("#news-list");
+      list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : emptyState("没有符合条件的财经新闻");
+      attachListImages(currentRouteSeq());
+      startNewsAutoLoad(currentRouteSeq());
+    } catch (err) {
+      if (changed) await renderFinancialNewsList(currentRouteSeq());
+      flash(err.message, "error");
+    }
+  }
+
   function openNewsArticle(articleId) {
     const id = Number(articleId);
     if (Number.isInteger(id) && id > 0) {
       state.newsListKey = newsListKey();
       state.newsScrollY = window.scrollY;
+      const item = state.newsItems.find((entry) => Number(entry.id) === Number(id));
+      if (item && !item.is_read) return markNewsItemRead(id, { navigate: true });
       go(`news/${id}`);
     }
   }
@@ -418,24 +464,44 @@ export function createNewsView(dependencies) {
     await loadFinancialNews(true, currentRouteSeq());
   }
 
-  function markNewsItemRead(articleId) {}
-
-  function undoNewsReadAll() {}
-
   async function markAllNewsRead() {
-    if (!confirm("把全部文章标记为已读？")) return;
     try {
-      await api("/api/news/read-all", { method: "POST" });
+      const data = await api("/api/news/read-all", { method: "POST" });
       state.newsUnreadCount = 0;
+      state.newsSources.forEach((source) => { source.unread_count = 0; });
+      state.newsItems.forEach((item) => { item.is_read = true; item.is_new = false; });
+      readAllUndoPayload = {
+        read_all_seen_at: data.read_all_seen_at,
+        previous_seen_at: data.previous_seen_at || null,
+      };
       syncUnreadBadge();
-      flash("已全部标记为已读");
-      if (state.newsUnreadOnly) {
-        renderNewsListShell(state.newsCollectionEnabled !== false);
-        await loadFinancialNews(true, currentRouteSeq());
-      } else {
-        renderNewsListShell(state.newsCollectionEnabled !== false);
-      }
+      renderNewsListShell(state.newsCollectionEnabled !== false);
+      const list = $("#news-list");
+      list.innerHTML = state.newsUnreadOnly ? emptyState("没有未读文章，已经全部看完了") : newsListHtml(state.newsItems);
+      const banner = $("#news-read-undo");
+      banner.hidden = false;
+      banner.innerHTML = `<span>已将全部资讯标为已读</span><button type="button" onclick="undoNewsReadAll()">撤销</button>`;
+      clearTimeout(readAllUndoTimer);
+      readAllUndoTimer = setTimeout(clearNewsReadUndo, 5000);
     } catch (err) { flash(err.message, "error"); }
+  }
+
+  async function undoNewsReadAll() {
+    if (!readAllUndoPayload) return;
+    const payload = readAllUndoPayload;
+    clearNewsReadUndo();
+    try {
+      await api("/api/news/read-all/undo", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      state.newsListKey = "";
+      await renderFinancialNewsList(currentRouteSeq());
+      flash("已撤销全部已读");
+    } catch (err) {
+      flash(err.message, "error");
+      await refreshUnreadCount(currentRouteSeq());
+    }
   }
 
   async function setNewsFontSize(value) {

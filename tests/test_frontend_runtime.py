@@ -193,21 +193,33 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
         "const data = " + payload + """;
           localStorage.setItem('dav_token', 'test-token');
           window.__newsRequests = [];
-          window.fetch = async (input) => {
+          window.fetch = async (input, init = {}) => {
             const url = String(input);
-            if (url.includes('/api/news')) window.__newsRequests.push(url);
+            if (url.includes('/api/news')) {
+              window.__newsRequests.push({ url, method: (init.method || 'GET'), body: init.body || null });
+            }
             if (url.includes('/api/me')) {
               return { ok: true, status: 200, json: async () => ({ id: 1, username: 'test', news_visible: true }) };
             }
             if (url.includes('/api/news/sources')) {
-              return { ok: true, status: 200, json: async () => data.sources };
+              return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(data.sources)) };
             }
             if (url.includes('/api/news/7/images/')) {
               if (data.failImage) throw new Error('offline');
               return { ok: true, status: 200, blob: async () => new Blob(['x']) };
             }
-            if (url.includes('/read-all/undo') || url.includes('/read-all') || url.includes('/read')) {
-              return { ok: true, json: async () => ({}) };
+            if (url.includes('/read-all/undo')) {
+              return { ok: true, status: 200, json: async () => ({ ok: true }) };
+            }
+            if (url.includes('/read-all')) {
+              return { ok: true, status: 200, json: async () => ({
+                ok: true,
+                read_all_seen_at: '2026-09-04T12:00:00+00:00',
+                previous_seen_at: null,
+              }) };
+            }
+            if (url.includes('/read')) {
+              return { ok: true, status: 200, json: async () => ({ ok: true }) };
             }
             if (url.includes('/api/news')) {
               if (data.delayed) {
@@ -217,7 +229,7 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
                   json: () => new Promise(resolve => { window.__resolveNews = resolve; }),
                 };
               }
-              return { ok: true, status: 200, json: async () => data.news };
+              return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(data.news)) };
             }
             return { ok: true, status: 200, json: async () => ({}) };
           };
@@ -1135,7 +1147,7 @@ def test_news_list_groups_by_day_and_unread_toggle_sends_param(page: Page, stati
     expect(toggle).to_have_class(re.compile(r"is-on"))
     expect(page.locator("#news-list .news-day-sep").first).to_be_visible()
     sent = page.evaluate("() => window.__newsRequests")
-    assert any("unread=1" in url for url in sent)
+    assert any("unread=1" in call["url"] for call in sent)
 
 
 @pytest.mark.parametrize("width", [390, 1280])
@@ -1153,3 +1165,40 @@ def test_news_stream_switches_source_navigation_by_viewport(page, static_origin,
     else:
         expect(page.locator(".news-source-rail")).to_be_hidden()
         expect(page.locator(".news-source-mobile")).to_be_visible()
+
+
+def test_news_item_mark_read_updates_counts_without_navigation(page: Page, static_origin: str):
+    install_news_bootstrap(page)
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
+    page.get_by_role("button", name="标为已读").click()
+    expect(page.locator('[data-news-id="7"]')).not_to_have_class(re.compile(r"is-unread"))
+    expect(page.locator('[data-news-id="7"] .news-item-unread-dot')).to_have_count(0)
+    expect(page.locator('[data-news-id="7"] .news-mark-read')).to_have_count(0)
+    assert page.url.endswith("/news")
+    assert any("/api/news/7/read" in call["url"] for call in page.evaluate("window.__newsRequests"))
+
+
+def test_news_read_all_offers_five_second_undo(page: Page, static_origin: str):
+    install_news_bootstrap(page)
+    page.clock.install()
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
+    page.get_by_role("button", name=re.compile("全部已读")).click()
+    expect(page.locator("#news-read-undo")).to_be_visible()
+    expect(page.get_by_role("button", name="撤销")).to_be_visible()
+    page.clock.run_for(4999)
+    expect(page.locator("#news-read-undo")).to_be_visible()
+    page.clock.run_for(1)
+    expect(page.locator("#news-read-undo")).to_be_hidden()
+
+
+def test_news_read_all_undo_restores_list(page: Page, static_origin: str):
+    install_news_bootstrap(page)
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
+    page.get_by_role("button", name=re.compile("全部已读")).click()
+    expect(page.locator("#news-read-undo")).to_be_visible()
+    page.get_by_role("button", name="撤销").click()
+    expect(page.locator("#news-read-undo")).to_be_hidden()
+    expect(page.locator('[data-news-id="7"]')).to_have_class(re.compile(r"is-unread"))
+    calls = page.evaluate("window.__newsRequests")
+    assert any(call["url"].endswith("/api/news/read-all/undo") or "/api/news/read-all/undo" in call["url"] for call in calls)
+    assert any(call.get("method", "").upper() == "POST" and "/read-all/undo" in call["url"] for call in calls)
