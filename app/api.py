@@ -331,6 +331,11 @@ class NewsSeenIn(BaseModel):
     view_started_at: str
 
 
+class NewsReadAllUndoIn(BaseModel):
+    read_all_seen_at: str
+    previous_seen_at: str | None = None
+
+
 class NewsSettingsIn(BaseModel):
     enabled: bool | None = None
     visible: bool | None = None
@@ -2443,10 +2448,22 @@ def create_api_router(
             raise HTTPException(status_code=503, detail="财经新闻服务不可用")
         return news_service
 
+    def _news_timestamp(raw: str, *, allow_future: bool = False) -> str:
+        try:
+            value = datetime.fromisoformat((raw or "").strip())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间") from None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间")
+        if not allow_future and value > datetime.now(UTC):
+            raise HTTPException(status_code=400, detail="时间不能晚于当前时间")
+        return value.astimezone(UTC).isoformat()
+
     @router.get("/news/sources")
     def news_sources(user: dict = Depends(get_current_user)):
         selected_ids = set(db.list_user_news_source_ids(user["id"]))
         statuses = {row["id"]: row for row in db.news_source_statuses(user["id"])}
+        unread_by_source = db.unread_news_counts_by_source(user["id"])
         items = []
         for source in db.list_news_sources():
             status = statuses.get(source["id"], {"code": "paused", "last_success_at": None})
@@ -2459,6 +2476,7 @@ def create_api_router(
                 "status": status["code"],
                 "last_success_at": status["last_success_at"],
                 "group_name": source["group_name"] or "",
+                "unread_count": unread_by_source.get(source["id"], 0),
             })
         return {
             "items": items,
@@ -2481,7 +2499,6 @@ def create_api_router(
             if browse is None or browse["archived_at"]:
                 raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
         view_started_at = datetime.now(UTC).isoformat()
-        anchor = (db.get_user(user["id"]) or {}).get("news_last_seen_at")
         rows = db.list_news_articles(
             user["id"], source_id=source_id, q=q, limit=limit, offset=offset,
             unread=unread, topic=topic.strip(),
@@ -2489,7 +2506,7 @@ def create_api_router(
         items = []
         for row in rows:
             row.pop("images", None)
-            row["is_new"] = bool(anchor and row["published_at"] > anchor)
+            row["is_new"] = not row["is_read"]
             items.append(row)
         total = db.count_news_articles(
             user["id"], source_id=source_id, q=q, unread=unread, topic=topic.strip()
@@ -2505,24 +2522,37 @@ def create_api_router(
 
     @router.post("/news/seen")
     def mark_news_seen(body: NewsSeenIn, user: dict = Depends(get_current_user)):
-        raw = (body.view_started_at or "").strip()
-        try:
-            value = datetime.fromisoformat(raw)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间") from None
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间")
-        if value > datetime.now(UTC):
-            raise HTTPException(status_code=400, detail="时间不能晚于当前时间")
-        normalized = value.astimezone(UTC).isoformat()
+        normalized = _news_timestamp(body.view_started_at)
         db.advance_news_seen(user["id"], normalized)
         return {"ok": True, "news_last_seen_at": normalized}
 
     @router.post("/news/read-all")
     def mark_news_read_all(user: dict = Depends(get_current_user)):
+        previous = (db.get_user(user["id"]) or {}).get("news_last_seen_at")
         normalized = datetime.now(UTC).isoformat()
         db.advance_news_seen(user["id"], normalized)
-        return {"ok": True, "news_last_seen_at": normalized}
+        return {
+            "ok": True,
+            "read_all_seen_at": normalized,
+            "previous_seen_at": previous,
+        }
+
+    @router.post("/news/read-all/undo")
+    def undo_news_read_all(body: NewsReadAllUndoIn, user: dict = Depends(get_current_user)):
+        expected = _news_timestamp(body.read_all_seen_at)
+        previous = _news_timestamp(body.previous_seen_at) if body.previous_seen_at else None
+        if previous and previous > expected:
+            raise HTTPException(status_code=400, detail="撤销时间无效")
+        if not db.restore_news_seen(user["id"], expected, previous):
+            raise HTTPException(status_code=409, detail="已读状态已变化，请刷新后重试")
+        return {"ok": True, "news_last_seen_at": previous}
+
+    @router.post("/news/{article_id}/read")
+    def mark_news_article_read(article_id: int, user: dict = Depends(get_current_user)):
+        if db.get_news_article(article_id, user_id=user["id"]) is None:
+            raise HTTPException(status_code=404, detail="文章不存在")
+        db.mark_news_article_read(user["id"], article_id)
+        return {"ok": True}
 
     @router.get("/news/{article_id}")
     def news_article(article_id: int, user: dict = Depends(get_current_user)):

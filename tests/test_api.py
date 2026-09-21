@@ -88,7 +88,8 @@ def test_news_list_and_seen_anchor_are_user_scoped():
     assert sources.json()["items"][0]["selected"] is True
     first = client.get("/api/news", headers=first_headers).json()
     assert first["items"][0]["id"] == article_id
-    assert first["items"][0]["is_new"] is False
+    assert first["items"][0]["is_read"] is False
+    assert first["items"][0]["is_new"] is True
     assert "view_started_at" in first
     assert client.post(
         "/api/news/seen", headers=first_headers,
@@ -254,19 +255,38 @@ def test_news_unread_filter_read_all_and_badge_count():
     # 从未打开过新闻页：全部未读
     sources = client.get("/api/news/sources", headers=headers).json()
     assert sources["unread_count"] == 2
+    source_item = next(item for item in sources["items"] if item["id"] == source_id)
+    assert source_item["unread_count"] == 2
     unread = client.get("/api/news?unread=1", headers=headers).json()
     assert {i["id"] for i in unread["items"]} == {old_id, new_id}
+    listed = client.get("/api/news", headers=headers).json()["items"]
+    assert all(item["is_read"] is False for item in listed)
+    assert client.post(f"/api/news/{old_id}/read", headers=headers).status_code == 200
+    assert client.get("/api/news/sources", headers=headers).json()["unread_count"] == 1
     # 水位推进到两篇之间：只剩新文未读
     assert db.advance_news_seen(uid, "2026-09-15T00:00:00+00:00")
     sources = client.get("/api/news/sources", headers=headers).json()
     assert sources["unread_count"] == 1
     unread = client.get("/api/news?unread=1", headers=headers).json()
     assert [i["id"] for i in unread["items"]] == [new_id]
-    # read-all 后：无未读
-    assert client.post("/api/news/read-all", headers=headers).status_code == 200
-    sources = client.get("/api/news/sources", headers=headers).json()
-    assert sources["unread_count"] == 0
-    assert client.get("/api/news?unread=1", headers=headers).json()["items"] == []
+    marked = client.post("/api/news/read-all", headers=headers)
+    assert marked.status_code == 200
+    undo = marked.json()
+    assert undo["read_all_seen_at"]
+    assert "previous_seen_at" in undo
+    assert client.get("/api/news/sources", headers=headers).json()["unread_count"] == 0
+
+    restored = client.post("/api/news/read-all/undo", headers=headers, json=undo)
+    assert restored.status_code == 200
+    assert client.get("/api/news/sources", headers=headers).json()["unread_count"] == 1
+    assert client.post("/api/news/read-all/undo", headers=headers, json=undo).status_code == 409
+
+
+def test_news_mark_read_requires_visible_article():
+    client = make_client("news-mark-read.db")
+    headers = user_headers(client, "reader")
+    assert client.post("/api/news/999999/read", headers=headers).status_code == 404
+    assert client.post("/api/news/999999/read").status_code == 401
 
 
 def test_news_font_size_roundtrip_and_validation():
