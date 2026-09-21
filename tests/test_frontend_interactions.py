@@ -4748,6 +4748,7 @@ def test_news_stream_css_has_two_column_and_mobile_contract():
     assert ".news-read-undo" in css
     assert ".news-stream-search .search-ic" in css
     assert ".news-source-row .nav-svg" in css
+    assert ".news-unread-toggle .eye-icon" in css
     mobile = _media_block(css, "@media (max-width: 768px)", last=False)
     assert ".news-source-rail" in mobile and "display: none" in mobile
     assert ".news-source-mobile" in mobile and "display:" in mobile
