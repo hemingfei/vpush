@@ -2300,6 +2300,34 @@ def test_news_article_reads_migrate_and_are_user_scoped(tmp_path):
     db.close()
 
 
+def test_news_source_browse_does_not_duplicate_for_multiple_subscribers(tmp_path):
+    db = DB(str(tmp_path / "source-browse-dup.db"))
+    first = db.add_user("first", "hash")
+    second = db.add_user("second", "hash")
+    source = db.add_news_source("多订阅读源")
+    feed = db.add_news_feed(source, "主源", "https://feed.example/dup", "https://feed.example/dup")
+    older = db.upsert_news_article(
+        _news_article_row(source, feed, "dup-1", "2026-09-20T10:00:00+00:00")
+    )
+    newer = db.upsert_news_article(
+        _news_article_row(source, feed, "dup-2", "2026-09-20T11:00:00+00:00")
+    )
+    db.set_user_news_sources(first, [source])
+    db.set_user_news_sources(second, [source])
+
+    items = db.list_news_articles(first, source_id=source, q="", limit=10, offset=0)
+    assert [item["id"] for item in items] == [newer, older]
+    assert db.count_news_articles(first, source_id=source, q="") == 2
+
+    assert db.mark_news_article_read(first, newer)
+    unread = db.list_news_articles(
+        first, source_id=source, q="", limit=10, offset=0, unread=True
+    )
+    assert [item["id"] for item in unread] == [older]
+    assert db.count_news_articles(first, source_id=source, q="", unread=True) == 1
+    db.close()
+
+
 def test_news_article_reads_follow_merge_and_delete(tmp_path):
     db = DB(str(tmp_path / "article-read-lifecycle.db"))
     source_user = db.add_user("source", "hash")

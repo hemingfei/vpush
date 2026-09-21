@@ -3761,7 +3761,7 @@ class DB:
         where, params = self._news_article_filter(
             user_id, source_id, (q or "").strip(), unread=unread, topic=topic
         )
-        params = [user_id, user_id, *params, max(1, min(int(limit), 100)), max(0, int(offset))]
+        params = [user_id, user_id, user_id, *params, max(1, min(int(limit), 100)), max(0, int(offset))]
         rows = self._rows(
             "SELECT a.id, a.title, a.url, a.author, a.summary, a.published_at, "
             "a.source_id, a.topics, s.name AS source_name, s.slug AS source_slug, "
@@ -3772,7 +3772,7 @@ class DB:
             "OR EXISTS (SELECT 1 FROM news_article_reads r "
             "WHERE r.user_id = ? AND r.article_id = a.id) "
             "THEN 1 ELSE 0 END AS is_read "
-            "FROM news_articles a LEFT JOIN user_news_sources u ON u.source_id = a.source_id "
+            "FROM news_articles a LEFT JOIN user_news_sources u ON u.source_id = a.source_id AND u.user_id = ? "
             "JOIN news_sources s ON s.id = a.source_id "
             f"WHERE {where} ORDER BY a.published_at DESC, a.id DESC LIMIT ? OFFSET ?",
             params,
@@ -3797,9 +3797,10 @@ class DB:
         where, params = self._news_article_filter(
             user_id, source_id, (q or "").strip(), unread=unread, topic=topic
         )
+        params = [user_id, *params]
         rows = self._rows(
             "SELECT COUNT(*) AS n FROM news_articles a "
-            "LEFT JOIN user_news_sources u ON u.source_id = a.source_id "
+            "LEFT JOIN user_news_sources u ON u.source_id = a.source_id AND u.user_id = ? "
             "JOIN news_sources s ON s.id = a.source_id "
             f"WHERE {where}",
             params,
