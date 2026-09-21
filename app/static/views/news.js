@@ -478,6 +478,10 @@ export function createNewsView(dependencies) {
       renderNewsListShell(state.newsCollectionEnabled !== false);
       const list = $("#news-list");
       list.innerHTML = state.newsUnreadOnly ? emptyState("没有未读文章，已经全部看完了") : newsListHtml(state.newsItems);
+      if (!state.newsUnreadOnly) {
+        attachListImages(currentRouteSeq());
+        startNewsAutoLoad(currentRouteSeq());
+      }
       const banner = $("#news-read-undo");
       banner.hidden = false;
       banner.innerHTML = `<span>已将全部资讯标为已读</span><button type="button" onclick="undoNewsReadAll()">撤销</button>`;

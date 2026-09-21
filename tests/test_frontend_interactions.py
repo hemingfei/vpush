@@ -4697,6 +4697,12 @@ def test_news_stream_layout_uses_responsive_source_navigation():
     assert "renderNewsListShell" in _fn_body("selectNewsSource", NEWS_JS)
 
 
+def test_news_mark_all_read_reattaches_images():
+    body = _fn_body("markAllNewsRead", NEWS_JS)
+    assert "attachListImages" in body
+    assert "startNewsAutoLoad" in body
+
+
 def test_news_pagination_appends_without_replacing_existing_thumbnails():
     body = _fn_body("loadFinancialNews", NEWS_JS)
     assert "insertAdjacentHTML" in body
