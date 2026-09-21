@@ -2473,6 +2473,7 @@ def create_api_router(
         source_id: int | None = Query(None),
         q: str = Query("", max_length=200),
         unread: bool = Query(False),
+        topic: str = Query("", max_length=20),
         user: dict = Depends(get_current_user),
     ):
         if source_id is not None:
@@ -2483,14 +2484,16 @@ def create_api_router(
         anchor = (db.get_user(user["id"]) or {}).get("news_last_seen_at")
         rows = db.list_news_articles(
             user["id"], source_id=source_id, q=q, limit=limit, offset=offset,
-            unread=unread,
+            unread=unread, topic=topic.strip(),
         )
         items = []
         for row in rows:
             row.pop("images", None)
             row["is_new"] = bool(anchor and row["published_at"] > anchor)
             items.append(row)
-        total = db.count_news_articles(user["id"], source_id=source_id, q=q, unread=unread)
+        total = db.count_news_articles(
+            user["id"], source_id=source_id, q=q, unread=unread, topic=topic.strip()
+        )
         return {
             "items": items,
             "offset": offset,

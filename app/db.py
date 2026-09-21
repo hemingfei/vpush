@@ -826,6 +826,7 @@ CREATE TABLE IF NOT EXISTS news_articles (
     summary TEXT NOT NULL DEFAULT '',
     content_html TEXT NOT NULL DEFAULT '',
     images TEXT NOT NULL DEFAULT '[]',
+    topics TEXT NOT NULL DEFAULT '[]',
     published_at TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
     content_hash TEXT NOT NULL,
@@ -1706,6 +1707,11 @@ class DB:
         if "group_name" not in source_cols:
             self._conn.execute(
                 "ALTER TABLE news_sources ADD COLUMN group_name TEXT NOT NULL DEFAULT ''"
+            )
+        article_cols = {row["name"] for row in self._rows("PRAGMA table_info(news_articles)")}
+        if "topics" not in article_cols:
+            self._conn.execute(
+                "ALTER TABLE news_articles ADD COLUMN topics TEXT NOT NULL DEFAULT '[]'"
             )
         # 内置源只在首次 seed（news_default_sources_v1 置位后整体跳过）：
         # 否则 INSERT OR IGNORE 拦不住已删除的行，管理员「彻底删除」内置源
@@ -3511,7 +3517,9 @@ class DB:
             article["source_id"], article["feed_id"], article["external_id"],
             article["title"], article["url"], article.get("author", ""),
             article.get("summary", ""), article.get("content_html", ""),
-            json.dumps(images, ensure_ascii=False), article["published_at"],
+            json.dumps(images, ensure_ascii=False),
+            json.dumps(article.get("topics") or [], ensure_ascii=False),
+            article["published_at"],
             article["fetched_at"], article.get("content_hash", ""),
         )
         with self._lock:
@@ -3519,12 +3527,13 @@ class DB:
                 self._conn.execute(
                     "INSERT INTO news_articles "
                     "(source_id, feed_id, external_id, title, url, author, summary, "
-                    "content_html, images, published_at, fetched_at, content_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "content_html, images, topics, published_at, fetched_at, content_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(source_id, external_id) DO UPDATE SET "
                     "feed_id = excluded.feed_id, title = excluded.title, url = excluded.url, "
                     "author = excluded.author, summary = excluded.summary, "
                     "content_html = excluded.content_html, images = excluded.images, "
+                    "topics = excluded.topics, "
                     "published_at = excluded.published_at, fetched_at = excluded.fetched_at, "
                     "content_hash = excluded.content_hash",
                     values,
@@ -3552,7 +3561,9 @@ class DB:
                 article["source_id"], article["feed_id"], article["external_id"],
                 article["title"], article["url"], article.get("author", ""),
                 article.get("summary", ""), article.get("content_html", ""),
-                json.dumps(images, ensure_ascii=False), article["published_at"],
+                json.dumps(images, ensure_ascii=False),
+                json.dumps(article.get("topics") or [], ensure_ascii=False),
+                article["published_at"],
                 article["fetched_at"], article.get("content_hash", ""),
             ))
         with self._lock:
@@ -3561,12 +3572,13 @@ class DB:
                 self._conn.executemany(
                     "INSERT INTO news_articles "
                     "(source_id, feed_id, external_id, title, url, author, summary, "
-                    "content_html, images, published_at, fetched_at, content_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "content_html, images, topics, published_at, fetched_at, content_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(source_id, external_id) DO UPDATE SET "
                     "feed_id = excluded.feed_id, title = excluded.title, url = excluded.url, "
                     "author = excluded.author, summary = excluded.summary, "
                     "content_html = excluded.content_html, images = excluded.images, "
+                    "topics = excluded.topics, "
                     "published_at = excluded.published_at, fetched_at = excluded.fetched_at, "
                     "content_hash = excluded.content_hash",
                     rows,
@@ -3576,6 +3588,22 @@ class DB:
                 self._conn.rollback()
                 raise
         return len(rows)
+
+    def backfill_news_topics(self, classify) -> int:
+        """给存量文章补主题标签；classify(title, summary) -> list[str]。"""
+        rows = self._rows(
+            "SELECT id, title, summary FROM news_articles WHERE topics = '[]'"
+        )
+        updated = 0
+        for row in rows:
+            topics = classify(row["title"], row["summary"])
+            if topics:
+                self._execute(
+                    "UPDATE news_articles SET topics = ? WHERE id = ?",
+                    (json.dumps(topics, ensure_ascii=False), row["id"]),
+                )
+                updated += 1
+        return updated
 
     def delete_news_article(self, article_id: int) -> bool:
         with self._lock:
@@ -3621,7 +3649,15 @@ class DB:
         except (TypeError, ValueError):
             images = []
         row["images"] = images if isinstance(images, list) else []
-        row["has_image"] = bool(row["images"])
+        # 列表查询用 SQL 别名预计算 has_image（不拖 images 列），此处不覆盖
+        if "has_image" not in row:
+            row["has_image"] = bool(row["images"])
+        raw_topics = row.get("topics")
+        try:
+            topics = json.loads(raw_topics) if isinstance(raw_topics, str) else raw_topics
+        except (TypeError, ValueError):
+            topics = []
+        row["topics"] = topics if isinstance(topics, list) else []
         return row
 
     def delete_news_articles_older_than(self, days: int) -> int:
@@ -3636,11 +3672,13 @@ class DB:
             return cur.rowcount
 
     def _news_article_filter(
-        self, user_id: int, source_id: int | None, q: str, *, unread: bool = False
+        self, user_id: int, source_id: int | None, q: str, *, unread: bool = False,
+        topic: str = "",
     ) -> tuple[str, list[object]]:
         """source_id 给定时按源浏览（源未归档即可读），否则限定用户订阅圈。
 
         unread 以 news_last_seen_at 水位线为准；从未打开过新闻页视为全部未读。
+        topic 匹配 topics JSON 数组里的标签值（带引号防子串误配）。
         """
         conds = [
             "s.id = a.source_id",
@@ -3659,6 +3697,9 @@ class DB:
                 "(SELECT news_last_seen_at FROM users WHERE id = ?), '')"
             )
             params.append(user_id)
+        if topic:
+            conds.append("a.topics LIKE ?")
+            params.append(f'%"{topic}"%')
         if q:
             conds.append("(a.title LIKE ? OR a.summary LIKE ?)")
             like = f"%{q}%"
@@ -3674,14 +3715,15 @@ class DB:
         limit: int,
         offset: int,
         unread: bool = False,
+        topic: str = "",
     ) -> list[dict]:
         where, params = self._news_article_filter(
-            user_id, source_id, (q or "").strip(), unread=unread
+            user_id, source_id, (q or "").strip(), unread=unread, topic=topic
         )
         params.extend([max(1, min(int(limit), 100)), max(0, int(offset))])
         rows = self._rows(
             "SELECT a.id, a.title, a.url, a.author, a.summary, a.published_at, "
-            "a.source_id, s.name AS source_name, s.slug AS source_slug, "
+            "a.source_id, a.topics, s.name AS source_name, s.slug AS source_slug, "
             "s.enabled AS source_enabled, "
             "(a.images IS NOT NULL AND a.images != '[]' AND a.images != '') AS has_image "
             "FROM news_articles a LEFT JOIN user_news_sources u ON u.source_id = a.source_id "
@@ -3689,7 +3731,10 @@ class DB:
             f"WHERE {where} ORDER BY a.published_at DESC, a.id DESC LIMIT ? OFFSET ?",
             params,
         )
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            result.append(self._normalize_news_article(dict(row)))
+        return result
 
     def count_news_articles_for_source(self, source_id: int) -> int:
         rows = self._rows(
@@ -3698,10 +3743,11 @@ class DB:
         return _to_int(rows[0]["n"]) if rows else 0
 
     def count_news_articles(
-        self, user_id: int, *, source_id: int | None, q: str, unread: bool = False
+        self, user_id: int, *, source_id: int | None, q: str, unread: bool = False,
+        topic: str = "",
     ) -> int:
         where, params = self._news_article_filter(
-            user_id, source_id, (q or "").strip(), unread=unread
+            user_id, source_id, (q or "").strip(), unread=unread, topic=topic
         )
         rows = self._rows(
             "SELECT COUNT(*) AS n FROM news_articles a "

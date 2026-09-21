@@ -2184,6 +2184,59 @@ def test_news_keyword_notify_helpers(tmp_path):
     db.close()
 
 
+def test_news_topic_classify_and_filter(tmp_path):
+    from app.news import classify_news_topics
+
+    db = DB(str(tmp_path / "topics.db"))
+    uid = db.add_user("reader", "hash")
+    source_id = db.add_news_source("主题源")
+    feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
+    macro = db.upsert_news_article({
+        **_news_article_row(source_id, feed_id, "m1", "2026-09-01T00:00:01+00:00"),
+        "title": "央行宣布降准，LPR 下调",
+        "topics": classify_news_topics("央行宣布降准，LPR 下调"),
+    })
+    tech = db.upsert_news_article({
+        **_news_article_row(source_id, feed_id, "t1", "2026-09-01T00:00:02+00:00"),
+        "title": "OpenAI 发布新大模型",
+        "topics": classify_news_topics("OpenAI 发布新大模型"),
+    })
+    plain = db.upsert_news_article({
+        **_news_article_row(source_id, feed_id, "p1", "2026-09-01T00:00:03+00:00"),
+    })
+    assert db.get_news_article(macro)["topics"] == ["宏观"]
+    assert db.get_news_article(tech)["topics"] == ["科技"]
+    assert db.get_news_article(plain)["topics"] == []
+
+    db.set_user_news_sources(uid, [source_id])
+    items = db.list_news_articles(uid, source_id=None, q="", limit=10, offset=0, topic="宏观")
+    assert [i["id"] for i in items] == [macro]
+    assert items[0]["topics"] == ["宏观"]
+    assert len(db.list_news_articles(uid, source_id=None, q="", limit=10, offset=0)) == 3
+
+    # 存量回填：只处理空 topics 的行，已有标签不覆盖；无关键词行保持空
+    db._execute("UPDATE news_articles SET topics = '[]' WHERE id = ?", (macro,))
+    assert db.backfill_news_topics(classify_news_topics) == 1
+    assert db.get_news_article(macro)["topics"] == ["宏观"]
+    assert db.get_news_article(tech)["topics"] == ["科技"]
+    assert db.get_news_article(plain)["topics"] == []
+    db.close()
+
+
+def test_news_batch_upsert_persists_topics(tmp_path):
+    db = DB(str(tmp_path / "batch-topics.db"))
+    source_id = db.add_news_source("批量主题源")
+    feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
+    db.upsert_news_articles_batch([
+        _news_article_row(source_id, feed_id, "k1", "2026-09-01T00:00:01+00:00"),
+        {**_news_article_row(source_id, feed_id, "k2", "2026-09-01T00:00:02+00:00"), "topics": ["科技"]},
+    ])
+    rows = {r["external_id"]: r["id"] for r in db._rows("SELECT id, external_id FROM news_articles")}
+    assert db.get_news_article(rows["k1"])["topics"] == []
+    assert db.get_news_article(rows["k2"])["topics"] == ["科技"]
+    db.close()
+
+
 def test_news_builtin_source_hard_delete_survives_reopen(tmp_path):
     db = DB(str(tmp_path / "builtin.db"))
     builtin = db._rows(

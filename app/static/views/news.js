@@ -56,7 +56,8 @@ export function createNewsView(dependencies) {
   }
 
   function newsListKey() {
-    return `${state.newsFilterSourceId || ""}|${(state.newsQuery || "").trim()}|${state.newsUnreadOnly ? "u" : ""}`;
+    const topic = state.newsTopic || "";
+    return `${state.newsFilterSourceId || ""}|${(state.newsQuery || "").trim()}|${state.newsUnreadOnly ? "u" : ""}|${topic}`;
   }
 
   function startNewsAutoLoad(seq) {
@@ -106,12 +107,24 @@ export function createNewsView(dependencies) {
     return groups;
   }
 
+  const NEWS_TOPICS = ["宏观", "国际", "科技", "公司", "市场"];
+
+  function newsTopicBarHtml() {
+    const active = state.newsTopic || "";
+    return `<div class="news-topic-bar" role="tablist" aria-label="新闻主题">
+      <button type="button" class="news-topic-chip ${active ? "" : "is-on"}" onclick="selectNewsTopic('')" aria-pressed="${active ? "false" : "true"}">全部</button>
+      ${NEWS_TOPICS.map((topic) => `<button type="button" class="news-topic-chip ${active === topic ? "is-on" : ""}" onclick="selectNewsTopic('${topic}')" aria-pressed="${active === topic ? "true" : "false"}">${topic}</button>`).join("")}
+    </div>`;
+  }
+
   function newsListItemHtml(item) {
     const thumbnail = item.has_image
       ? `<img class="news-list-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 64'%3E%3C/svg%3E" data-news-thumbnail="${item.id}" alt="" loading="lazy" onerror="this.style.display='none'">`
       : "";
+    const topics = Array.isArray(item.topics) && item.topics.length
+      ? `<span class="news-item-topics">${item.topics.map((topic) => `<i>${escapeHtml(topic)}</i>`).join("")}</span>` : "";
     return `<article class="news-list-item" data-news-id="${item.id}" tabindex="0" role="link" onclick="openNewsArticle(${item.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNewsArticle(${item.id})}">
-      <div class="news-list-copy"><div class="news-list-meta"><span>${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${item.is_new ? '<span class="news-new-label">新</span>' : ""}</div>
+      <div class="news-list-copy"><div class="news-list-meta"><span>${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${item.is_new ? '<span class="news-new-label">新</span>' : ""}${topics}</div>
       <h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary || "暂无摘要")}</p></div>${thumbnail}
     </article>`;
   }
@@ -158,6 +171,7 @@ export function createNewsView(dependencies) {
         </div>
         ${unreadCount ? '<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()">全部已读</button>' : ""}
       </div>
+      ${newsTopicBarHtml()}
       <div id="news-list" class="news-list">${newsListSkeletonHtml()}</div>
       <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
     </section>`;
@@ -236,6 +250,7 @@ export function createNewsView(dependencies) {
     if (state.newsFilterSourceId) params.set("source_id", state.newsFilterSourceId);
     if (state.newsQuery.trim()) params.set("q", state.newsQuery.trim());
     if (state.newsUnreadOnly) params.set("unread", "1");
+    if (state.newsTopic) params.set("topic", state.newsTopic);
     try {
       const data = await api(`/api/news?${params}`);
       if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
@@ -480,6 +495,13 @@ export function createNewsView(dependencies) {
     return loadFinancialNews(true, currentRouteSeq());
   }
 
+  function selectNewsTopic(topic) {
+    state.newsTopic = topic || "";
+    state.newsListKey = newsListKey();
+    renderNewsListShell(state.newsCollectionEnabled !== false);
+    return loadFinancialNews(true, currentRouteSeq());
+  }
+
   function queueNewsSearch(query) {
     state.newsQuery = query;
     clearTimeout(searchTimer);
@@ -501,6 +523,7 @@ export function createNewsView(dependencies) {
     renderNewsCenter,
     saveNewsSources,
     selectNewsSource,
+    selectNewsTopic,
     setNewsFontSize,
     toggleNewsUnreadOnly,
   };
