@@ -2466,8 +2466,6 @@ def create_api_router(
         unread_by_source = db.unread_news_counts_by_source(user["id"])
         items = []
         for source in db.list_news_sources():
-            if not source["enabled"]:
-                continue
             status = statuses.get(source["id"], {"code": "paused", "last_success_at": None})
             items.append({
                 "id": source["id"],
