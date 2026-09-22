@@ -4248,39 +4248,15 @@ async function removeFeishuDocumentSource(sourceId, title, button) {
   }
 }
 
-function imaStoragePanelHtml(storage) {
-  const st = storage || {};
-  const status = st.status || "local";
-  const used = Number.isFinite(Number(st.used_percent)) ? `${st.used_percent}%` : "—";
-  const resticOk = st.restic_last_check_ok === true ? "通过" : (st.restic_last_check_at ? "未通过" : "无记录");
-  const resticAt = st.restic_last_success ? fmtTs(st.restic_last_success) : "无";
-  const checkAt = st.restic_last_check_at ? fmtTs(st.restic_last_check_at) : "无";
-  const labels = {
-    local: "本地归档",
-    available: "可用",
-    stale: "状态过期",
-    unavailable: "暂不可用",
-    readonly: "只读",
-    capacity_blocked: "容量已限制",
-    missing: "未配置",
-    invalid: "状态无效",
-  };
+function imaStoragePanelHtml() {
   return `<section class="section-panel ks-panel" data-panel="storage" id="ks-panel-storage" role="tabpanel" aria-labelledby="ks-tab-storage">
     <header class="section-head"><div><h2 class="section-title">存储</h2>
-    <p class="section-meta">刷新探测，备份归档。密钥不进网页。</p></div></header>
-    <p class="muted" id="ima-storage-status">${escapeHtml(labels[status] || status)} · 用量 ${escapeHtml(used)} · 上次备份 ${escapeHtml(resticAt)} · 检查 ${escapeHtml(resticOk)}（${escapeHtml(checkAt)}）</p>
+    <p class="section-meta">现网经 ARM /pull 取文件。冷备由 ARM 推到存储机，此页不触发旧的 NFS 备份或去重。</p></div></header>
+    <p class="muted" id="ima-storage-status">正在检查 ARM…</p>
     <div class="toolbar ima-storage-toolbar">
       <button type="button" class="btn-ghost" id="ima-storage-refresh" onclick="refreshImaStorage()">刷新状态</button>
-      <button type="button" class="btn-normal" id="ima-storage-backup" onclick="backupImaStorage()">立即备份</button>
-      <button type="button" class="btn-ghost" id="ima-consistency-run" onclick="runStorageConsistency()">一致性体检</button>
     </div>
-    <div id="ima-storage-health"><p class="muted">存储健康加载中…</p></div>
-    <div id="ima-consistency" hidden></div>
-    <details class="ks-advanced" id="ima-storage-more">
-      <summary class="cfg-group-title">磁盘、备份与告警</summary>
-      <div id="ima-storage-details"><p class="muted">加载中…</p></div>
-    </details>
-    <p class="muted">去重每月 1 日 04:00 自动执行。</p>
+    <div id="ima-storage-health"><p class="muted">加载中…</p></div>
   </section>`;
 }
 

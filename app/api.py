@@ -4675,6 +4675,35 @@ def create_api_router(
         _audit(admin, "cicc_categories", "", note)
         return {"categories": cats, "keywords": keywords}
 
+    @router.get("/admin/ima-arm", dependencies=[Depends(require_admin)])
+    def ima_arm_link(admin: dict = Depends(require_admin)):
+        from .archive_guard import arm_pull_status
+
+        pull = arm_pull_status()
+        finished_raw = str(db.get_setting("ima_pure_last_finished_at") or "").strip()
+        try:
+            finished = int(finished_raw)
+        except ValueError:
+            finished = 0
+        result: dict = {}
+        raw_result = db.get_setting("ima_pure_last_result") or ""
+        if raw_result:
+            try:
+                parsed = json.loads(raw_result)
+            except json.JSONDecodeError:
+                parsed = {}
+            if isinstance(parsed, dict):
+                result = parsed
+        last_error = str(result.get("last_error") or "")[:200]
+        return {
+            "pull": pull,
+            "last_finished_at": finished,
+            "downloaded": int(result.get("downloaded") or 0),
+            "failed": int(result.get("failed") or 0),
+            "groups": int(result.get("succeeded_groups") or 0),
+            "last_error": last_error,
+        }
+
     @router.get("/admin/ima-storage/health", dependencies=[Depends(require_admin)])
     def ima_storage_health(admin: dict = Depends(require_admin)):
         from .cicc_collector import from_env

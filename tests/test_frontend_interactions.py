@@ -3157,10 +3157,10 @@ def test_knowledge_settings_p1_p2_control_density():
     assert knowledge.index('id="pc-zq-comments"') < knowledge.index('id="pc-zq-pages"')
     storage = _fn_body("imaStoragePanelHtml")
     assert "onclick=\"runStorageDedup()\"" not in storage
-    assert "去重每月 1 日 04:00 自动执行" in storage
-    assert "onclick=\"runStorageConsistency()\"" in storage
+    assert "此页不触发旧的 NFS 备份或去重" in storage
+    assert "onclick=\"runStorageConsistency()\"" not in storage
     health = _fn_body("loadStorageHealth")
-    assert "onclick=\"runStorageDedup()\"" in health
+    assert "/api/admin/ima-arm" in health
     card = _fn_body("renderLibraryControls")
     assert "<details open" not in card
     assert "details.cicc-collect" in card or 'class="cicc-collect"' in card
@@ -6010,9 +6010,8 @@ def test_knowledge_settings_storage_and_phone_sync_blocks():
     assert 'id="ima-pure-token"' not in knowledge
     assert 'id="ima-storage-status"' in _fn_body("imaStoragePanelHtml")
     assert "refreshImaStorage()" in _fn_body("imaStoragePanelHtml")
-    assert "backupImaStorage()" in _fn_body("imaStoragePanelHtml")
-    assert "立即备份" in _fn_body("imaStoragePanelHtml")
-    assert "刷新状态" in _fn_body("imaStoragePanelHtml")
+    assert "ARM /pull" in _fn_body("imaStoragePanelHtml")
+    assert "立即备份" not in _fn_body("imaStoragePanelHtml")
 
 
 def test_knowledge_settings_uses_collect_tabs_and_interval_chips():

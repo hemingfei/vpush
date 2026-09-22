@@ -52,52 +52,19 @@ export function createAdminInfraView(dependencies) {
 
   async function loadStorageHealth() {
     const box = document.getElementById("ima-storage-health");
-    const details = document.getElementById("ima-storage-details");
+    const status = document.getElementById("ima-storage-status");
     if (!box) return;
     try {
-      const h = await api("/api/admin/ima-storage/health");
-      const st = h.storage || {};
-      const disk = st.disk || {};
-      const pct = Number(disk.pct) || 0;
-      const color = pct >= 90 ? "var(--color-danger)" : pct >= 80 ? "var(--color-warning)" : "var(--color-success)";
-      const wg = st.wg || {};
-      const nfs = st.nfs || {};
-      const cats = ((st.archive || {}).categories || []).slice(0, 8)
-        .map((c) => `<li>${escapeHtml(c.name)}：${c.files} 篇 / ${(c.bytes / 1073741824).toFixed(2)} GB</li>`).join("");
-      const alertsState = (await api("/api/admin/ima-storage/alerts")) || {};
-      const cfg = alertsState.settings || {};
-      const b = h.backup || {};
-      const snapItems = (b.snapshots || []).map((s) => {
-        const d = s.time ? new Date(s.time) : null;
-        const when = d && !Number.isNaN(d.getTime()) ? d.toLocaleString() : escapeHtml(s.time || "未知时间");
-        return `<li>${when} · <code>${escapeHtml(String(s.id || "").slice(0, 8))}</code></li>`;
-      }).join("");
-      const backupHtml = !b.configured
-        ? `<p class="muted" style="color:var(--color-danger)">备份未生效：${escapeHtml(b.reason || "存储机 env 缺 RESTIC_REPOSITORY")}，需要配置备份目标</p>`
-        : snapItems
-          ? `<ul class="muted" style="margin:4px 0 0;padding-left:18px">${snapItems}</ul>`
-          : `<p class="muted">备份目标已配置，但还没有成功快照（${escapeHtml(b.reason || "可点「立即备份」试一次")}）</p>`;
-      box.innerHTML = `
-        <p class="section-meta">磁盘 <strong style="color:${color}">${disk.used_gb ?? "—"} / ${disk.total_gb ?? "—"} GB（${pct}%）</strong>
-         · 归档 ${(st.archive && st.archive.files) ?? "—"} 个 PDF
-         · 中德链路 ${wg.ok ? `${wg.rtt_ms ?? "—"} ms` : "不通"} · 归档挂载 ${nfs.mounted ? "正常" : "异常"}</p>
-        <div class="ima-storage-bar"><div style="width:${Math.min(pct, 100)}%;background:${color}"></div></div>`;
-      if (details) {
-        details.innerHTML = `
-        ${cats ? `<ul class="muted" style="margin:4px 0 0;padding-left:18px">${cats}</ul>` : ""}
-        <p class="section-meta" style="margin:10px 0 2px"><strong>备份</strong>（快照 · 上次成功 ${b.restic_last_success ? fmtTs(b.restic_last_success) : "无"}）</p>
-        ${backupHtml}
-        <div class="toolbar ima-storage-alerts">
-          <label>告警阈值 磁盘≥<input id="ima-alert-warn" type="number" value="${cfg.disk_warn ?? 80}">% /
-          <input id="ima-alert-crit" type="number" value="${cfg.disk_crit ?? 90}">%</label>
-          <label>状态过期 ≥<input id="ima-alert-stale" type="number" value="${cfg.stale_minutes ?? 30}"> 分钟</label>
-          <label><input id="ima-alert-notify" type="checkbox" ${cfg.notify_enabled ? "checked" : ""}> 推送通知</label>
-          <button type="button" class="btn-ghost" onclick="saveStorageAlerts()">保存告警设置</button>
-          <button type="button" class="btn-ghost" onclick="runStorageDedup()">立即去重</button>
-        </div>`;
-      }
+      const data = await api("/api/admin/ima-arm");
+      const pull = data.pull || {};
+      const when = data.last_finished_at ? fmtTs(data.last_finished_at) : "无";
+      const pullText = !pull.configured ? "未配置 /pull" : (pull.ok ? "ARM /pull 正常" : `ARM /pull 不可达（${pull.status || "失败"}）`);
+      if (status) status.textContent = pullText;
+      const err = data.last_error ? `<p class="muted">上次错误：${escapeHtml(data.last_error)}</p>` : "";
+      box.innerHTML = `<p class="section-meta">最近采集 ${escapeHtml(when)} · 成功 ${data.groups || 0} 个库 · 下载 ${data.downloaded || 0} · 失败 ${data.failed || 0}${pull.circuit_open ? " · 熔断打开" : ""}</p>${err}`;
     } catch (err) {
-      box.innerHTML = `<p class="muted">存储健康加载失败：${escapeHtml(err.message)}</p>`;
+      if (status) status.textContent = "ARM 状态加载失败";
+      box.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
     }
   }
 
@@ -123,12 +90,17 @@ export function createAdminInfraView(dependencies) {
     const sessionGeneration = imaMountState.sessionGeneration;
     if (btn) btn.disabled = true;
     try {
-      const data = await api("/api/admin/ima-storage/refresh", { method: "POST" });
+      const data = await api("/api/admin/ima-arm");
       if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-      const slot = $("#ks-panel-storage");
-      if (slot) slot.outerHTML = imaStoragePanelHtml(data);
-      loadStorageHealth();
-      flash("存储状态已刷新");
+      const status = $("#ima-storage-status");
+      const box = $("#ima-storage-health");
+      const pull = data.pull || {};
+      const when = data.last_finished_at ? fmtTs(data.last_finished_at) : "无";
+      if (status) status.textContent = !pull.configured ? "未配置 /pull" : (pull.ok ? "ARM /pull 正常" : `ARM /pull 不可达（${pull.status || "失败"}）`);
+      if (box) {
+        box.innerHTML = `<p class="section-meta">最近采集 ${escapeHtml(when)} · 成功 ${data.groups || 0} 个库 · 下载 ${data.downloaded || 0} · 失败 ${data.failed || 0}</p>`;
+      }
+      flash("ARM 状态已刷新");
     } catch (err) {
       if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
       flash(err.message, "error");
