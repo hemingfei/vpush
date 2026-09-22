@@ -127,15 +127,45 @@ def test_xueqiu_profile_cookie_survives_www_redirect(platform, monkeypatch):
     def client_factory(**kwargs):
         return real_client(transport=httpx.MockTransport(handler), **kwargs)
 
-    monkeypatch.setattr("httpx.Client", client_factory)
     monkeypatch.setattr("app.fetchers.combination._profile_cache", {})
     if platform == "xueqiu":
+        monkeypatch.setattr("httpx.Client", client_factory)
         result = resolve_profile("123", cookie="xq_a_token=abc")
         assert result["screen_name"] == "测试用户"
     else:
+        def session_factory(**kwargs):
+            return real_client(
+                transport=httpx.MockTransport(handler),
+                follow_redirects=True,
+                headers=kwargs.get("headers"),
+            )
+
+        monkeypatch.setattr("app.fetchers.combination.cffi.Session", session_factory)
         result = resolve_combination_profile("ZH123", cookie="xq_a_token=abc")
         assert result["name"] == "测试组合"
     assert seen == [("xueqiu.com", "xq_a_token=abc"), ("www.xueqiu.com", "xq_a_token=abc")]
+
+
+def test_cube_client_uses_chrome_impersonation(monkeypatch):
+    captured = {}
+
+    class FakeSession:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.headers = {}
+            self.cookies = httpx.Cookies()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("app.fetchers.combination.cffi.Session", FakeSession)
+    from app.fetchers.combination import _cube_client
+
+    client = _cube_client("xq_a_token=abc")
+    assert captured["impersonate"] == "chrome124"
+    assert captured["trust_env"] is False
+    assert "iPhone" not in str(captured.get("headers"))
+    assert client.cookies.get("xq_a_token") == "abc"
 
 
 def test_xueqiu_waf_cookie_merged_into_request(monkeypatch, tmp_path):

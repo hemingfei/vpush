@@ -10,6 +10,7 @@ import re
 import time
 
 import httpx
+from curl_cffi import requests as cffi
 
 from .base import (
     Fetcher,
@@ -44,19 +45,20 @@ def extract_cube_symbol(external_id: str) -> str:
     return match.group(1) if match else (external_id or "").strip()
 
 
-def _cube_client(cookie: str, db=None) -> httpx.Client:
+def _cube_client(cookie: str, db=None):
+    """Chrome 指纹会话。httpx 打 history.json 会被 EdgeOne 返回挑战页。"""
     from ..proxy import acquire_client_proxy, attach_proxy
 
     proxy, pid = acquire_client_proxy(db, "combination")
-    client = httpx.Client(
+    client = cffi.Session(
+        impersonate="chrome124",
         timeout=20,
-        follow_redirects=True,
         proxy=proxy,
+        trust_env=False,
         headers={
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
             "Accept": "application/json, text/plain, */*",
             "X-Requested-With": "XMLHttpRequest",
-            "Referer": "https://xueqiu.com/P/",
+            "Referer": "https://xueqiu.com/",
         },
     )
     apply_xueqiu_cookie(client, cookie)
