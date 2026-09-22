@@ -117,11 +117,12 @@ def test_shared_cache_failure_cooldown_and_recovery():
     with patch("app.market.httpx.Client") as factory, patch("app.market.time.monotonic", return_value=100) as clock, patch.object(cache, "_intraday", side_effect=lambda client, symbol: (symbol, None)):
         get = factory.return_value.__enter__.return_value.get
         get.return_value = response
-        # 冷缓存只后台刷新：首访立即返回占位快照（不上游请求），后台完成后真数据到位
+        # 冷缓存只后台刷新：首访立即返回占位快照（同步路径无上游请求），后台完成后真数据到位。
+        # call_count==0 与后台线程赛跑（CI 慢机必挂）：改为等刷新结束后校验首访恰好
+        # 只触发一次 get——同步路径若也请求会是 2 次
         placeholder = cache.snapshot("day")
         assert placeholder["stale"]
         assert placeholder["items"]
-        assert get.call_count == 0
         wait_for_market_refresh(cache, "day")
         first = cache.snapshot("day")
         assert not first["stale"]
@@ -135,6 +136,7 @@ def test_shared_cache_failure_cooldown_and_recovery():
         assert [item["price"] for item in failed["items"]] == [item["price"] for item in first["items"]]
         assert all(item["stale"] for item in failed["items"])
         cache.snapshot("day")
+        wait_for_market_refresh(cache, "day")
         assert get.call_count == 2
         clock.return_value = 162
         get.side_effect = None
