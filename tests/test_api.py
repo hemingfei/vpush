@@ -189,6 +189,7 @@ def test_news_article_next_id_and_admin_delete():
         "published_at": "2026-09-01T11:00:00+00:00",
         "fetched_at": "2026-09-01T11:00:00+00:00", "content_hash": "g2",
     })
+    db.set_user_news_sources(db.get_user_by_username("news_reader")["id"], [source_id])
     detail = client.get(f"/api/news/{second}", headers=user)
     assert detail.status_code == 200
     assert detail.json()["next_id"] == first

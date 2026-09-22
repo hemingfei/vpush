@@ -40,7 +40,7 @@ def test_shell_assets_and_registration_present():
         assert marker in src, f"sw.js 缺少 {marker}"
     # 前端注册 Service Worker 的入口仍在
     app_js = (SW_JS.parent / "app.js").read_text()
-    assert 'navigator.serviceWorker.register("/sw.js")' in app_js
+    assert "navigator.serviceWorker.register(`/sw.js?v=${APP_VERSION}`)" in app_js
 
 
 def test_sw_handles_push_and_notificationclick():
