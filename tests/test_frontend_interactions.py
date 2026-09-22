@@ -3160,7 +3160,9 @@ def test_knowledge_settings_p1_p2_control_density():
     assert "此页不触发旧的 NFS 备份或去重" in storage
     assert "onclick=\"runStorageConsistency()\"" not in storage
     health = _fn_body("loadStorageHealth")
-    assert "/api/admin/ima-arm" in health
+    assert "/api/admin/ima-arm" in health or "renderArmStorage" in health
+    assert "下一轮" in _fn_body("renderArmStorage")
+    assert 'id="ima-arm-groups"' in _fn_body("renderArmStorage")
     card = _fn_body("renderLibraryControls")
     assert "<details open" not in card
     assert "details.cicc-collect" in card or 'class="cicc-collect"' in card

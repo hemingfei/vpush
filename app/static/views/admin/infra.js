@@ -16,18 +16,37 @@ export function createAdminInfraView(dependencies) {
     PLATFORM_LABELS,
   } = dependencies;
 
+  function renderArmStorage(data) {
+    const box = document.getElementById("ima-storage-health");
+    const status = document.getElementById("ima-storage-status");
+    if (!box) return;
+    const pull = data.pull || {};
+    let pullText = "未配置 /pull";
+    if (pull.configured) {
+      pullText = pull.ok ? "ARM /pull 正常" : `ARM /pull 不可达（${pull.status || "失败"}）`;
+      if (pull.circuit_open) pullText += " · 熔断打开，短时间内不再打 ARM";
+    }
+    if (status) status.textContent = pullText;
+    const when = data.last_finished_at ? fmtTs(data.last_finished_at) : "无";
+    const next = data.next_run_at ? fmtTs(data.next_run_at) : "未排程";
+    const err = data.last_error ? `<p class="muted">上次错误：${escapeHtml(data.last_error)}</p>` : "";
+    const rows = (data.libraries || []).map((row) => {
+      const done = row.finished_at ? fmtTs(row.finished_at) : "—";
+      const note = row.error ? escapeHtml(row.error) : "—";
+      return `<tr><td>${escapeHtml(row.name || row.id || "")}</td><td>${row.downloaded || 0}</td><td>${row.failed || 0}</td><td>${escapeHtml(done)}</td><td>${note}</td></tr>`;
+    }).join("");
+    const table = rows
+      ? `<table id="ima-arm-groups"><thead><tr><th>知识库</th><th>下载</th><th>失败</th><th>结束</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<p class="muted">还没有分库记录。</p>`;
+    box.innerHTML = `<p class="section-meta">最近采集 ${escapeHtml(when)} · 成功 ${data.groups || 0} 个库 · 下载 ${data.downloaded || 0} · 失败 ${data.failed || 0}</p>${err}${table}<p class="section-meta">下一轮 ${escapeHtml(next)}（每天 01:00）</p>`;
+  }
+
   async function loadStorageHealth() {
     const box = document.getElementById("ima-storage-health");
     const status = document.getElementById("ima-storage-status");
     if (!box) return;
     try {
-      const data = await api("/api/admin/ima-arm");
-      const pull = data.pull || {};
-      const when = data.last_finished_at ? fmtTs(data.last_finished_at) : "无";
-      const pullText = !pull.configured ? "未配置 /pull" : (pull.ok ? "ARM /pull 正常" : `ARM /pull 不可达（${pull.status || "失败"}）`);
-      if (status) status.textContent = pullText;
-      const err = data.last_error ? `<p class="muted">上次错误：${escapeHtml(data.last_error)}</p>` : "";
-      box.innerHTML = `<p class="section-meta">最近采集 ${escapeHtml(when)} · 成功 ${data.groups || 0} 个库 · 下载 ${data.downloaded || 0} · 失败 ${data.failed || 0}${pull.circuit_open ? " · 熔断打开" : ""}</p>${err}`;
+      renderArmStorage(await api("/api/admin/ima-arm"));
     } catch (err) {
       if (status) status.textContent = "ARM 状态加载失败";
       box.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
@@ -44,14 +63,7 @@ export function createAdminInfraView(dependencies) {
     try {
       const data = await api("/api/admin/ima-arm");
       if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-      const status = $("#ima-storage-status");
-      const box = $("#ima-storage-health");
-      const pull = data.pull || {};
-      const when = data.last_finished_at ? fmtTs(data.last_finished_at) : "无";
-      if (status) status.textContent = !pull.configured ? "未配置 /pull" : (pull.ok ? "ARM /pull 正常" : `ARM /pull 不可达（${pull.status || "失败"}）`);
-      if (box) {
-        box.innerHTML = `<p class="section-meta">最近采集 ${escapeHtml(when)} · 成功 ${data.groups || 0} 个库 · 下载 ${data.downloaded || 0} · 失败 ${data.failed || 0}</p>`;
-      }
+      renderArmStorage(data);
       flash("ARM 状态已刷新");
     } catch (err) {
       if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;

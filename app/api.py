@@ -4678,6 +4678,7 @@ def create_api_router(
     @router.get("/admin/ima-arm", dependencies=[Depends(require_admin)])
     def ima_arm_link(admin: dict = Depends(require_admin)):
         from .archive_guard import arm_pull_status
+        from .ima_documents import arm_status_libraries, next_shanghai_schedule
 
         pull = arm_pull_status()
         finished_raw = str(db.get_setting("ima_pure_last_finished_at") or "").strip()
@@ -4694,14 +4695,40 @@ def create_api_router(
                 parsed = {}
             if isinstance(parsed, dict):
                 result = parsed
-        last_error = str(result.get("last_error") or "")[:200]
+        groups = []
+        raw_groups = db.get_setting("ima_pure_groups") or ""
+        if raw_groups:
+            try:
+                parsed_groups = json.loads(raw_groups)
+            except json.JSONDecodeError:
+                parsed_groups = []
+            if isinstance(parsed_groups, list):
+                groups = parsed_groups
+        runtime: dict = {}
+        raw_runtime = db.get_setting("ima_pure_group_runtime") or ""
+        if raw_runtime:
+            try:
+                parsed_runtime = json.loads(raw_runtime)
+            except json.JSONDecodeError:
+                parsed_runtime = {}
+            if isinstance(parsed_runtime, dict):
+                runtime = parsed_runtime
+        last_error = str(result.get("last_error") or result.get("discovery_error") or "")[:200]
+        libraries = arm_status_libraries(
+            groups,
+            runtime,
+            result,
+            download_count=db.ima_downloads_between,
+        )
         return {
             "pull": pull,
             "last_finished_at": finished,
+            "next_run_at": int(next_shanghai_schedule(time.time())),
             "downloaded": int(result.get("downloaded") or 0),
             "failed": int(result.get("failed") or 0),
             "groups": int(result.get("succeeded_groups") or 0),
             "last_error": last_error,
+            "libraries": libraries,
         }
 
     @router.get("/admin/ima-storage/health", dependencies=[Depends(require_admin)])

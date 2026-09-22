@@ -6610,6 +6610,18 @@ class DB:
             rows = self._read_only_rows("SELECT COUNT(*) AS n FROM ima_document_index")
         return int(rows[0]["n"] if rows else 0)
 
+    def ima_downloads_between(self, group_id: str, started: int, finished: int) -> int:
+        if not group_id or finished < started:
+            return 0
+        start = datetime.fromtimestamp(max(int(started) - 2, 0), UTC).isoformat()
+        end = datetime.fromtimestamp(int(finished) + 2, UTC).isoformat()
+        rows = self._read_only_rows(
+            "SELECT COUNT(*) AS n FROM ima_document_index "
+            "WHERE group_id = ? AND downloaded_at >= ? AND downloaded_at <= ?",
+            (group_id, start, end),
+        )
+        return int(rows[0]["n"] if rows else 0)
+
     def get_tag_vocabulary(self) -> list[dict]:
         """读贴文打标词表（settings 持久化），返回「标签 + 关键词」对象数组。
 
