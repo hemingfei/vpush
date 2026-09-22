@@ -3232,10 +3232,12 @@ def test_knowledge_settings_p1_p2_control_density():
     assert knowledge.index('id="pc-zq-comments"') < knowledge.index('id="pc-zq-pages"')
     storage = _fn_body("imaStoragePanelHtml")
     assert "onclick=\"runStorageDedup()\"" not in storage
-    assert "去重每月 1 日 04:00 自动执行" in storage
-    assert "onclick=\"runStorageConsistency()\"" in storage
+    assert "此页不触发旧的 NFS 备份或去重" in storage
+    assert "onclick=\"runStorageConsistency()\"" not in storage
     health = _fn_body("loadStorageHealth")
-    assert "onclick=\"runStorageDedup()\"" in health
+    assert "/api/admin/ima-arm" in health or "renderArmStorage" in health
+    assert "下一轮" in _fn_body("renderArmStorage")
+    assert 'id="ima-arm-groups"' in _fn_body("renderArmStorage")
     card = _fn_body("renderLibraryControls")
     assert "<details open" not in card
     assert "details.cicc-collect" in card or 'class="cicc-collect"' in card
@@ -3728,8 +3730,8 @@ def test_post_card_has_image_export_button():
     assert "class=\"cat cat-export post-card-export\"" in card
     assert "p-meta-actions" in card
     assert "p-meta-tags" not in card
-    assert "图卡 ${IMAGE_CARD_ICON}" in card
-    assert "复制图卡" in card
+    assert "图卡分享 ${IMAGE_CARD_ICON}" in card
+    assert "图卡分享" in card
     assert 'from "./views/post-card-export.js"' in src
     assert "createPostCardExport({" in src
     assert "_kolPosts" in src
@@ -3743,6 +3745,13 @@ def test_post_card_has_image_export_button():
     assert "(max-width: 768px)" in export_src
     assert "button.cat-export" in css
     assert "button.cat-export::before" in css
+
+
+def test_parse_published_naive_datetime_is_end_anchored():
+    body = _fn_body("parsePublished")
+    assert "(?::(\\d{2}))?$/" in body
+    export_body = _fn_body("parsePublished", APP_JS.parent / "views" / "post-card-export.js")
+    assert "(?::(\\d{2}))?$/" in export_body
 
 
 def test_post_to_card_model_maps_full_text_and_platform_fields():
@@ -3802,6 +3811,8 @@ assert.equal(hasCardContent(combo), true);
 
 const now = new Date(Date.UTC(2026, 8, 17, 1, 0));
 assert.match(formatCardTime("2026-09-17 09:00", now), /今天/);
+const noon = new Date("2026-09-17T15:26:00+08:00");
+assert.equal(formatCardTime("2026-09-17T07:26:00+00:00", noon), formatCardTime("2026-09-17 15:26:00", noon));
 """
     subprocess.run(["node", "--input-type=module", "-e", js], cwd=ROOT, check=True)
 
@@ -4830,15 +4841,19 @@ def test_mobile_bottom_navigation_has_d1_feedback_contract():
     assert "transform: none" not in keyframes
 
 
+def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
     src = NEWS_JS.read_text()
     for name in (
         "renderNewsCenter", "loadFinancialNews",
         "openNewsArticle", "observeNewsLazyImages", "clearNewsImageUrls",
     ):
         assert f"function {name}" in src or f"async function {name}" in src
+    # 未读双轨：列表浏览推进水位线（seen），单篇阅读/全部已读走 news_article_reads
     seen = _fn_body("loadFinancialNews", NEWS_JS)
     assert '"/api/news/seen"' in seen
     assert "view_started_at" in seen
+    modal = _fn_body("openNewsArticleModal", NEWS_JS)
+    assert "/read" in modal and 'method: "POST"' in modal
     images = _fn_body("clearNewsImageUrls", NEWS_JS)
     assert "URL.revokeObjectURL" in images
 
@@ -4860,10 +4875,48 @@ def test_news_images_lazy_load_and_abort_on_route_change():
     assert "newsImageAbort: null" in APP_JS.read_text()
 
 
+def test_news_mark_all_read_reattaches_images():
+    body = _fn_body("markAllNewsRead", NEWS_JS)
+    assert "startNewsAutoLoad" in body
+    assert "routeStillActive" in body
+    assert "routeStillActive" in _fn_body("markNewsItemRead", NEWS_JS)
+
+
+def test_news_list_item_does_not_nest_button_in_link():
+    body = _fn_body("newsListItemHtml", NEWS_JS)
+    assert 'role="link"' not in body
+    assert 'tabindex="0"' not in body
+    assert 'class="news-item-open"' in body
+    assert 'href="/news/' in body
+    open_at = body.find('class="news-item-open"')
+    close_at = body.find("</a>", open_at)
+    mark_at = body.find("news-mark-read")
+    assert close_at != -1 and mark_at != -1 and close_at < mark_at
+
+
 def test_news_pagination_appends_without_replacing_existing_thumbnails():
     body = _fn_body("loadFinancialNews", NEWS_JS)
     assert "insertAdjacentHTML" in body
     assert "state.newsItems.map(newsListItemHtml)" not in body
+
+
+def test_news_stream_uses_shared_line_icons_and_handlers():
+    icons = (ROOT / "app/static/core/icons.js").read_text()
+    app = APP_JS.read_text()
+    news = NEWS_JS.read_text()
+    for name in ("CHECK_ICON", "CHECK_CHECK_ICON"):
+        assert f"export const {name}" in icons
+        assert name in app
+        assert name in news
+    for name in ("markNewsItemRead", "undoNewsReadAll"):
+        assert name in app
+        assert name in news
+
+
+def test_news_unread_and_undo_css_contract():
+    css = STYLE_CSS.read_text()
+    assert ".news-item-unread-dot" in css and "width: 7px" in css
+    assert ".news-read-undo" in css
 
 
 def test_admin_news_tab_is_full_feed_manager():
@@ -5310,26 +5363,33 @@ def test_admin_codes_page_has_batch_bar():
     assert ".rc-checkall" in css
 
 
-def test_register_codes_mobile_has_field_labels_and_compact_grid():
-    """注册码页移动端：每格带 data-label 字段名、备注独占整行、批次操作两列等宽。"""
+def test_register_codes_mobile_list_is_code_first_cards():
+    """注册码页移动端：码+状态一行，时间与复制/作废同行，空字段不占位。"""
     row = _fn_body("renderCodeRow")
     batch = _fn_body("renderCodeGroups")
     css = STYLE_CSS.read_text()
+    mobile = _media_block(css, "@media (max-width: 768px)")
 
-    for label in ("邀请码", "备注", "状态", "使用者", "时间", "操作"):
-        assert f'data-label="{label}"' in row
-    assert "rc-note-cell" in row
+    for cls in ("rc-code-cell", "rc-note-cell", "rc-status-cell", "rc-user-cell", "rc-time-cell", "rc-actions"):
+        assert cls in row
+    assert "rc-empty-cell" in row
+    assert "data-label=" not in row
     assert "rc-note-input" not in row
     assert "adminSaveCodeNote" not in row
-    assert "rc-counts" in batch  # 可用/已用独立元素，不再混在长行里断行
-    assert ".rc-table td::before" in css
-    assert 'content: attr(data-label)' in css
-    assert "rc-note-cell" in css
-    assert "grid-column: 1 / -1" in css
-    assert "repeat(2, minmax(0, 1fr))" in css  # 批次操作与表格均为两列等宽网格
-    assert ".settings-tabs" in css and "flex-wrap: nowrap" in css  # 筛选一行横向滚动
+    assert "rc-counts" in batch
+    assert "td.rc-empty-cell" in mobile
+    assert "td.rc-actions" in mobile and "display: flex" in mobile
+    assert "min-width: 52px" in mobile
+    assert "padding: 10px 0" in mobile
+    btn_sm = re.search(r"(?m)^\.btn-sm \{.*?\n\}", css, re.DOTALL).group(0)
+    assert "border-radius: var(--radius-control)" in btn_sm
+    assert "border-radius: var(--radius-pill)" not in btn_sm
+    assert "border-radius: var(--radius-control)" in mobile
+    assert "grid-column: 1 / -1" in mobile
+    assert "repeat(2, minmax(0, 1fr))" in css
+    assert ".settings-tabs" in css and "flex-wrap: nowrap" in css
     hide = re.search(r"([^{}]+)\{[^}]*scrollbar-width:\s*none", css)
-    assert hide and ".settings-tabs" in hide.group(1)  # 横向滑动时隐藏滚动条，避免移动端滑动框
+    assert hide and ".settings-tabs" in hide.group(1)
 
 
 def test_register_codes_desktop_controls_share_one_grid():
@@ -6102,9 +6162,8 @@ def test_knowledge_settings_storage_and_phone_sync_blocks():
     assert 'id="ima-pure-token"' not in knowledge
     assert 'id="ima-storage-status"' in _fn_body("imaStoragePanelHtml")
     assert "refreshImaStorage()" in _fn_body("imaStoragePanelHtml")
-    assert "backupImaStorage()" in _fn_body("imaStoragePanelHtml")
-    assert "立即备份" in _fn_body("imaStoragePanelHtml")
-    assert "刷新状态" in _fn_body("imaStoragePanelHtml")
+    assert "ARM /pull" in _fn_body("imaStoragePanelHtml")
+    assert "立即备份" not in _fn_body("imaStoragePanelHtml")
 
 
 def test_knowledge_settings_uses_collect_tabs_and_interval_chips():

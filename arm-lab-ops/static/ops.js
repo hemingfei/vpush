@@ -30,7 +30,7 @@ const NAV = [
   { group: "缓存", items: [
     { route: "puller", icon: ICONS.puller, label: "Puller" },
     { route: "failed", icon: ICONS.failed, label: "失败队列" },
-    { route: "storage", icon: ICONS.storage, label: "115" },
+    { route: "storage", icon: ICONS.storage, label: "冷备" },
   ]},
   { group: "实验室", items: [
     { route: "settings", icon: ICONS.settings, label: "旋钮" },
@@ -51,7 +51,7 @@ const TITLES = {
   ima: "IMA 凭据",
   puller: "Puller",
   failed: "失败队列",
-  storage: "115 / OpenList",
+  storage: "冷备",
   settings: "实验室旋钮",
   more: "更多",
 };
@@ -244,6 +244,36 @@ function bucket(b) {
   if (!b.exists) return "无目录";
   const mark = b.truncated ? " · 已截断" : "";
   return (b.files || 0) + " 个 · " + fmtBytes(b.bytes) + mark;
+}
+
+function backupState(channel) {
+  const timer = channel.timer || {};
+  const uploads = channel.uploads || {};
+  if (channel.id === "storage") {
+    const bits = [timer.enabled || timer.active || "unknown"];
+    if (timer.next) bits.push(timer.next);
+    if (timer.last_trigger) bits.push("上次 " + timer.last_trigger);
+    return bits.join(" · ");
+  }
+  let text = "ok " + (uploads.ok || 0) + " / fail " + (uploads.fail || 0);
+  if (channel.cookie_present === false) text += " · 缺 Cookie";
+  return text;
+}
+
+function renderBackups(channels) {
+  const body = document.getElementById("backup-body");
+  if (!body) return;
+  body.textContent = "";
+  (channels || []).forEach((channel) => {
+    const row = document.createElement("tr");
+    [channel.priority, channel.label, channel.detail || channel.mode || "", backupState(channel)]
+      .forEach((text) => {
+        const cell = document.createElement("td");
+        cell.textContent = text == null ? "" : String(text);
+        row.appendChild(cell);
+      });
+    body.appendChild(row);
+  });
 }
 
 function setPipe(id, state, value, sub) {
@@ -490,6 +520,17 @@ function render(s) {
     policy.keep_hot === false ? "warn" : "ok",
     policy.keep_hot === false ? "未开 keep_hot" : "先入 hot",
     bucket(cache.hot),
+  );
+  const backups = s.backups || [];
+  renderBackups(backups);
+  const storageCh = backups.find((ch) => ch.id === "storage") || {};
+  const storageTimer = storageCh.timer || {};
+  const storageOn = storageTimer.active === "active" || storageTimer.enabled === "enabled";
+  setPipe(
+    "backup",
+    storageOn ? "ok" : "warn",
+    storageOn ? "存储机优先" : "存储机 timer 未开",
+    "然后 115",
   );
   setPipe(
     "pull",

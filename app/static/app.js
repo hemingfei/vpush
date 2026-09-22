@@ -1,6 +1,6 @@
 import { escapeHtml, imgProxyUrl, imgSrcFor, jsString } from "./core/html.js";
 import {
-  ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, BRAIN_ICON, CHEVRON_DOWN_ICON, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON,
+  ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, BRAIN_ICON, CHECK_CHECK_ICON, CHECK_ICON, CHEVRON_DOWN_ICON, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON,
   CHEVRON_UP_ICON, COPY_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
   EYE_ICON, EYE_OFF_ICON, EXTERNAL_LINK_ICON, FEISHU_DATE_ICON, FILE_TEXT_ICON, FILTER_ICON,
   GEAR_ICON, GITHUB_ICON, GRID_ICON, HISTORY_ICON, HOLDINGS_ICON, HOME_ICON, IMAGE_CARD_ICON, KEY_ICON, LIST_ICON,
@@ -54,7 +54,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.226";
+const APP_VERSION = "1.12.241";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -90,6 +90,9 @@ const state = {
   newsUnreadOnly: false,
   newsUnreadCount: 0,
   newsTab: "realtime",
+  newsTopic: "",
+  newsListKey: "",
+  newsScrollY: 0,
   newsRtItems: [],
   newsRtOffset: 0,
   newsRtHasMore: false,
@@ -3719,7 +3722,7 @@ function parsePublished(s) {
     const tz = new Date(raw);
     return isNaN(tz.getTime()) ? null : tz;
   }
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(raw);
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(raw);
   if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - 8, +m[5], +(m[6] || 0))); // 无时区裸时间视为北京时间
   const d = new Date(raw); // RFC2822 等 JS 可解析格式（带时区偏移，正确换算本地时间）
   return isNaN(d.getTime()) ? null : d;
@@ -3996,7 +3999,7 @@ function postCard(post) {
         ${post.post_type === "reply" ? `<span class="cat">回复</span>` : ""}
         ${renderPostTagChips(post.tags, post.view_directions, post.pending_tags)}
         <div class="p-meta-actions">
-        <button type="button" class="cat cat-export post-card-export" onclick="exportPostCard(${post.id}, event)" aria-label="复制图卡" title="复制图卡">图卡 ${IMAGE_CARD_ICON}</button>
+        <button type="button" class="cat cat-export post-card-export" onclick="exportPostCard(${post.id}, event)" aria-label="图卡分享" title="图卡分享">图卡分享 ${IMAGE_CARD_ICON}</button>
         ${(post.platform === "mx" && state.user?.can_mx_action_mark) ? `<a href="#" data-post-id="${post.id}"
              onclick="event.preventDefault();openActionMarkModal(${post.id})"
              title="人工标注该消息的个股操作（建仓/加仓/减仓/清仓/非操作），修正预估持仓">标注 ${CHEVRON_RIGHT_ICON}</a>` : ""}
@@ -5890,39 +5893,15 @@ async function removeFeishuDocumentSource(sourceId, title, button) {
   }
 }
 
-function imaStoragePanelHtml(storage) {
-  const st = storage || {};
-  const status = st.status || "local";
-  const used = Number.isFinite(Number(st.used_percent)) ? `${st.used_percent}%` : "—";
-  const resticOk = st.restic_last_check_ok === true ? "通过" : (st.restic_last_check_at ? "未通过" : "无记录");
-  const resticAt = st.restic_last_success ? fmtTs(st.restic_last_success) : "无";
-  const checkAt = st.restic_last_check_at ? fmtTs(st.restic_last_check_at) : "无";
-  const labels = {
-    local: "本地归档",
-    available: "可用",
-    stale: "状态过期",
-    unavailable: "暂不可用",
-    readonly: "只读",
-    capacity_blocked: "容量已限制",
-    missing: "未配置",
-    invalid: "状态无效",
-  };
+function imaStoragePanelHtml() {
   return `<section class="section-panel ks-panel" data-panel="storage" id="ks-panel-storage" role="tabpanel" aria-labelledby="ks-tab-storage">
     <header class="section-head"><div><h2 class="section-title">存储</h2>
-    <p class="section-meta">刷新探测，备份归档。密钥不进网页。</p></div></header>
-    <p class="muted" id="ima-storage-status">${escapeHtml(labels[status] || status)} · 用量 ${escapeHtml(used)} · 上次备份 ${escapeHtml(resticAt)} · 检查 ${escapeHtml(resticOk)}（${escapeHtml(checkAt)}）</p>
+    <p class="section-meta">现网经 ARM /pull 取文件。冷备由 ARM 推到存储机，此页不触发旧的 NFS 备份或去重。</p></div></header>
+    <p class="muted" id="ima-storage-status">正在检查 ARM…</p>
     <div class="toolbar ima-storage-toolbar">
       <button type="button" class="btn-ghost" id="ima-storage-refresh" onclick="refreshImaStorage()">刷新状态</button>
-      <button type="button" class="btn-normal" id="ima-storage-backup" onclick="backupImaStorage()">立即备份</button>
-      <button type="button" class="btn-ghost" id="ima-consistency-run" onclick="runStorageConsistency()">一致性体检</button>
     </div>
-    <div id="ima-storage-health"><p class="muted">存储健康加载中…</p></div>
-    <div id="ima-consistency" hidden></div>
-    <details class="ks-advanced" id="ima-storage-more">
-      <summary class="cfg-group-title">磁盘、备份与告警</summary>
-      <div id="ima-storage-details"><p class="muted">加载中…</p></div>
-    </details>
-    <p class="muted">去重每月 1 日 04:00 自动执行。</p>
+    <div id="ima-storage-health"><p class="muted">加载中…</p></div>
   </section>`;
 }
 
@@ -6625,11 +6604,13 @@ const { exportPostCard } = createPostCardExport({
 });
 
 const {
+  clearNewsFilters,
   clearNewsReaderState,
   loadFinancialNews,
   loadRealtimeNews,
   loadResearchNews,
   markAllNewsRead,
+  markNewsItemRead,
   newsRtBacktopClick,
   newsRtExpand,
   newsRtNewBadgeClick,
@@ -6648,8 +6629,10 @@ const {
   selectNewsResearchSource,
   selectNewsSource,
   selectNewsTab,
+  selectNewsTopic,
   setNewsFontSize,
   toggleNewsUnreadOnly,
+  undoNewsReadAll,
 } = createNewsView({
   $,
   state,
@@ -6681,6 +6664,13 @@ const {
   renderSidebar: () => renderSidebar(state.user),
   renderBottomNav: () => renderBottomNav(state.user),
   updateNewsBadge,
+  SEARCH_ICON,
+  GEAR_ICON,
+  NEWS_ICON,
+  EYE_ICON,
+  CHEVRON_DOWN_ICON,
+  CHECK_ICON,
+  CHECK_CHECK_ICON,
 });
 
 const {
@@ -6997,7 +6987,7 @@ let kolView, loadAdminKols, loadAdminVocab, switchAdminKolsPlatform, adminKolsAp
   researchKolDiscard, loadWscnBroadcastPanel, saveWscnBroadcastSettings;
 
 // admin 视图懒加载：infra 由 ensureAdminViews() 赋值，求值期读到的是 undefined
-let infraView, runStorageConsistency, runStorageDedup, loadStorageHealth, saveStorageAlerts, refreshImaStorage, backupImaStorage, loadProxyAdmin,
+let infraView, loadStorageHealth, refreshImaStorage, loadProxyAdmin,
   syncProxyRouteInputs, syncProxyPoolForm, saveProxyRoutes, createProxyPool, importProxyPool, extractProxyPool, deleteProxyPool, deleteProxyNode, testProxyNode,
   loadAdminBackup, saveBackupWebDAV, testBackupWebDAV, backupDownload, backupRestoreWebDAV, backupRestoreUpload,
   loadAdminImages, loadImageDirectHosts, saveImageDirectHosts, scanImageCleanup, toggleAllImageCleanup, runImageCleanup;
@@ -7281,12 +7271,8 @@ async function ensureAdminViews() {
     })));
 
     ({
-  runStorageConsistency,
-  runStorageDedup,
   loadStorageHealth,
-  saveStorageAlerts,
   refreshImaStorage,
-  backupImaStorage,
   loadProxyAdmin,
   syncProxyRouteInputs,
   syncProxyPoolForm,
@@ -9054,13 +9040,13 @@ const INLINE_HANDLERS = {
   backFromImaReader,
   broadcastWscnItem,
   backupDownload,
-  backupImaStorage,
   backupRestoreUpload,
   backupRestoreWebDAV,
   cancelFeishuPersonal,
   clearAdminCodesResult,
   clearImaDocumentsFilter,
   clearImaDocumentsFilters,
+  clearNewsFilters,
   clearSavedCookie,
   closeAdminModal,
   closeLightbox,
@@ -9130,6 +9116,7 @@ const INLINE_HANDLERS = {
   loadWscnBroadcastPanel,
   logout,
   markAllNewsRead,
+  markNewsItemRead,
   newsKolAll,
   newsKolDiscard,
   newsKolNone,
@@ -9195,8 +9182,6 @@ const INLINE_HANDLERS = {
   retryImaGroupAcl,
   runImageCleanup,
   runSearch,
-  runStorageConsistency,
-  runStorageDedup,
   saveAdminNewsSettings,
   saveBackupWebDAV,
   saveBarkKey,
@@ -9222,7 +9207,6 @@ const INLINE_HANDLERS = {
   savePollingConfig,
   saveProxyRoutes,
   savePushChannels,
-  saveStorageAlerts,
   saveTranslateTwitter,
   saveTwitterCookie,
   saveWecomWebhook,
@@ -9243,6 +9227,7 @@ const INLINE_HANDLERS = {
   selectNewsResearchSource,
   selectNewsSource,
   selectNewsTab,
+  selectNewsTopic,
   selectPlatformTab,
   setFeishuSourceDisplay,
   setImaGroupInterval,
@@ -9302,6 +9287,7 @@ const INLINE_HANDLERS = {
   triggerCicc,
   triggerImaCollector,
   unbindChannel,
+  undoNewsReadAll,
   unsubscribeKnowledge,
   updateAdminNewsArchived,
   updateAdminNewsQuery,

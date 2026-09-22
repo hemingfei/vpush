@@ -115,6 +115,81 @@ def shanghai_schedule_gate(now: float, hour: int = IMA_SCHEDULE_HOUR) -> float:
     return dt.replace(hour=hour, minute=0, second=0, microsecond=0).timestamp()
 
 
+def arm_status_libraries(
+    groups: list,
+    runtime: dict,
+    result: dict,
+    download_count=None,
+) -> list[dict]:
+    """Rows for the admin storage tab. Prefer stored per-group results."""
+    stored = result.get("group_results")
+    if isinstance(stored, list) and stored:
+        rows = []
+        for item in stored:
+            if not isinstance(item, dict):
+                continue
+            gid = str(item.get("id") or "")
+            stamp = runtime.get(gid) if isinstance(runtime, dict) else None
+            finished = int((stamp or {}).get("last_finished_at") or 0)
+            rows.append({
+                "id": gid,
+                "name": str(item.get("name") or gid)[:80],
+                "downloaded": int(item.get("downloaded") or 0),
+                "failed": int(item.get("failed") or 0),
+                "finished_at": finished,
+                "error": str(item.get("error") or "")[:200],
+            })
+        return rows
+
+    errors = result.get("group_errors") if isinstance(result.get("group_errors"), dict) else {}
+    failed_ids = {str(item) for item in (result.get("failed_groups") or [])}
+    rows = []
+    for group in groups or []:
+        if not isinstance(group, dict):
+            continue
+        if group.get("enabled") is False:
+            continue
+        gid = str(group.get("id") or "")
+        if not gid or gid.startswith("local-"):
+            continue
+        stamp = runtime.get(gid) if isinstance(runtime, dict) else None
+        started = int((stamp or {}).get("last_started_at") or 0)
+        finished = int((stamp or {}).get("last_finished_at") or 0)
+        downloaded = 0
+        if started and finished and callable(download_count):
+            downloaded = int(download_count(gid, started, finished) or 0)
+        err = str(errors.get(gid) or "")[:200]
+        failed = 1 if gid in failed_ids else 0
+        rows.append({
+            "id": gid,
+            "name": str(group.get("name") or gid)[:80],
+            "downloaded": downloaded,
+            "failed": failed,
+            "finished_at": finished,
+            "error": err,
+        })
+    return rows
+
+
+def cicc_status_row(stamp: str, count: int, *, name: str = "中金") -> dict:
+    """Last CICC ingest batch. Not part of the IMA group sync."""
+    finished = 0
+    text = str(stamp or "").strip()
+    if text:
+        try:
+            finished = int(datetime.fromisoformat(text).timestamp())
+        except ValueError:
+            finished = 0
+    return {
+        "id": "local-cicc-research",
+        "name": (name or "中金")[:80],
+        "downloaded": int(count or 0),
+        "failed": 0,
+        "finished_at": finished,
+        "error": "",
+    }
+
+
 def group_next_run_at(group: ImaGroupConfig, last_started_at: float, now: float) -> float:
     interval = _clamp_group_interval(group.interval_seconds)
     if interval >= 86400:
@@ -4862,6 +4937,7 @@ class ImaDocumentService:
             group_errors: dict[str, str] = {}
             last_error = discovery_error
             succeeded_groups = 0
+            group_results: list[dict[str, Any]] = []
             title_overrides = load_title_overrides(self.store.archive_root)
             for group in enabled_groups:
                 if self._cancel_requested:
@@ -4887,6 +4963,13 @@ class ImaDocumentService:
                         group_errors[group.id] = group_result["last_error"]
                         if not last_error:
                             last_error = group_result["last_error"]
+                    group_results.append({
+                        "id": group.id,
+                        "name": group.name,
+                        "downloaded": int(group_result.get("downloaded") or 0),
+                        "failed": int(group_result.get("failed") or 0),
+                        "error": str(group_result.get("last_error") or "")[:200],
+                    })
                 except Exception as exc:  # noqa: BLE001 - isolate one group
                     failed_groups.append(group.id)
                     failures += 1
@@ -4894,6 +4977,13 @@ class ImaDocumentService:
                     group_errors[group.id] = group_error
                     if not last_error:
                         last_error = group_error
+                    group_results.append({
+                        "id": group.id,
+                        "name": group.name,
+                        "downloaded": 0,
+                        "failed": 1,
+                        "error": group_error[:200],
+                    })
                     logger.warning("IMA group failed group=%s error=%s", group.id[:64], group_error)
             result = {
                 "groups": len(enabled_groups),
@@ -4907,6 +4997,7 @@ class ImaDocumentService:
                 "downloaded": downloaded,
                 "failed": failures,
                 "last_error": last_error,
+                "group_results": group_results,
             }
             self.db.set_setting(IMA_PURE_LAST_FINISHED_KEY, str(int(time.time())))
             self.db.set_setting(IMA_PURE_LAST_RESULT_KEY, json.dumps(result, ensure_ascii=False))

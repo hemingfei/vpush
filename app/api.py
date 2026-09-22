@@ -371,6 +371,11 @@ class NewsSeenIn(BaseModel):
     view_started_at: str
 
 
+class NewsReadAllUndoIn(BaseModel):
+    read_all_seen_at: str
+    previous_seen_at: str | None = None
+
+
 class NewsSettingsIn(BaseModel):
     enabled: bool | None = None
     visible: bool | None = None
@@ -2910,9 +2915,21 @@ def create_api_router(
             raise HTTPException(status_code=503, detail="财经新闻服务不可用")
         return news_service
 
+    def _news_timestamp(raw: str, *, allow_future: bool = False) -> str:
+        try:
+            value = datetime.fromisoformat((raw or "").strip())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间") from None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间")
+        if not allow_future and value > datetime.now(UTC):
+            raise HTTPException(status_code=400, detail="时间不能晚于当前时间")
+        return value.astimezone(UTC).isoformat()
+
     @router.get("/news/sources")
     def news_sources(user: dict = Depends(get_current_user)):
         statuses = {row["id"]: row for row in db.news_source_statuses()}
+        unread_by_source = db.unread_news_counts_by_source(user["id"])
         items = []
         for source in db.list_news_sources():
             status = statuses.get(source["id"], {"code": "paused", "last_success_at": None})
@@ -2924,6 +2941,7 @@ def create_api_router(
                 "status": status["code"],
                 "last_success_at": status["last_success_at"],
                 "group_name": source["group_name"] or "",
+                "unread_count": unread_by_source.get(source["id"], 0),
             })
         return {
             "items": items,
@@ -2938,6 +2956,7 @@ def create_api_router(
         source_id: int | None = Query(None),
         q: str = Query("", max_length=200),
         unread: bool = Query(False),
+        topic: str = Query("", max_length=20),
         user: dict = Depends(get_current_user),
     ):
         if source_id is not None:
@@ -2948,14 +2967,18 @@ def create_api_router(
         anchor = (db.get_user(user["id"]) or {}).get("news_last_seen_at")
         rows = db.list_news_articles(
             user["id"], source_id=source_id, q=q, limit=limit, offset=offset,
-            unread=unread,
+            unread=unread, topic=topic.strip(),
         )
         items = []
         for row in rows:
             row.pop("images", None)
+            # is_new 走水位线锚点（从未打开过 → 不算新，hmf 口径）；
+            # is_read 走单篇已读记录，二者独立供前端使用
             row["is_new"] = bool(anchor and row["published_at"] > anchor)
             items.append(row)
-        total = db.count_news_articles(user["id"], source_id=source_id, q=q, unread=unread)
+        total = db.count_news_articles(
+            user["id"], source_id=source_id, q=q, unread=unread, topic=topic.strip()
+        )
         return {
             "items": items,
             "offset": offset,
@@ -2967,16 +2990,7 @@ def create_api_router(
 
     @router.post("/news/seen")
     def mark_news_seen(body: NewsSeenIn, user: dict = Depends(get_current_user)):
-        raw = (body.view_started_at or "").strip()
-        try:
-            value = datetime.fromisoformat(raw)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间") from None
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间")
-        if value > datetime.now(UTC):
-            raise HTTPException(status_code=400, detail="时间不能晚于当前时间")
-        normalized = value.astimezone(UTC).isoformat()
+        normalized = _news_timestamp(body.view_started_at)
         db.advance_news_seen(user["id"], normalized)
         return {"ok": True, "news_last_seen_at": normalized}
 
@@ -3062,9 +3076,31 @@ def create_api_router(
 
     @router.post("/news/read-all")
     def mark_news_read_all(user: dict = Depends(get_current_user)):
+        previous = (db.get_user(user["id"]) or {}).get("news_last_seen_at")
         normalized = datetime.now(UTC).isoformat()
         db.advance_news_seen(user["id"], normalized)
-        return {"ok": True, "news_last_seen_at": normalized}
+        return {
+            "ok": True,
+            "read_all_seen_at": normalized,
+            "previous_seen_at": previous,
+        }
+
+    @router.post("/news/read-all/undo")
+    def undo_news_read_all(body: NewsReadAllUndoIn, user: dict = Depends(get_current_user)):
+        expected = _news_timestamp(body.read_all_seen_at)
+        previous = _news_timestamp(body.previous_seen_at) if body.previous_seen_at else None
+        if previous and previous > expected:
+            raise HTTPException(status_code=400, detail="撤销时间无效")
+        if not db.restore_news_seen(user["id"], expected, previous):
+            raise HTTPException(status_code=409, detail="已读状态已变化，请刷新后重试")
+        return {"ok": True, "news_last_seen_at": previous}
+
+    @router.post("/news/{article_id}/read")
+    def mark_news_article_read(article_id: int, user: dict = Depends(get_current_user)):
+        if db.get_news_article(article_id, user_id=user["id"]) is None:
+            raise HTTPException(status_code=404, detail="文章不存在")
+        db.mark_news_article_read(user["id"], article_id)
+        return {"ok": True}
 
     @router.get("/news/{article_id}")
     def news_article(article_id: int, user: dict = Depends(get_current_user)):
@@ -5405,6 +5441,81 @@ def create_api_router(
             note += f"｜关键词：{'、'.join(keywords)}"
         _audit(admin, "cicc_categories", "", note)
         return {"categories": cats, "keywords": keywords}
+
+    @router.get("/admin/ima-arm", dependencies=[Depends(require_admin)])
+    def ima_arm_link(admin: dict = Depends(require_admin)):
+        from .archive_guard import arm_pull_status
+        from .ima_documents import (
+            CICC_RESEARCH_SLUG,
+            arm_status_libraries,
+            cicc_status_row,
+            next_shanghai_schedule,
+        )
+
+        pull = arm_pull_status()
+        finished_raw = str(db.get_setting("ima_pure_last_finished_at") or "").strip()
+        try:
+            finished = int(finished_raw)
+        except ValueError:
+            finished = 0
+        result: dict = {}
+        raw_result = db.get_setting("ima_pure_last_result") or ""
+        if raw_result:
+            try:
+                parsed = json.loads(raw_result)
+            except json.JSONDecodeError:
+                parsed = {}
+            if isinstance(parsed, dict):
+                result = parsed
+        groups = []
+        raw_groups = db.get_setting("ima_pure_groups") or ""
+        if raw_groups:
+            try:
+                parsed_groups = json.loads(raw_groups)
+            except json.JSONDecodeError:
+                parsed_groups = []
+            if isinstance(parsed_groups, list):
+                groups = parsed_groups
+        runtime: dict = {}
+        raw_runtime = db.get_setting("ima_pure_group_runtime") or ""
+        if raw_runtime:
+            try:
+                parsed_runtime = json.loads(raw_runtime)
+            except json.JSONDecodeError:
+                parsed_runtime = {}
+            if isinstance(parsed_runtime, dict):
+                runtime = parsed_runtime
+        last_error = str(result.get("last_error") or result.get("discovery_error") or "")[:200]
+        libraries = arm_status_libraries(
+            groups,
+            runtime,
+            result,
+            download_count=db.ima_downloads_between,
+        )
+        cicc_name = "中金"
+        raw_local = db.get_setting("ima_local_libraries") or ""
+        if raw_local:
+            try:
+                local_doc = json.loads(raw_local)
+            except json.JSONDecodeError:
+                local_doc = {}
+            if isinstance(local_doc, dict):
+                for item in local_doc.get("libraries") or []:
+                    if isinstance(item, dict) and item.get("slug") == CICC_RESEARCH_SLUG:
+                        cicc_name = str(item.get("name") or cicc_name)
+                        break
+        cicc_stamp, cicc_count = db.ima_latest_download_batch("local-cicc-research")
+        libraries.append(cicc_status_row(cicc_stamp, cicc_count, name=cicc_name))
+        return {
+            "pull": pull,
+            "last_finished_at": finished,
+            "next_run_at": int(next_shanghai_schedule(time.time())),
+            "downloaded": int(result.get("downloaded") or 0),
+            "failed": int(result.get("failed") or 0),
+            "groups": int(result.get("succeeded_groups") or 0),
+            "last_error": last_error,
+            "libraries": libraries,
+        }
 
     @router.get("/admin/ima-storage/health", dependencies=[Depends(require_admin)])
     def ima_storage_health(admin: dict = Depends(require_admin)):

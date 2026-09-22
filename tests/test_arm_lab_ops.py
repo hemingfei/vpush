@@ -370,6 +370,9 @@ def test_dashboard_phase2_has_confirmed_apply(client):
     assert "CICC apply" in html
     assert "勿在此双采" in html or "不要在这里再跑实验室采集" in html
     assert 'id="pipeline-card"' in html
+    assert 'id="pipe-backup"' in html
+    assert 'id="backup-card"' in html
+    assert "OpenList 不参与写入" in html
     assert 'id="apply-confirm"' in html
     assert 'id="requeue-confirm"' in html
     assert "/api/115/qr/ima" not in html

@@ -94,6 +94,7 @@ def test_news_list_and_seen_anchor_are_user_scoped():
     # 首次查看：锚点为空 → is_new=False；标记已读只推进 first 用户自己的锚点
     first = client.get("/api/news", headers=first_headers).json()
     assert first["items"][0]["id"] == article_id
+    assert first["items"][0]["is_read"] is False
     assert first["items"][0]["is_new"] is False
     assert "view_started_at" in first
     assert client.post(
@@ -214,6 +215,7 @@ def test_news_article_next_id_and_admin_delete():
         "published_at": "2026-09-01T11:00:00+00:00",
         "fetched_at": "2026-09-01T11:00:00+00:00", "content_hash": "g2",
     })
+    db.set_user_news_sources(db.get_user_by_username("news_reader")["id"], [source_id])
     detail = client.get(f"/api/news/{second}", headers=user)
     assert detail.status_code == 200
     assert detail.json()["next_id"] == first
@@ -280,19 +282,38 @@ def test_news_unread_filter_read_all_and_badge_count():
     # 从未打开过新闻页：全部未读
     sources = client.get("/api/news/sources", headers=headers).json()
     assert sources["unread_count"] == 2
+    source_item = next(item for item in sources["items"] if item["id"] == source_id)
+    assert source_item["unread_count"] == 2
     unread = client.get("/api/news?unread=1", headers=headers).json()
     assert {i["id"] for i in unread["items"]} == {old_id, new_id}
+    listed = client.get("/api/news", headers=headers).json()["items"]
+    assert all(item["is_read"] is False for item in listed)
+    assert client.post(f"/api/news/{old_id}/read", headers=headers).status_code == 200
+    assert client.get("/api/news/sources", headers=headers).json()["unread_count"] == 1
     # 水位推进到两篇之间：只剩新文未读
     assert db.advance_news_seen(uid, "2026-09-15T00:00:00+00:00")
     sources = client.get("/api/news/sources", headers=headers).json()
     assert sources["unread_count"] == 1
     unread = client.get("/api/news?unread=1", headers=headers).json()
     assert [i["id"] for i in unread["items"]] == [new_id]
-    # read-all 后：无未读
-    assert client.post("/api/news/read-all", headers=headers).status_code == 200
-    sources = client.get("/api/news/sources", headers=headers).json()
-    assert sources["unread_count"] == 0
-    assert client.get("/api/news?unread=1", headers=headers).json()["items"] == []
+    marked = client.post("/api/news/read-all", headers=headers)
+    assert marked.status_code == 200
+    undo = marked.json()
+    assert undo["read_all_seen_at"]
+    assert "previous_seen_at" in undo
+    assert client.get("/api/news/sources", headers=headers).json()["unread_count"] == 0
+
+    restored = client.post("/api/news/read-all/undo", headers=headers, json=undo)
+    assert restored.status_code == 200
+    assert client.get("/api/news/sources", headers=headers).json()["unread_count"] == 1
+    assert client.post("/api/news/read-all/undo", headers=headers, json=undo).status_code == 409
+
+
+def test_news_mark_read_requires_visible_article():
+    client = make_client("news-mark-read.db")
+    headers = user_headers(client, "reader")
+    assert client.post("/api/news/999999/read", headers=headers).status_code == 404
+    assert client.post("/api/news/999999/read").status_code == 401
 
 
 def test_news_font_size_roundtrip_and_validation():
@@ -482,10 +503,8 @@ def test_news_disabled_cache_archived_detail_and_image_headers(monkeypatch):
     client = make_client("news-permissions.db")
     headers = user_headers(client, "news_permission_user")
     db = client.app.state.db
-    uid = db.get_user_by_username("news_permission_user")["id"]
     source_id = db.list_news_sources()[0]["id"]
     feed_id = db.list_news_feeds(source_id=source_id)[0]["id"]
-    db.set_user_news_sources(uid, [source_id])
     article_id = db.upsert_news_article({
         "source_id": source_id, "feed_id": feed_id, "external_id": "permission-1",
         "title": "Permission", "url": "https://example.com/article", "author": "",
@@ -494,27 +513,24 @@ def test_news_disabled_cache_archived_detail_and_image_headers(monkeypatch):
         "published_at": "2026-09-01T00:00:00+00:00",
         "fetched_at": "2026-09-01T00:00:00+00:00", "content_hash": "permission",
     })
+    # hmf 全局混排口径：停用=暂停采集，历史文章留在流中可读（来源标注「已暂停」）。
+    # 详情/正文图仍限启用源（与 HEAD 行为一致：列表可见、暂不可点开）
     db.update_news_source(source_id, enabled=False)
-    assert client.get("/api/news", headers=headers).json()["items"][0]["id"] == article_id
-
-    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
-    client.app.state.news_service.client = __import__("httpx").Client(
-        transport=__import__("httpx").MockTransport(
-            lambda request: __import__("httpx").Response(
-                200, headers={"content-type": "image/jpeg"}, content=b"jpeg"
-            )
-        ),
-        trust_env=False,
-    )
-    image = client.get(f"/api/news/{article_id}/images/0", headers=headers)
-    assert image.status_code == 200
-    assert image.headers["cache-control"] == "private, max-age=86400"
-    assert image.headers["x-content-type-options"] == "nosniff"
-    assert image.content == b"jpeg"
-    assert client.get(f"/api/news/{article_id}/images/0").status_code == 401
-
-    db.set_news_source_archived(source_id, True)
+    items = client.get("/api/news", headers=headers).json()["items"]
+    assert [item["id"] for item in items] == [article_id]
+    sources = client.get("/api/news/sources", headers=headers).json()["items"]
+    paused = next(row for row in sources if row["id"] == source_id)
+    assert paused["enabled"] is False and "selected" not in paused
+    assert client.get(f"/api/news?source_id={source_id}", headers=headers).status_code == 200
     assert client.get(f"/api/news/{article_id}", headers=headers).status_code == 404
+    assert client.get(f"/api/news/{article_id}/images/0", headers=headers).status_code == 404
+
+    # 归档源：文章从列表与详情同步隐藏
+    db.set_news_source_archived(source_id, True)
+    assert client.get("/api/news", headers=headers).json()["items"] == []
+    assert client.get(f"/api/news/{article_id}", headers=headers).status_code == 404
+    assert client.get(f"/api/news?source_id={source_id}", headers=headers).status_code == 400
+    assert client.get(f"/api/news/{article_id}/images/0", headers=headers).status_code == 404
 
 
 def test_admin_kols_pagination_and_filters():

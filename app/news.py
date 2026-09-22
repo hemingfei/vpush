@@ -38,6 +38,33 @@ MAX_ALT_CHARS = 200
 MAX_BODY_BYTES = 512 * 1024
 DEFAULT_RETENTION_DAYS = 30
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
+# 文章主题打标：零 token 关键词子串匹配（大小写不敏感），命中即打、上限 3 个主题。
+# 词表只在此处维护；用户端主题筛选与这里的键一一对应。
+NEWS_TOPIC_RULES: dict[str, tuple[str, ...]] = {
+    "宏观": (
+        "央行", "货币政策", "降息", "降准", "LPR", "通胀", "CPI", "PPI", "PMI",
+        "GDP", "财政", "赤字", "国债", "发改委", "财政部", "国务院", "社融", "汇率",
+    ),
+    "国际": (
+        "美联储", "欧洲央行", "日本央行", "关税", "贸易战", "制裁", "地缘", "大选",
+        "白宫", "特朗普", "欧盟", "北约", "IMF", "俄乌", "中东", "出口管制", "联合国",
+    ),
+    "科技": (
+        "AI", "人工智能", "大模型", "芯片", "半导体", "算力", "OpenAI", "英伟达",
+        "苹果", "华为", "小米", "量子", "机器人", "自动驾驶", "光伏", "电池", "卫星",
+        "云计算",
+    ),
+    "公司": (
+        "财报", "营收", "净利润", "IPO", "并购", "重组", "招股", "市值", "回购",
+        "增发", "退市", "发布会",
+    ),
+    "市场": (
+        "A股", "港股", "美股", "沪指", "深成指", "创业板", "科创板", "纳指", "道琼斯",
+        "标普", "北向资金", "涨停", "跌停", "新股", "可转债", "两市",
+    ),
+}
+NEWS_TOPIC_LIMIT = 3
 _TRACKING_QUERY_KEYS = {"fbclid", "gclid"}
 # 部分源（quanwenrss 转 Mohgen Stanley 等）把整段带属性的 HTML 塞进 title/alt，
 # 去标签后残留 `标题">标题` 形态的整段重复，折叠为单份
@@ -56,6 +83,20 @@ _ALLOWED_ATTRIBUTES = {
 
 
 logger = logging.getLogger(__name__)
+
+
+def classify_news_topics(title: str, summary: str = "") -> list[str]:
+    """按内置关键词规则给文章打主题标签；命中即打、保序、上限 NEWS_TOPIC_LIMIT。"""
+    text = f"{title or ''}\n{summary or ''}".lower()
+    if not text.strip():
+        return []
+    hits: list[str] = []
+    for topic, keywords in NEWS_TOPIC_RULES.items():
+        if any(kw.lower() in text for kw in keywords):
+            hits.append(topic)
+            if len(hits) >= NEWS_TOPIC_LIMIT:
+                break
+    return hits
 
 
 @dataclass(frozen=True)
@@ -411,6 +452,7 @@ class NewsService:
                     "summary": article.summary,
                     "content_html": article.content_html,
                     "images": article.images,
+                    "topics": classify_news_topics(article.title, article.summary),
                     "published_at": article.published_at,
                     "fetched_at": article.fetched_at,
                     "content_hash": article.content_hash,

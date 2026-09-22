@@ -31,6 +31,7 @@ from ops_settings import (
     cache_warn_gb,
     cicc_cookie_path,
     cicc_timer_unit,
+    storage_backup_timer_unit,
     cookies_path,
     docker_sock,
     export_root,
@@ -984,6 +985,34 @@ def read_last_job(root: Path | None = None) -> dict[str, Any] | None:
     return cleaned
 
 
+def backup_channels(root: Path | None = None) -> list[dict[str, Any]]:
+    """Cold-backup sinks in priority order. OpenList is not a sink."""
+    uploads = puller_upload_counts(root)
+    cookie = cookie_meta()
+    return [
+        {
+            "id": "storage",
+            "label": "存储机",
+            "priority": 1,
+            "mode": "rsync_add",
+            "detail": "只补新文件，不覆盖、不删除",
+            "timer": timer_status(storage_backup_timer_unit()),
+        },
+        {
+            "id": "p115",
+            "label": "115",
+            "priority": 2,
+            "mode": "puller",
+            "detail": "热缓存之后上传",
+            "cookie_present": bool(cookie.get("present")),
+            "uploads": {
+                "ok": uploads.get("ok") or 0,
+                "fail": uploads.get("fail") or 0,
+            },
+        },
+    ]
+
+
 def collect_status() -> dict[str, Any]:
     root = cache_root()
     health_url = puller_health_url()
@@ -1017,7 +1046,7 @@ def collect_status() -> dict[str, Any]:
         "roles": {
             "ima_collect": "vpush_pull",
             "cicc_collect": "arm_incr",
-            "storage": "hot_then_115",
+            "storage": "storage_then_115",
             "vpush_link": "http_pull",
             "ima_dual_collect": ima_timer_live,
         },
@@ -1058,5 +1087,6 @@ def collect_status() -> dict[str, Any]:
             "timer": cicc_timer,
             "incr_days": settings_incr_days(root),
         },
-        "openlist": {"url": openlist_public_url()},
+        "openlist": {"url": openlist_public_url(), "role": "browse"},
+        "backups": backup_channels(root),
     }

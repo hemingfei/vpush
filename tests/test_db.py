@@ -15,19 +15,21 @@ def test_news_migration_seeds_builtin_sources_and_feeds(tmp_path):
     sources = db._rows("SELECT slug, default_selected FROM news_sources ORDER BY id")
     feeds = db._rows("SELECT url FROM news_feeds ORDER BY id")
     assert [row["slug"] for row in sources] == ["bloomberg", "caixin", "ft", "morganstanley"]
-    assert all(row["default_selected"] == 1 for row in sources)
+    assert {row["slug"] for row in sources if row["default_selected"] == 1} == {"caixin"}
     assert len(feeds) == 5
 
 
 def test_new_user_gets_only_builtin_news_sources(tmp_path):
     db = DB(str(tmp_path / "news-user.db"))
     uid = db.add_user("reader", "hash")
-    assert len(db.list_user_news_source_ids(uid)) == 4
+    ids = db.list_user_news_source_ids(uid)
+    assert len(ids) == 1
+    assert db._rows("SELECT slug FROM news_sources WHERE id = ?", (ids[0],))[0]["slug"] == "caixin"
     db._execute(
         "INSERT INTO news_sources (slug, name) VALUES ('custom-test', 'Custom Test')"
     )
     uid2 = db.add_user("reader2", "hash")
-    assert len(db.list_user_news_source_ids(uid2)) == 4
+    assert len(db.list_user_news_source_ids(uid2)) == 1
 
 
 def test_news_default_backfill_runs_once(tmp_path):
@@ -38,6 +40,25 @@ def test_news_default_backfill_runs_once(tmp_path):
     db.close()
     reopened = DB(str(path))
     assert reopened.list_user_news_source_ids(uid) == []
+
+
+def test_existing_users_get_caixin_without_dropping_other_sources(tmp_path):
+    path = tmp_path / "caixin-default.db"
+    db = DB(str(path))
+    uid = db.add_user("reader", "hash")
+    caixin_id = db._rows("SELECT id FROM news_sources WHERE slug = 'caixin'")[0]["id"]
+    bloomberg_id = db._rows("SELECT id FROM news_sources WHERE slug = 'bloomberg'")[0]["id"]
+    db.set_user_news_sources(uid, [bloomberg_id])
+    db._execute("DELETE FROM settings WHERE key = 'news_default_caixin_v1'")
+    db.close()
+    reopened = DB(str(path))
+    ids = reopened.list_user_news_source_ids(uid)
+    assert caixin_id in ids
+    assert bloomberg_id in ids
+    reopened.set_user_news_sources(uid, [bloomberg_id])
+    reopened.close()
+    again = DB(str(path))
+    assert again.list_user_news_source_ids(uid) == [bloomberg_id]
 
 
 def test_legacy_database_gets_news_anchor_and_default_relations(tmp_path):
@@ -80,7 +101,7 @@ def test_legacy_database_gets_news_anchor_and_default_relations(tmp_path):
     db = DB(str(path))
     user = db.get_user_by_username("old-reader")
     assert "news_last_seen_at" in {row["name"] for row in db._rows("PRAGMA table_info(users)")}
-    assert len(db.list_user_news_source_ids(user["id"])) == 4
+    assert len(db.list_user_news_source_ids(user["id"])) == 1
 
 
 
@@ -89,7 +110,9 @@ def test_transfer_subscriptions_merges_news_sources_and_seen_anchor(tmp_path):
     db = DB(str(tmp_path / "transfer-news.db"))
     source_uid = db.add_user("source-news", "hash")
     target_uid = db.add_user("target-news", "hash")
-    source_ids = db.list_user_news_source_ids(source_uid)
+    source_ids = [row["id"] for row in db._rows(
+        "SELECT id FROM news_sources WHERE archived_at IS NULL ORDER BY id"
+    )]
     db.set_user_news_sources(source_uid, source_ids[:2])
     db.set_user_news_sources(target_uid, source_ids[1:3])
     db._execute("UPDATE users SET news_last_seen_at = ? WHERE id = ?", ("2026-09-01T11:00:00+00:00", source_uid))
@@ -2185,6 +2208,7 @@ def test_news_next_article_follows_reading_order(tmp_path):
     db = DB(str(tmp_path / "next.db"))
     uid = db.add_user("reader", "hash")
     source_id = db.add_news_source("顺序源")
+    db.set_user_news_sources(uid, [source_id])
     feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
     first = db.upsert_news_article(_news_article_row(source_id, feed_id, "g1", "2026-09-01T00:00:01+00:00"))
     second = db.upsert_news_article(_news_article_row(source_id, feed_id, "g2", "2026-09-01T00:00:02+00:00"))
@@ -2193,6 +2217,30 @@ def test_news_next_article_follows_reading_order(tmp_path):
     db.delete_news_article(first)
     assert db.get_news_article(first) is None
     assert db.get_next_news_article(db.get_news_article(second), uid) is None
+    db.close()
+
+
+def test_news_adjacent_stays_in_subscribed_enabled_sources(tmp_path):
+    db = DB(str(tmp_path / "adjacent-sub.db"))
+    uid = db.add_user("reader", "hash")
+    mine = db.add_news_source("已订")
+    other = db.add_news_source("未订")
+    paused = db.add_news_source("已订停用")
+    feed_mine = db.add_news_feed(mine, "主源", "https://mine.example/rss", "https://mine.example/rss")
+    feed_other = db.add_news_feed(other, "主源", "https://other.example/rss", "https://other.example/rss")
+    feed_paused = db.add_news_feed(paused, "主源", "https://paused.example/rss", "https://paused.example/rss")
+    older = db.upsert_news_article(_news_article_row(mine, feed_mine, "mine-old", "2026-09-01T00:00:01+00:00"))
+    current = db.upsert_news_article(_news_article_row(mine, feed_mine, "mine-now", "2026-09-01T00:00:02+00:00"))
+    skipped_other = db.upsert_news_article(_news_article_row(other, feed_other, "other", "2026-09-01T00:00:03+00:00"))
+    skipped_paused = db.upsert_news_article(_news_article_row(paused, feed_paused, "paused", "2026-09-01T00:00:04+00:00"))
+    newer = db.upsert_news_article(_news_article_row(mine, feed_mine, "mine-new", "2026-09-01T00:00:05+00:00"))
+    # hmf 全局混排口径：相邻导航不按用户订阅圈过滤（其他源也参与阅读顺序），
+    # 但跳过停用源——prev 方向上一条是 other 源的 00:00:03，停用源 00:00:04 被跳过
+    db.update_news_source(paused, enabled=False)
+    article = db.get_news_article(current)
+    assert db.get_next_news_article(article, uid) == older
+    assert db.get_prev_news_article(article, uid) == skipped_other
+    assert skipped_paused not in (older, skipped_other)
     db.close()
 
 
@@ -2218,6 +2266,59 @@ def test_news_keyword_notify_helpers(tmp_path):
     assert "命中关键词" in text and "还有 1 条" in text
     db.mark_news_keyword_notified(uid, recent)
     assert db.filter_unnotified_news_articles(uid, recent) == []
+    db.close()
+
+
+def test_news_topic_classify_and_filter(tmp_path):
+    from app.news import classify_news_topics
+
+    db = DB(str(tmp_path / "topics.db"))
+    uid = db.add_user("reader", "hash")
+    source_id = db.add_news_source("主题源")
+    feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
+    macro = db.upsert_news_article({
+        **_news_article_row(source_id, feed_id, "m1", "2026-09-01T00:00:01+00:00"),
+        "title": "央行宣布降准，LPR 下调",
+        "topics": classify_news_topics("央行宣布降准，LPR 下调"),
+    })
+    tech = db.upsert_news_article({
+        **_news_article_row(source_id, feed_id, "t1", "2026-09-01T00:00:02+00:00"),
+        "title": "OpenAI 发布新大模型",
+        "topics": classify_news_topics("OpenAI 发布新大模型"),
+    })
+    plain = db.upsert_news_article({
+        **_news_article_row(source_id, feed_id, "p1", "2026-09-01T00:00:03+00:00"),
+    })
+    assert db.get_news_article(macro)["topics"] == ["宏观"]
+    assert db.get_news_article(tech)["topics"] == ["科技"]
+    assert db.get_news_article(plain)["topics"] == []
+
+    db.set_user_news_sources(uid, [source_id])
+    items = db.list_news_articles(uid, source_id=None, q="", limit=10, offset=0, topic="宏观")
+    assert [i["id"] for i in items] == [macro]
+    assert items[0]["topics"] == ["宏观"]
+    assert len(db.list_news_articles(uid, source_id=None, q="", limit=10, offset=0)) == 3
+
+    # 存量回填：只处理空 topics 的行，已有标签不覆盖；无关键词行保持空
+    db._execute("UPDATE news_articles SET topics = '[]' WHERE id = ?", (macro,))
+    assert db.backfill_news_topics(classify_news_topics) == 1
+    assert db.get_news_article(macro)["topics"] == ["宏观"]
+    assert db.get_news_article(tech)["topics"] == ["科技"]
+    assert db.get_news_article(plain)["topics"] == []
+    db.close()
+
+
+def test_news_batch_upsert_persists_topics(tmp_path):
+    db = DB(str(tmp_path / "batch-topics.db"))
+    source_id = db.add_news_source("批量主题源")
+    feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
+    db.upsert_news_articles_batch([
+        _news_article_row(source_id, feed_id, "k1", "2026-09-01T00:00:01+00:00"),
+        {**_news_article_row(source_id, feed_id, "k2", "2026-09-01T00:00:02+00:00"), "topics": ["科技"]},
+    ])
+    rows = {r["external_id"]: r["id"] for r in db._rows("SELECT id, external_id FROM news_articles")}
+    assert db.get_news_article(rows["k1"])["topics"] == []
+    assert db.get_news_article(rows["k2"])["topics"] == ["科技"]
     db.close()
 
 
@@ -2263,6 +2364,96 @@ def test_news_seen_anchor_only_moves_forward(tmp_path):
     assert db.get_user(uid)["news_last_seen_at"] == "2026-09-01T10:00:00+00:00"
 
 
+def test_news_article_reads_migrate_and_are_user_scoped(tmp_path):
+    db = DB(str(tmp_path / "article-reads.db"))
+    first = db.add_user("first", "hash")
+    second = db.add_user("second", "hash")
+    source = db.add_news_source("已读测试源")
+    feed = db.add_news_feed(source, "主源", "https://feed.example/read", "https://feed.example/read")
+    article = db.upsert_news_article(
+        _news_article_row(source, feed, "read-1", "2026-09-20T10:00:00+00:00")
+    )
+    db.set_user_news_sources(first, [source])
+    db.set_user_news_sources(second, [source])
+
+    assert db.mark_news_article_read(first, article)
+    assert db.unread_news_count(first) == 0
+    assert db.unread_news_count(second) == 1
+    assert db.list_news_articles(first, source_id=None, q="", limit=10, offset=0)[0]["is_read"] is True
+    assert db.list_news_articles(second, source_id=None, q="", limit=10, offset=0)[0]["is_read"] is False
+    assert db.list_news_articles(first, source_id=None, q="", limit=10, offset=0, unread=True) == []
+    db.close()
+
+
+def test_news_source_browse_does_not_duplicate_for_multiple_subscribers(tmp_path):
+    db = DB(str(tmp_path / "source-browse-dup.db"))
+    first = db.add_user("first", "hash")
+    second = db.add_user("second", "hash")
+    source = db.add_news_source("多订阅读源")
+    feed = db.add_news_feed(source, "主源", "https://feed.example/dup", "https://feed.example/dup")
+    older = db.upsert_news_article(
+        _news_article_row(source, feed, "dup-1", "2026-09-20T10:00:00+00:00")
+    )
+    newer = db.upsert_news_article(
+        _news_article_row(source, feed, "dup-2", "2026-09-20T11:00:00+00:00")
+    )
+    db.set_user_news_sources(first, [source])
+    db.set_user_news_sources(second, [source])
+
+    items = db.list_news_articles(first, source_id=source, q="", limit=10, offset=0)
+    assert [item["id"] for item in items] == [newer, older]
+    assert db.count_news_articles(first, source_id=source, q="") == 2
+
+    assert db.mark_news_article_read(first, newer)
+    unread = db.list_news_articles(
+        first, source_id=source, q="", limit=10, offset=0, unread=True
+    )
+    assert [item["id"] for item in unread] == [older]
+    assert db.count_news_articles(first, source_id=source, q="", unread=True) == 1
+    db.close()
+
+
+def test_news_article_reads_follow_merge_and_delete(tmp_path):
+    db = DB(str(tmp_path / "article-read-lifecycle.db"))
+    source_user = db.add_user("source", "hash")
+    target_user = db.add_user("target", "hash")
+    source = db.add_news_source("生命周期源")
+    feed = db.add_news_feed(source, "主源", "https://feed.example/lifecycle", "https://feed.example/lifecycle")
+    article = db.upsert_news_article(
+        _news_article_row(source, feed, "lifecycle-1", "2026-09-20T10:00:00+00:00")
+    )
+    db.mark_news_article_read(source_user, article)
+
+    db.transfer_subscriptions(source_user, target_user)
+    assert db._rows(
+        "SELECT 1 FROM news_article_reads WHERE user_id = ? AND article_id = ?",
+        (target_user, article),
+    )
+
+    db.delete_user(source_user)
+    assert not db._rows("SELECT 1 FROM news_article_reads WHERE user_id = ?", (source_user,))
+    db.delete_news_article(article)
+    assert not db._rows("SELECT 1 FROM news_article_reads WHERE article_id = ?", (article,))
+    db.close()
+
+
+def test_restore_news_seen_is_compare_and_swap(tmp_path):
+    db = DB(str(tmp_path / "restore-seen.db"))
+    uid = db.add_user("reader", "hash")
+    t1 = "2026-09-20T10:00:00+00:00"
+    t2 = "2026-09-20T11:00:00+00:00"
+    assert db.advance_news_seen(uid, t2)
+    assert db.restore_news_seen(uid, t2, t1) is True
+    assert db.get_user(uid)["news_last_seen_at"] == t1
+    assert db.restore_news_seen(uid, t2, t1) is False
+    assert db.get_user(uid)["news_last_seen_at"] == t1
+    assert db.advance_news_seen(uid, t2)
+    assert db.restore_news_seen(uid, t2, None) is True
+    raw = db._rows("SELECT news_last_seen_at FROM users WHERE id = ?", (uid,))[0]
+    assert raw["news_last_seen_at"] is None
+    db.close()
+
+
 def test_news_feed_url_change_resets_conditional_state(tmp_path):
     db = DB(str(tmp_path / "feed-reset.db"))
     source_id = db.add_news_source("测试媒体")
@@ -2284,12 +2475,11 @@ def test_news_feed_url_change_resets_conditional_state(tmp_path):
     assert feed["consecutive_failures"] == 0
 
 
-def test_disabled_source_keeps_cached_articles_readable(tmp_path):
+def test_disabled_source_hides_articles_from_user(tmp_path):
     db = DB(str(tmp_path / "disabled.db"))
     uid = db.add_user("reader", "hash")
     source_id = db.add_news_source("测试媒体")
     feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
-    db.set_user_news_sources(uid, [source_id])
     article_id = db.upsert_news_article({
         "source_id": source_id, "feed_id": feed_id, "external_id": "disabled-1",
         "title": "Cached", "url": "https://example.com/1", "author": "",
@@ -2297,8 +2487,12 @@ def test_disabled_source_keeps_cached_articles_readable(tmp_path):
         "published_at": "2026-09-01T00:00:00+00:00",
         "fetched_at": "2026-09-01T00:01:00+00:00", "content_hash": "cached",
     })
+    # hmf 全局混排口径：停用=暂停采集，历史文章保留在流中；未读按水位线+单篇记录计算
     db.update_news_source(source_id, enabled=False)
-    assert db.list_news_articles(uid, source_id=None, q="", limit=30, offset=0)[0]["id"] == article_id
+    rows = db.list_news_articles(uid, source_id=None, q="", limit=30, offset=0)
+    assert [row["id"] for row in rows] == [article_id]
+    assert db.get_news_article(article_id, user_id=uid) is None  # 详情仍限启用源（与 API 404 一致）
+    assert db.unread_news_count(uid) == 1
 
 
 def test_archived_source_hides_article_from_user_detail(tmp_path):

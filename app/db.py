@@ -1018,6 +1018,7 @@ CREATE TABLE IF NOT EXISTS news_articles (
     summary TEXT NOT NULL DEFAULT '',
     content_html TEXT NOT NULL DEFAULT '',
     images TEXT NOT NULL DEFAULT '[]',
+    topics TEXT NOT NULL DEFAULT '[]',
     published_at TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
     content_hash TEXT NOT NULL,
@@ -1025,6 +1026,14 @@ CREATE TABLE IF NOT EXISTS news_articles (
 );
 CREATE INDEX IF NOT EXISTS idx_news_articles_time ON news_articles(published_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_news_articles_source_time ON news_articles(source_id, published_at DESC, id DESC);
+CREATE TABLE IF NOT EXISTS news_article_reads (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    article_id INTEGER NOT NULL REFERENCES news_articles(id) ON DELETE CASCADE,
+    read_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, article_id)
+);
+CREATE INDEX IF NOT EXISTS idx_news_article_reads_article
+ON news_article_reads(article_id);
 CREATE INDEX IF NOT EXISTS idx_news_feeds_due ON news_feeds(enabled, archived_at, last_attempt_at);
 
 CREATE TABLE IF NOT EXISTS bind_codes (
@@ -2271,47 +2280,82 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE news_sources ADD COLUMN group_name TEXT NOT NULL DEFAULT ''"
             )
+        article_cols = {row["name"] for row in self._rows("PRAGMA table_info(news_articles)")}
+        if "topics" not in article_cols:
+            self._conn.execute(
+                "ALTER TABLE news_articles ADD COLUMN topics TEXT NOT NULL DEFAULT '[]'"
+            )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS news_article_reads ("
+            "user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
+            "article_id INTEGER NOT NULL REFERENCES news_articles(id) ON DELETE CASCADE, "
+            "read_at TEXT NOT NULL, "
+            "PRIMARY KEY (user_id, article_id))"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_news_article_reads_article "
+            "ON news_article_reads(article_id)"
+        )
         # 内置源只在首次 seed（news_default_sources_v1 置位后整体跳过）：
         # 否则 INSERT OR IGNORE 拦不住已删除的行，管理员「彻底删除」内置源
         # 会在每次重启时复活。新增内置源时需换新 key（如 news_default_sources_v2）。
-        if self.get_setting("news_default_sources_v1") == "1":
-            return
-        for slug, name, feeds in _BUILTIN_NEWS:
+        if self.get_setting("news_default_sources_v1") != "1":
+            for slug, name, feeds in _BUILTIN_NEWS:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO news_sources "
+                    "(slug, name, built_in, default_selected) VALUES (?, ?, 1, ?)",
+                    (slug, name, 1 if slug == "caixin" else 0),
+                )
+                source = self._conn.execute(
+                    "SELECT id FROM news_sources WHERE slug = ?", (slug,)
+                ).fetchone()
+                for feed_name, url in feeds:
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO news_feeds "
+                        "(source_id, name, url, normalized_url) VALUES (?, ?, ?, ?)",
+                        (source["id"], feed_name, url, url),
+                    )
             self._conn.execute(
-                "INSERT OR IGNORE INTO news_sources "
-                "(slug, name, built_in, default_selected) VALUES (?, ?, 1, 1)",
-                (slug, name),
+                "INSERT OR IGNORE INTO settings (key, value) VALUES "
+                "('news_enabled', '1'), ('news_visible', '1'), ('news_refresh_interval_seconds', '600')"
             )
-            source = self._conn.execute(
-                "SELECT id FROM news_sources WHERE slug = ?", (slug,)
-            ).fetchone()
-            for feed_name, url in feeds:
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO news_feeds "
-                    "(source_id, name, url, normalized_url) VALUES (?, ?, ?, ?)",
-                    (source["id"], feed_name, url, url),
+            default_ids = [
+                row["id"] for row in self._rows(
+                    "SELECT id FROM news_sources WHERE built_in = 1 "
+                    "AND default_selected = 1 AND archived_at IS NULL ORDER BY id"
                 )
-        self._conn.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES "
-            "('news_enabled', '1'), ('news_visible', '1'), ('news_refresh_interval_seconds', '600')"
-        )
-        if self.get_setting("news_default_sources_v1") == "1":
+            ]
+            for user in self._rows("SELECT id FROM users"):
+                for source_id in default_ids:
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO user_news_sources (user_id, source_id) "
+                        "VALUES (?, ?)",
+                        (user["id"], source_id),
+                    )
+            self._conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('news_default_sources_v1', '1') "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+            )
+        self._ensure_default_caixin()
+
+    def _ensure_default_caixin(self) -> None:
+        if self.get_setting("news_default_caixin_v1") == "1":
             return
-        default_ids = [
-            row["id"] for row in self._rows(
-                "SELECT id FROM news_sources WHERE built_in = 1 "
-                "AND default_selected = 1 AND archived_at IS NULL ORDER BY id"
-            )
-        ]
-        for user in self._rows("SELECT id FROM users"):
-            for source_id in default_ids:
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO user_news_sources (user_id, source_id) "
-                    "VALUES (?, ?)",
-                    (user["id"], source_id),
-                )
         self._conn.execute(
-            "INSERT INTO settings (key, value) VALUES ('news_default_sources_v1', '1') "
+            "UPDATE news_sources SET default_selected = CASE WHEN slug = 'caixin' THEN 1 ELSE 0 END "
+            "WHERE built_in = 1"
+        )
+        row = self._conn.execute(
+            "SELECT id FROM news_sources WHERE slug = 'caixin' AND archived_at IS NULL"
+        ).fetchone()
+        if row:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO user_news_sources (user_id, source_id) "
+                "SELECT id, ? FROM users",
+                (row["id"],),
+            )
+        self._conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('news_default_caixin_v1', '1') "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         )
 
@@ -4011,6 +4055,11 @@ class DB:
                     self._conn.rollback()
                     return None
                 self._conn.execute(
+                    "DELETE FROM news_article_reads WHERE article_id IN "
+                    "(SELECT id FROM news_articles WHERE source_id = ?)",
+                    (source_id,),
+                )
+                self._conn.execute(
                     "DELETE FROM news_articles WHERE source_id = ?", (source_id,)
                 )
                 self._conn.execute(
@@ -4138,6 +4187,11 @@ class DB:
                     self._conn.rollback()
                     return None
                 self._conn.execute(
+                    "DELETE FROM news_article_reads WHERE article_id IN "
+                    "(SELECT id FROM news_articles WHERE feed_id = ?)",
+                    (feed_id,),
+                )
+                self._conn.execute(
                     "DELETE FROM news_articles WHERE feed_id = ?", (feed_id,)
                 )
                 self._conn.execute("DELETE FROM news_feeds WHERE id = ?", (feed_id,))
@@ -4235,7 +4289,9 @@ class DB:
             article["source_id"], article["feed_id"], article["external_id"],
             article["title"], article["url"], article.get("author", ""),
             article.get("summary", ""), article.get("content_html", ""),
-            json.dumps(images, ensure_ascii=False), article["published_at"],
+            json.dumps(images, ensure_ascii=False),
+            json.dumps(article.get("topics") or [], ensure_ascii=False),
+            article["published_at"],
             article["fetched_at"], article.get("content_hash", ""),
         )
         with self._lock:
@@ -4243,12 +4299,13 @@ class DB:
                 self._conn.execute(
                     "INSERT INTO news_articles "
                     "(source_id, feed_id, external_id, title, url, author, summary, "
-                    "content_html, images, published_at, fetched_at, content_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "content_html, images, topics, published_at, fetched_at, content_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(source_id, external_id) DO UPDATE SET "
                     "feed_id = excluded.feed_id, title = excluded.title, url = excluded.url, "
                     "author = excluded.author, summary = excluded.summary, "
                     "content_html = excluded.content_html, images = excluded.images, "
+                    "topics = excluded.topics, "
                     "published_at = excluded.published_at, fetched_at = excluded.fetched_at, "
                     "content_hash = excluded.content_hash",
                     values,
@@ -4276,7 +4333,9 @@ class DB:
                 article["source_id"], article["feed_id"], article["external_id"],
                 article["title"], article["url"], article.get("author", ""),
                 article.get("summary", ""), article.get("content_html", ""),
-                json.dumps(images, ensure_ascii=False), article["published_at"],
+                json.dumps(images, ensure_ascii=False),
+                json.dumps(article.get("topics") or [], ensure_ascii=False),
+                article["published_at"],
                 article["fetched_at"], article.get("content_hash", ""),
             ))
         with self._lock:
@@ -4285,12 +4344,13 @@ class DB:
                 self._conn.executemany(
                     "INSERT INTO news_articles "
                     "(source_id, feed_id, external_id, title, url, author, summary, "
-                    "content_html, images, published_at, fetched_at, content_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "content_html, images, topics, published_at, fetched_at, content_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(source_id, external_id) DO UPDATE SET "
                     "feed_id = excluded.feed_id, title = excluded.title, url = excluded.url, "
                     "author = excluded.author, summary = excluded.summary, "
                     "content_html = excluded.content_html, images = excluded.images, "
+                    "topics = excluded.topics, "
                     "published_at = excluded.published_at, fetched_at = excluded.fetched_at, "
                     "content_hash = excluded.content_hash",
                     rows,
@@ -4301,8 +4361,27 @@ class DB:
                 raise
         return len(rows)
 
+    def backfill_news_topics(self, classify) -> int:
+        """给存量文章补主题标签；classify(title, summary) -> list[str]。"""
+        rows = self._rows(
+            "SELECT id, title, summary FROM news_articles WHERE topics = '[]'"
+        )
+        updated = 0
+        for row in rows:
+            topics = classify(row["title"], row["summary"])
+            if topics:
+                self._execute(
+                    "UPDATE news_articles SET topics = ? WHERE id = ?",
+                    (json.dumps(topics, ensure_ascii=False), row["id"]),
+                )
+                updated += 1
+        return updated
+
     def delete_news_article(self, article_id: int) -> bool:
         with self._lock:
+            self._conn.execute(
+                "DELETE FROM news_article_reads WHERE article_id = ?", (article_id,)
+            )
             cur = self._conn.execute(
                 "DELETE FROM news_articles WHERE id = ?", (article_id,)
             )
@@ -4345,7 +4424,15 @@ class DB:
         except (TypeError, ValueError):
             images = []
         row["images"] = images if isinstance(images, list) else []
-        row["has_image"] = bool(row["images"])
+        # 列表查询用 SQL 别名预计算 has_image（不拖 images 列），此处不覆盖
+        if "has_image" not in row:
+            row["has_image"] = bool(row["images"])
+        raw_topics = row.get("topics")
+        try:
+            topics = json.loads(raw_topics) if isinstance(raw_topics, str) else raw_topics
+        except (TypeError, ValueError):
+            topics = []
+        row["topics"] = topics if isinstance(topics, list) else []
         return row
 
     def delete_news_articles_older_than(self, days: int) -> int:
@@ -4353,19 +4440,33 @@ class DB:
             return 0
         cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         with self._lock:
+            self._conn.execute(
+                "DELETE FROM news_article_reads WHERE article_id IN "
+                "(SELECT id FROM news_articles WHERE published_at < ?)",
+                (cutoff,),
+            )
             cur = self._conn.execute(
                 "DELETE FROM news_articles WHERE published_at < ?", (cutoff,)
             )
             self._conn.commit()
             return cur.rowcount
 
+    _NEWS_UNREAD_SQL = (
+        "a.published_at > COALESCE("
+        "(SELECT news_last_seen_at FROM users WHERE id = ?), '') "
+        "AND NOT EXISTS (SELECT 1 FROM news_article_reads r "
+        "WHERE r.user_id = ? AND r.article_id = a.id)"
+    )
+
     def _news_article_filter(
-        self, user_id: int, source_id: int | None, q: str, *, unread: bool = False
+        self, user_id: int, source_id: int | None, q: str, *, unread: bool = False,
+        topic: str = "",
     ) -> tuple[str, list[object]]:
         """source_id 给定时按源浏览（源未归档即可读），否则全部未归档源全局混排
-        （财经资讯口径：不按用户订阅圈过滤）。
+        （财经资讯口径：不按用户订阅圈过滤；停用源留在流里供浏览）。
 
-        unread 以 news_last_seen_at 水位线为准；从未打开过新闻页视为全部未读。
+        unread：published_at 晚于 news_last_seen_at 且无 news_article_reads。
+        topic 匹配 topics JSON 数组里的标签值（带引号防子串误配）。
         """
         conds = [
             "s.id = a.source_id",
@@ -4376,11 +4477,11 @@ class DB:
             conds.append("a.source_id = ?")
             params.append(source_id)
         if unread:
-            conds.append(
-                "a.published_at > COALESCE("
-                "(SELECT news_last_seen_at FROM users WHERE id = ?), '')"
-            )
-            params.append(user_id)
+            conds.append(self._NEWS_UNREAD_SQL)
+            params.extend([user_id, user_id])
+        if topic:
+            conds.append("a.topics LIKE ?")
+            params.append(f'%"{topic}"%')
         if q:
             conds.append("(a.title LIKE ? OR a.summary LIKE ?)")
             like = f"%{q}%"
@@ -4396,22 +4497,33 @@ class DB:
         limit: int,
         offset: int,
         unread: bool = False,
+        topic: str = "",
     ) -> list[dict]:
         where, params = self._news_article_filter(
-            user_id, source_id, (q or "").strip(), unread=unread
+            user_id, source_id, (q or "").strip(), unread=unread, topic=topic
         )
-        params.extend([max(1, min(int(limit), 100)), max(0, int(offset))])
+        params = [user_id, user_id, *params, max(1, min(int(limit), 100)), max(0, int(offset))]
         rows = self._rows(
             "SELECT a.id, a.title, a.url, a.author, a.summary, a.published_at, "
-            "a.source_id, s.name AS source_name, s.slug AS source_slug, "
+            "a.source_id, a.topics, s.name AS source_name, s.slug AS source_slug, "
             "s.enabled AS source_enabled, "
-            "(a.images IS NOT NULL AND a.images != '[]' AND a.images != '') AS has_image "
+            "(a.images IS NOT NULL AND a.images != '[]' AND a.images != '') AS has_image, "
+            "CASE WHEN a.published_at <= COALESCE("
+            "(SELECT news_last_seen_at FROM users WHERE id = ?), '') "
+            "OR EXISTS (SELECT 1 FROM news_article_reads r "
+            "WHERE r.user_id = ? AND r.article_id = a.id) "
+            "THEN 1 ELSE 0 END AS is_read "
             "FROM news_articles a "
             "JOIN news_sources s ON s.id = a.source_id "
             f"WHERE {where} ORDER BY a.published_at DESC, a.id DESC LIMIT ? OFFSET ?",
             params,
         )
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            article = self._normalize_news_article(dict(row))
+            article["is_read"] = bool(article["is_read"])
+            result.append(article)
+        return result
 
     def count_news_articles_for_source(self, source_id: int) -> int:
         rows = self._rows(
@@ -4420,10 +4532,11 @@ class DB:
         return _to_int(rows[0]["n"]) if rows else 0
 
     def count_news_articles(
-        self, user_id: int, *, source_id: int | None, q: str, unread: bool = False
+        self, user_id: int, *, source_id: int | None, q: str, unread: bool = False,
+        topic: str = "",
     ) -> int:
         where, params = self._news_article_filter(
-            user_id, source_id, (q or "").strip(), unread=unread
+            user_id, source_id, (q or "").strip(), unread=unread, topic=topic
         )
         rows = self._rows(
             "SELECT COUNT(*) AS n FROM news_articles a "
@@ -4434,18 +4547,25 @@ class DB:
         return _to_int(rows[0]["n"]) if rows else 0
 
     def unread_news_count(self, user_id: int) -> int:
-        """订阅圈内、水位线之后的文章总数；从未打开过 = 全部未读。"""
+        """全局未读文章总数（未归档源，含停用源）；水位线之后且无单篇已读记录。"""
         rows = self._rows(
             "SELECT COUNT(*) AS n FROM news_articles a "
             "JOIN news_sources s ON s.id = a.source_id "
             "WHERE s.archived_at IS NULL "
-            "AND EXISTS (SELECT 1 FROM user_news_sources u "
-            "WHERE u.source_id = a.source_id AND u.user_id = ?) "
-            "AND a.published_at > COALESCE("
-            "(SELECT news_last_seen_at FROM users WHERE id = ?), '')",
+            "AND " + self._NEWS_UNREAD_SQL,
             (user_id, user_id),
         )
         return _to_int(rows[0]["n"]) if rows else 0
+
+    def unread_news_counts_by_source(self, user_id: int) -> dict[int, int]:
+        rows = self._rows(
+            "SELECT a.source_id, COUNT(*) AS n FROM news_articles a "
+            "JOIN news_sources s ON s.id = a.source_id "
+            "WHERE s.archived_at IS NULL AND " + self._NEWS_UNREAD_SQL +
+            " GROUP BY a.source_id",
+            (user_id, user_id),
+        )
+        return {int(row["source_id"]): int(row["n"]) for row in rows}
 
     _NEWS_ARTICLE_VISIBLE = (
         "SELECT a.*, s.name AS source_name, s.slug AS source_slug, "
@@ -4514,6 +4634,28 @@ class DB:
                 "UPDATE users SET news_last_seen_at = ? WHERE id = ? "
                 "AND (news_last_seen_at IS NULL OR news_last_seen_at < ?)",
                 (view_started_at, user_id, view_started_at),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def mark_news_article_read(self, user_id: int, article_id: int) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO news_article_reads (user_id, article_id, read_at) "
+                "VALUES (?, ?, ?)",
+                (user_id, article_id, datetime.now(UTC).isoformat()),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def restore_news_seen(
+        self, user_id: int, expected_seen_at: str, previous_seen_at: str | None
+    ) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE users SET news_last_seen_at = ? "
+                "WHERE id = ? AND news_last_seen_at = ?",
+                (previous_seen_at, user_id, expected_seen_at),
             )
             self._conn.commit()
             return cur.rowcount > 0
@@ -5114,6 +5256,14 @@ class DB:
                 (source_anchor, to_user_id),
             )
         self._conn.execute(
+            "INSERT OR IGNORE INTO news_article_reads (user_id, article_id, read_at) "
+            "SELECT ?, article_id, read_at FROM news_article_reads WHERE user_id = ?",
+            (to_user_id, from_user_id),
+        )
+        self._conn.execute(
+            "DELETE FROM news_article_reads WHERE user_id = ?", (from_user_id,)
+        )
+        self._conn.execute(
             "DELETE FROM user_news_sources WHERE user_id = ?", (from_user_id,)
         )
         self._conn.execute(
@@ -5138,6 +5288,9 @@ class DB:
 
     def _delete_user_body(self, user_id: int) -> None:
         self._conn.execute("DELETE FROM bind_codes WHERE user_id = ?", (user_id,))
+        self._conn.execute(
+            "DELETE FROM news_article_reads WHERE user_id = ?", (user_id,)
+        )
         self._conn.execute("DELETE FROM user_news_sources WHERE user_id = ?", (user_id,))
         self._conn.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
         self._conn.execute("DELETE FROM push_logs WHERE user_id = ?", (user_id,))
@@ -8804,6 +8957,39 @@ class DB:
         else:
             rows = self._read_only_rows("SELECT COUNT(*) AS n FROM ima_document_index")
         return int(rows[0]["n"] if rows else 0)
+
+    def ima_downloads_between(self, group_id: str, started: int, finished: int) -> int:
+        if not group_id or finished < started:
+            return 0
+        start = datetime.fromtimestamp(max(int(started) - 2, 0), UTC).isoformat()
+        end = datetime.fromtimestamp(int(finished) + 2, UTC).isoformat()
+        rows = self._read_only_rows(
+            "SELECT COUNT(*) AS n FROM ima_document_index "
+            "WHERE group_id = ? AND downloaded_at >= ? AND downloaded_at <= ?",
+            (group_id, start, end),
+        )
+        return int(rows[0]["n"] if rows else 0)
+
+    def ima_latest_download_batch(self, group_id: str) -> tuple[str, int]:
+        """Newest downloaded_at and how many rows share that second."""
+        rows = self._read_only_rows(
+            "SELECT downloaded_at FROM ima_document_index "
+            "WHERE group_id = ? AND downloaded_at != '' "
+            "ORDER BY downloaded_at DESC LIMIT 1",
+            (group_id,),
+        )
+        if not rows:
+            return "", 0
+        stamp = str(rows[0]["downloaded_at"] or "")
+        prefix = stamp[:19]
+        if len(prefix) < 19:
+            return stamp, 1
+        counted = self._read_only_rows(
+            "SELECT COUNT(*) AS n FROM ima_document_index "
+            "WHERE group_id = ? AND downloaded_at LIKE ?",
+            (group_id, prefix + "%"),
+        )
+        return stamp, int(counted[0]["n"] if counted else 0)
 
     def get_tag_vocabulary(self) -> list[dict]:
         """读贴文打标词表（settings 持久化），返回「标签 + 关键词」对象数组。

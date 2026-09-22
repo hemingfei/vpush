@@ -29,13 +29,33 @@ export function createNewsView(dependencies) {
     renderSidebar,
     renderBottomNav,
     updateNewsBadge,
+    SEARCH_ICON,
+    GEAR_ICON,
+    NEWS_ICON,
+    EYE_ICON,
+    CHEVRON_DOWN_ICON,
+    CHECK_ICON,
+    CHECK_CHECK_ICON,
   } = dependencies;
   let searchTimer = null; // 财经新闻/实时/调研共用的搜索去抖定时器（同一时刻只有一个栏目可见）
+  let readAllUndoTimer = null;
+  let readAllUndoPayload = null;
 
   // 实时资讯时间：当天只显示时钟，非当天才带日期（fmtPublished 当天返回「今天 HH:MM:SS」）
   function fmtRtTime(s) {
     const full = fmtPublished(s);
     return full.startsWith("今天") ? fmtPublished(s, true) : full;
+  }
+
+  function clearNewsReadUndo() {
+    clearTimeout(readAllUndoTimer);
+    readAllUndoTimer = null;
+    readAllUndoPayload = null;
+    const banner = $("#news-read-undo");
+    if (banner) {
+      banner.hidden = true;
+      banner.innerHTML = "";
+    }
   }
 
   function newsImageUrlKey(articleId, index) {
@@ -74,6 +94,7 @@ export function createNewsView(dependencies) {
     stopNewsResearchPoll();
     abortNewsImageRequests();
     clearTimeout(searchTimer);
+    clearNewsReadUndo();
     clearNewsImageUrls();
     state.newsSources = [];
     state.newsFilterSourceId = "";
@@ -128,6 +149,11 @@ export function createNewsView(dependencies) {
       }, { rootMargin: "300px 0px" });
     }
     pending.forEach((img) => state.newsThumbObserver.observe(img));
+  }
+
+  function newsListKey() {
+    const topic = state.newsTopic || "";
+    return `${state.newsFilterSourceId || ""}|${(state.newsQuery || "").trim()}|${state.newsUnreadOnly ? "u" : ""}|${topic}`;
   }
 
   function startNewsAutoLoad(seq) {
@@ -642,20 +668,79 @@ export function createNewsView(dependencies) {
     return groups;
   }
 
-  function newsListItemHtml(item) {
-    const thumbnail = item.has_image
-      ? `<img class="news-list-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 64'%3E%3C/svg%3E" data-news-thumbnail="${item.id}" alt="" loading="lazy" onerror="this.style.display='none'">`
-      : "";
-    return `<article class="news-list-item" data-news-id="${item.id}" tabindex="0" role="link" onclick="openNewsArticle(${item.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNewsArticle(${item.id})}">
-      <div class="news-list-copy"><div class="news-list-meta"><span>${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${item.is_new ? '<span class="news-new-label">新</span>' : ""}</div>
-      <h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary || "暂无摘要")}</p></div>${thumbnail}
-    </article>`;
+  const NEWS_TOPICS = ["宏观", "国际", "科技", "公司", "市场"];
+
+  function newsTopicBarHtml() {
+    const active = state.newsTopic || "";
+    return `<div class="news-topic-bar" role="tablist" aria-label="新闻主题">
+      <button type="button" class="news-topic-chip ${active ? "" : "is-on"}" onclick="selectNewsTopic('')" aria-pressed="${active ? "false" : "true"}">全部</button>
+      ${NEWS_TOPICS.map((topic) => `<button type="button" class="news-topic-chip ${active === topic ? "is-on" : ""}" onclick="selectNewsTopic('${topic}')" aria-pressed="${active === topic ? "true" : "false"}">${topic}</button>`).join("")}
+    </div>`;
   }
 
-  function newsListHtml(items) {
-    return groupNewsItemsByDay(items).map((group) => `
-      <div class="news-day-sep"><span>${escapeHtml(group.label)}</span></div>
-      ${group.items.map(newsListItemHtml).join("")}`).join("");
+  function newsListItemHtml(item) {
+    const unread = !item.is_read;
+    const thumbnail = item.has_image
+      ? `<img class="news-list-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'%3E%3C/svg%3E" data-news-thumbnail="${item.id}" alt="" width="112" height="75" loading="lazy" onerror="this.closest('.news-list-thumb-link').style.display='none'">`
+      : "";
+    const topics = Array.isArray(item.topics) && item.topics.length
+      ? `<span class="news-item-topics">${item.topics.map((topic) => `<i>${escapeHtml(topic)}</i>`).join("")}</span>`
+      : "";
+    return `<article class="news-list-item ${unread ? "is-unread" : "is-read"}" data-news-id="${item.id}">
+    <div class="news-list-copy">
+      <a class="news-item-open" href="/news/${item.id}">
+        <div class="news-item-title-row">${unread ? '<i class="news-item-unread-dot" aria-label="未读"></i>' : ""}<h3>${escapeHtml(item.title)}</h3></div>
+        <p>${escapeHtml(item.summary || "暂无摘要")}</p>
+      </a>
+      <div class="news-list-meta"><span class="news-item-source">${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${topics}${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})" aria-label="标为已读">${CHECK_ICON}<span>标为已读</span></button>` : ""}</div>
+    </div>${thumbnail ? `<a class="news-list-thumb-link" href="/news/${item.id}" tabindex="-1" aria-hidden="true">${thumbnail}</a>` : ""}
+  </article>`;
+  }
+
+  function newsListHtml(items, { append = false } = {}) {
+    const groups = groupNewsItemsByDay(items);
+    let continued = "";
+    if (append) {
+      const labels = document.querySelectorAll("#news-list .news-day-sep span");
+      continued = labels.length ? labels[labels.length - 1].textContent : "";
+    }
+    return groups.map((group, index) => {
+      const head = append && index === 0 && group.label === continued
+        ? ""
+        : `<div class="news-day-sep"><span>${escapeHtml(group.label)}</span></div>`;
+      return `${head}${group.items.map(newsListItemHtml).join("")}`;
+    }).join("");
+  }
+
+  function newsEmptyHtml() {
+    const query = (state.newsQuery || "").trim();
+    if (state.newsUnreadOnly && !query && !state.newsTopic && !state.newsFilterSourceId) {
+      return emptyState("没有未读文章，已经全部看完了");
+    }
+    if (query || state.newsTopic || state.newsFilterSourceId || state.newsUnreadOnly) {
+      return emptyState("暂无相关财经资讯", `<div><button type="button" class="btn-ghost" onclick="clearNewsFilters()">清除筛选</button></div>`);
+    }
+    return emptyState("还没有财经新闻，采集开始后会自动出现");
+  }
+
+  function newsSourceNavigationHtml() {
+    const groups = new Map();
+    for (const source of state.newsSources) {
+      const label = source.group_name || "其他来源";
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(source);
+    }
+    const allOn = !state.newsFilterSourceId;
+    const rows = [...groups.entries()].map(([label, sources]) => `
+    <details class="news-source-group" open>
+      <summary>${CHEVRON_DOWN_ICON}<span>${escapeHtml(label)}</span></summary>
+      ${sources.map((source) => `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')"><span>${escapeHtml(source.name)}${source.enabled ? "" : "（已暂停）"}</span><b>${Number(source.unread_count) || ""}</b></button>`).join("")}
+    </details>`).join("");
+    return `<nav class="news-source-rail" aria-label="资讯来源">
+    <div class="news-source-rail-head"><strong>资讯来源</strong></div>
+    <button type="button" class="news-source-row news-source-all ${allOn ? "is-on" : ""}" onclick="selectNewsSource('')">${NEWS_ICON}<span>全部资讯</span><b>${Number(state.newsUnreadCount) || ""}</b></button>
+    ${rows || '<p class="muted">暂无资讯来源</p>'}
+  </nav>`;
   }
 
   function newsSourceFilterOptions() {
@@ -663,7 +748,7 @@ export function createNewsView(dependencies) {
   }
 
   function newsListSkeletonHtml() {
-    const card = '<div class="admin-sk-card"><div class="admin-sk-line admin-sk-head"></div><div class="admin-sk-line"></div></div>';
+    const card = '<div class="admin-sk-card"><div class="news-sk-copy"><div class="admin-sk-line admin-sk-head"></div><div class="admin-sk-line"></div><div class="admin-sk-line"></div></div><div class="news-sk-thumb"></div></div>';
     return `<div class="admin-skeleton" aria-hidden="true">${card.repeat(3)}</div>`;
   }
 
@@ -673,11 +758,20 @@ export function createNewsView(dependencies) {
     renderNewsShell(
       "articles",
       `${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
-      <div class="news-list-toolbar"><div class="news-toolbar-filters"><button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}">只看未读${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</button><select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="selectNewsSource(this.value)">${newsSourceFilterOptions()}</select><div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)"></div></div>${unreadCount ? '<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()">全部已读</button>' : ""}</div>
+      <div class="news-list-toolbar"><div class="news-toolbar-filters"><button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}">只看未读${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</b></button><select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="selectNewsSource(this.value)">${newsSourceFilterOptions()}</select><div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)"></div></div>${unreadCount ? `<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()" aria-label="全部已读">${CHECK_CHECK_ICON}<span>全部已读</span></button>` : ""}</div>
+      <div class="news-stream-topbar">${newsTopicBarHtml()}</div>
       <div id="news-list" class="news-list">${newsListSkeletonHtml()}</div>
-      <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>`,
+      <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
+      <div id="news-read-undo" class="news-read-undo" role="status" aria-live="polite" hidden></div>`,
       "",
     );
+  }
+
+  function attachListImages(seq) {
+    for (const item of state.newsItems) {
+      const image = document.querySelector(`[data-news-thumbnail="${item.id}"]`);
+      if (image) loadNewsImageBlob(item.id, 0, image, seq);
+    }
   }
 
   function syncUnreadBadge() {
@@ -700,7 +794,17 @@ export function createNewsView(dependencies) {
 
   async function renderFinancialNewsList(seq = currentRouteSeq()) {
     setPageTitle("财经资讯");
-    clearNewsImageUrls();
+    // 文章返回且筛选未变：直接复用已加载列表并恢复滚动位置
+    if (state.newsItems.length && state.newsListKey === newsListKey()) {
+      clearNewsImageUrls();
+      renderFinancialNewsShell(state.newsCollectionEnabled !== false);
+      const list = $("#news-list");
+      list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : newsEmptyHtml();
+      observeNewsLazyImages();
+      startNewsAutoLoad(seq);
+      window.scrollTo(0, state.newsScrollY || 0);
+      return;
+    }
     state.newsItems = [];
     state.newsOffset = 0;
     state.newsHasMore = false;
@@ -737,6 +841,7 @@ export function createNewsView(dependencies) {
     if (state.newsFilterSourceId) params.set("source_id", state.newsFilterSourceId);
     if (state.newsQuery.trim()) params.set("q", state.newsQuery.trim());
     if (state.newsUnreadOnly) params.set("unread", "1");
+    if (state.newsTopic) params.set("topic", state.newsTopic);
     try {
       const data = await api(`/api/news?${params}`);
       if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
@@ -745,11 +850,9 @@ export function createNewsView(dependencies) {
       state.newsOffset = data.next_offset || state.newsItems.length;
       state.newsHasMore = !!data.has_more;
       if (reset) {
-        list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : emptyState(
-          state.newsUnreadOnly ? "没有未读文章，已经全部看完了" : "暂无符合条件的财经新闻",
-        );
+        list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : newsEmptyHtml();
       } else if (items.length) {
-        list.insertAdjacentHTML("beforeend", newsListHtml(items));
+        list.insertAdjacentHTML("beforeend", newsListHtml(items, { append: true }));
       }
       observeNewsLazyImages();
       if (state.newsItems.length && !state.newsUnreadOnly) {
@@ -758,9 +861,17 @@ export function createNewsView(dependencies) {
         if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
         if (seenAt) api("/api/news/seen", { method: "POST", body: JSON.stringify({ view_started_at: seenAt }) }).catch(() => {});
       }
+      const sentinel = $("#news-load-sentinel");
+      if (sentinel) sentinel.innerHTML = "";
       startNewsAutoLoad(seq);
     } catch (err) {
       if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
+      if (!reset && state.newsItems.length) {
+        stopNewsAutoLoad();
+        const sentinel = $("#news-load-sentinel");
+        if (sentinel) sentinel.innerHTML = `<button type="button" class="btn-ghost" onclick="loadFinancialNews(false)">加载失败，点击重试</button>`;
+        return;
+      }
       list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="loadFinancialNews(${reset})">重试</button></div>`);
     }
   }
@@ -779,7 +890,11 @@ export function createNewsView(dependencies) {
       image.src = url;
     } catch (err) {
       if (err?.name === "AbortError") return;
-      if (routeStillActive(seq) && image && document.body.contains(image)) image.remove();
+      if (routeStillActive(seq) && image && document.body.contains(image)) {
+        const link = image.closest(".news-list-thumb-link");
+        if (link) link.remove();
+        else image.remove();
+      }
     }
   }
 
@@ -814,6 +929,14 @@ export function createNewsView(dependencies) {
     try {
       const article = await api(`/api/news/${id}`);
       if (!document.body.contains(mask)) return;
+      // 打开即视为已读：后台静默上报，列表角标/未读数同步刷新（失败不影响阅读）
+      void api(`/api/news/${id}/read`, { method: "POST" }).then(() => {
+        if (applyNewsItemRead(id)) {
+          paintNewsItemRead(id);
+          paintNewsUnreadChrome();
+          syncUnreadBadge();
+        }
+      }).catch(() => {});
       const pager = (article.prev_id || article.next_id) ? `
         <div class="news-article-nav">
           ${article.prev_id ? `<button type="button" class="btn-ghost" onclick="openNewsArticle(${article.prev_id})">← 上一篇</button>` : "<span></span>"}
@@ -834,6 +957,70 @@ export function createNewsView(dependencies) {
     return size === "small" ? " news-font-small" : size === "large" ? " news-font-large" : "";
   }
 
+  function applyNewsItemRead(articleId) {
+    const item = state.newsItems.find((entry) => Number(entry.id) === Number(articleId));
+    if (!item || item.is_read) return false;
+    item.is_read = true;
+    item.is_new = false;
+    state.newsUnreadCount = Math.max(0, Number(state.newsUnreadCount) - 1);
+    const source = state.newsSources.find((entry) => Number(entry.id) === Number(item.source_id));
+    if (source) source.unread_count = Math.max(0, Number(source.unread_count) - 1);
+    return true;
+  }
+
+  function paintNewsUnreadChrome() {
+    const count = Number(state.newsUnreadCount) || 0;
+    const badge = count > 99 ? "99+" : String(count);
+    document.querySelectorAll(".news-unread-toggle").forEach((button) => {
+      let mark = button.querySelector("b");
+      if (!count) {
+        mark?.remove();
+        return;
+      }
+      if (!mark) {
+        mark = document.createElement("b");
+        button.appendChild(mark);
+      }
+      mark.textContent = badge;
+    });
+    if (!count) document.querySelector(".news-read-all")?.remove();
+  }
+
+  function paintNewsItemRead(articleId) {
+    const card = document.querySelector(`[data-news-id="${articleId}"]`);
+    if (!card) return false;
+    if (state.newsUnreadOnly) {
+      card.remove();
+      const list = $("#news-list");
+      if (list && !list.querySelector(".news-list-item")) list.innerHTML = newsEmptyHtml();
+      return true;
+    }
+    card.classList.remove("is-unread");
+    card.classList.add("is-read");
+    card.querySelector(".news-item-unread-dot")?.remove();
+    card.querySelector(".news-mark-read")?.remove();
+    return true;
+  }
+
+  async function markNewsItemRead(articleId) {
+    const seq = currentRouteSeq();
+    const item = state.newsItems.find((entry) => Number(entry.id) === Number(articleId));
+    const changed = item && !item.is_read;
+    if (changed && $("#news-list")) {
+      paintNewsItemRead(articleId);
+      paintNewsUnreadChrome();
+    }
+    try {
+      await api(`/api/news/${articleId}/read`, { method: "POST" });
+      if (!routeStillActive(seq)) return;
+      if (changed) applyNewsItemRead(articleId);
+      syncUnreadBadge();
+    } catch (err) {
+      if (changed && routeStillActive(seq)) await renderFinancialNewsList(seq);
+      flash(err.message, "error");
+    }
+  }
+
   function openNewsArticle(articleId) {
     const id = Number(articleId);
     if (Number.isInteger(id) && id > 0) openNewsArticleModal(id);
@@ -847,15 +1034,51 @@ export function createNewsView(dependencies) {
   }
 
   async function markAllNewsRead() {
-    if (!confirm("把全部文章标记为已读？")) return;
+    const seq = currentRouteSeq();
+    const marked = Number(state.newsUnreadCount) || 0;
     try {
-      await api("/api/news/read-all", { method: "POST" });
+      const data = await api("/api/news/read-all", { method: "POST" });
       state.newsUnreadCount = 0;
+      state.newsSources.forEach((source) => { source.unread_count = 0; });
+      state.newsItems.forEach((item) => { item.is_read = true; item.is_new = false; });
+      readAllUndoPayload = {
+        read_all_seen_at: data.read_all_seen_at,
+        previous_seen_at: data.previous_seen_at || null,
+      };
       syncUnreadBadge();
-      flash("已全部标记为已读");
+      if (!routeStillActive(seq)) return;
+      const list = $("#news-list");
+      if (!list) return;
       renderFinancialNewsShell(state.newsCollectionEnabled !== false);
-      if (state.newsUnreadOnly) await loadFinancialNews(true, currentRouteSeq());
+      $("#news-list").innerHTML = state.newsUnreadOnly ? newsEmptyHtml() : newsListHtml(state.newsItems);
+      if (!state.newsUnreadOnly) {
+        observeNewsLazyImages();
+        startNewsAutoLoad(seq);
+      }
+      const banner = $("#news-read-undo");
+      banner.hidden = false;
+      banner.innerHTML = `<span>已将 ${marked} 篇资讯标为已读</span><button type="button" onclick="undoNewsReadAll()">撤销</button>`;
+      clearTimeout(readAllUndoTimer);
+      readAllUndoTimer = setTimeout(clearNewsReadUndo, 5000);
     } catch (err) { flash(err.message, "error"); }
+  }
+
+  async function undoNewsReadAll() {
+    if (!readAllUndoPayload) return;
+    const payload = readAllUndoPayload;
+    clearNewsReadUndo();
+    try {
+      await api("/api/news/read-all/undo", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      state.newsListKey = "";
+      await renderFinancialNewsList(currentRouteSeq());
+      flash("已撤销全部已读");
+    } catch (err) {
+      flash(err.message, "error");
+      await refreshUnreadCount(currentRouteSeq());
+    }
   }
 
   async function setNewsFontSize(value) {
@@ -877,6 +1100,22 @@ export function createNewsView(dependencies) {
 
   function selectNewsSource(sourceId) {
     state.newsFilterSourceId = sourceId;
+    state.newsListKey = newsListKey();
+    return loadFinancialNews(true, currentRouteSeq());
+  }
+
+  function clearNewsFilters() {
+    state.newsUnreadOnly = false;
+    state.newsQuery = "";
+    state.newsTopic = "";
+    state.newsFilterSourceId = "";
+    state.newsListKey = newsListKey();
+    return loadFinancialNews(true, currentRouteSeq());
+  }
+
+  function selectNewsTopic(topic) {
+    state.newsTopic = topic || "";
+    state.newsListKey = newsListKey();
     return loadFinancialNews(true, currentRouteSeq());
   }
 
@@ -914,6 +1153,7 @@ export function createNewsView(dependencies) {
     loadRealtimeNews,
     loadResearchNews,
     markAllNewsRead,
+    markNewsItemRead,
     queueNewsRtSearch,
     queueNewsResearchSearch,
     newsRtBacktopClick,
@@ -928,11 +1168,14 @@ export function createNewsView(dependencies) {
     renderFinancialNewsList,
     renderNewsCenter,
     renderResearchNews,
+    clearNewsFilters,
     selectNewsRtSource,
     selectNewsResearchSource,
     selectNewsSource,
     selectNewsTab,
+    selectNewsTopic,
     setNewsFontSize,
     toggleNewsUnreadOnly,
+    undoNewsReadAll,
   };
 }

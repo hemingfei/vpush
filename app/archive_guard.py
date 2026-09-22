@@ -96,6 +96,12 @@ class CircuitBreaker:
                 self._fail = 0
             return True
 
+    def is_open(self) -> bool:
+        with self._lock:
+            if not self._opened_at:
+                return False
+            return time.monotonic() - self._opened_at < self.cooldown
+
     def success(self) -> None:
         with self._lock:
             self._fail = 0
@@ -254,3 +260,31 @@ def fetch_missing_archive_file(root: Path, relative: str) -> Path | None:
         _arm_circuit.failure()
         tmp.unlink(missing_ok=True)
         return None
+
+
+def arm_pull_status(*, timeout: float = 2.0) -> dict[str, object]:
+    """Probe ARM ima-pull /healthz. Short timeout. Never touches NFS."""
+    raw = os.environ.get("IMA_PULL_URL", "").strip()
+    if not raw:
+        return {"configured": False, "ok": False, "status": "unconfigured", "circuit_open": _arm_circuit.is_open()}
+    health = raw[:-5] + "/healthz" if raw.endswith("/pull") else raw.rstrip("/") + "/healthz"
+    try:
+        request = urllib.request.Request(health, method="GET")
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read(32).decode("utf-8", "replace").strip()
+        ok = response.status == 200 and body.startswith("ok")
+        if ok:
+            _arm_circuit.success()
+        return {
+            "configured": True,
+            "ok": ok,
+            "status": body or str(response.status),
+            "circuit_open": _arm_circuit.is_open(),
+        }
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
+        return {
+            "configured": True,
+            "ok": False,
+            "status": type(exc).__name__,
+            "circuit_open": _arm_circuit.is_open(),
+        }

@@ -55,7 +55,7 @@
             <header class="section-head">
               <div>
                 <h2 class="section-title">管线</h2>
-                <p class="section-meta">Oracle-SJ-ARM：采集与热缓存。vpush 只走 HTTP，115 是冷备份。</p>
+                <p class="section-meta">Oracle-SJ-ARM：采集与热缓存。vpush 只走 HTTP。冷备先存储机，再 115。</p>
               </div>
             </header>
             <ol class="ops-pipe">
@@ -72,7 +72,12 @@
               <li id="pipe-hot" data-state="off">
                 <span class="k">热缓存</span>
                 <span class="v" id="pipe-hot-v">先入 hot</span>
-                <span class="s" id="pipe-hot-s">115 后台上传，不挡展示</span>
+                <span class="s" id="pipe-hot-s">给 vpush 读，不挡展示</span>
+              </li>
+              <li id="pipe-backup" data-state="off">
+                <span class="k">冷备</span>
+                <span class="v" id="pipe-backup-v">存储机优先</span>
+                <span class="s" id="pipe-backup-s">然后 115。OpenList 只浏览</span>
               </li>
               <li id="pipe-pull" data-state="off">
                 <span class="k">对 vpush</span>
@@ -139,7 +144,7 @@
             </div>
             <label class="cfg-field cfg-check">
               <input type="checkbox" id="apply-confirm">
-              <span>确认 apply（写入 staging；puller 先入热，115 后台）</span>
+              <span>确认 apply（写入 staging；先入热，再冷备到存储机和 115）</span>
             </label>
             <p class="muted" id="job-hint">上次任务输出见下方。接口不回 Cookie / token。</p>
             <p class="ops-banner" id="job-status" hidden></p>
@@ -175,7 +180,7 @@
             <header class="section-head">
               <div>
                 <h2 class="section-title">Puller</h2>
-                <p class="section-meta">staging → 先入 hot，115 后台。不挡 vpush 展示。</p>
+                <p class="section-meta">staging → 先入 hot。新文件先推存储机，再上传 115。</p>
               </div>
             </header>
             <p class="section-meta" id="puller-source">-</p>
@@ -216,6 +221,22 @@
         </div>
 
         <div id="view-storage" class="ops-view hidden" hidden aria-hidden="true">
+          <section class="section-panel" id="backup-card">
+            <header class="section-head">
+              <div>
+                <h2 class="section-title">冷备渠道</h2>
+                <p class="section-meta">按优先级推增量。只补对方没有的文件，不删除旧归档。OpenList 不参与写入。</p>
+              </div>
+            </header>
+            <div class="ops-table-wrap">
+              <table class="ops-table" id="backup-table">
+                <thead>
+                  <tr><th>优先级</th><th>渠道</th><th>方式</th><th>状态</th></tr>
+                </thead>
+                <tbody id="backup-body"></tbody>
+              </table>
+            </div>
+          </section>
           <section class="section-panel" id="p115-card">
             <header class="section-head">
               <div>
@@ -242,6 +263,7 @@
             <header class="section-head">
               <div>
                 <h2 class="section-title">OpenList</h2>
+                <p class="section-meta">只浏览热缓存，不作为冷备渠道。</p>
                 <p class="section-meta" id="openlist-link">未配置 <code>OPENLIST_PUBLIC_URL</code></p>
               </div>
             </header>
@@ -292,7 +314,7 @@
             <header class="section-head">
               <div>
                 <h2 class="section-title">更多</h2>
-                <p class="section-meta">凭据、失败队列与 115 冷备。</p>
+                <p class="section-meta">凭据、失败队列与冷备渠道。</p>
               </div>
             </header>
             <div class="more-grid">
@@ -306,7 +328,7 @@
               </button>
               <button type="button" class="more-item" data-route="storage">
                 <span class="more-icon" aria-hidden="true"><svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
-                115 / OpenList
+                冷备渠道
               </button>
             </div>
           </section>

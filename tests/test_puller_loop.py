@@ -28,6 +28,7 @@ def _isolate_puller_env(monkeypatch, tmp_path):
     monkeypatch.setenv("PULLER_BATCH_SIZE", "20")
     monkeypatch.setenv("PULLER_KEEP_HOT", "1")
     monkeypatch.delenv("VPUSH_ARM_MIDDLEWARE", raising=False)
+    monkeypatch.delenv("ARM_STORAGE_BACKUP", raising=False)
     yield
 
 
@@ -459,6 +460,31 @@ def test_tick_admits_hot_when_115_client_unavailable(tmp_path):
     assert (worker.hot / rel).read_bytes() == b"%PDF-off"
     assert not src.exists()
     assert worker.uploaded == 0
+
+
+def test_tick_pushes_storage_before_115(tmp_path, monkeypatch):
+    order: list[str] = []
+    marker = tmp_path / "order"
+    script = tmp_path / "backup.sh"
+    script.write_text(
+        "#!/bin/sh\nprintf '%s\\n' storage >> \"$ORDER_FILE\"\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("ARM_STORAGE_BACKUP", str(script))
+    monkeypatch.setenv("ORDER_FILE", str(marker))
+    staging = lab_common.cache_root() / "staging"
+    _write_pdf(staging, "local/cicc-research/2026/09/22/new_1.pdf", b"%PDF-new")
+    worker = _puller_with_client(FakeClient([]))
+
+    def boom(force: bool = False):
+        order.append("115")
+        raise RuntimeError("401 unauthorized")
+
+    worker.client_get = boom  # type: ignore[method-assign]
+    worker.tick()
+    assert marker.read_text(encoding="utf-8").split() == ["storage"]
+    assert order == ["115"]
 
 
 def test_process_retries_promotes_failed_pdf_before_115(tmp_path, monkeypatch):

@@ -423,13 +423,15 @@ export function createAdminCodesView(dependencies) {
     const when = c.used_at ? fmtDbTime(c.used_at) : c.revoked_at ? fmtDbTime(c.revoked_at) : c.expires_at ? fmtDbTime(c.expires_at) : fmtDbTime(c.created_at);
     const canRevoke = st === "available" || st === "expired";
     const checked = _adminCodesSelected.has(c.code) ? "checked" : "";
+    const note = String(c.note || "").trim();
+    const user = String(c.used_by_name || "").trim();
     return `<tr>
-      <td data-label="邀请码"><span class="rc-code"><input type="checkbox" class="rc-check" data-code="${escapeHtml(c.code)}" data-batch="${escapeHtml(c.batch_id || c.code)}" ${checked} onchange="adminCodesToggle(this)" aria-label="选择邀请码"><code>${escapeHtml(c.code)}</code><button class="btn-sm" data-code="${escapeHtml(c.code)}" onclick="copyText(this.dataset.code, '已复制')">复制</button></span></td>
-      <td data-label="备注" class="rc-note-cell">${escapeHtml(c.note || "")}</td>
-      <td data-label="状态" class="${codeStatusClass(st)}">${codeStatusLabel(st)}</td>
-      <td data-label="使用者">${escapeHtml(c.used_by_name || "")}</td>
-      <td data-label="时间">${escapeHtml(when)}</td>
-      <td data-label="操作">${canRevoke ? `<button class="btn-sm danger" data-code="${escapeHtml(c.code)}" onclick="adminRevokeCode(this.dataset.code)">作废</button>` : ""}</td>
+      <td class="rc-code-cell"><span class="rc-code"><input type="checkbox" class="rc-check" data-code="${escapeHtml(c.code)}" data-batch="${escapeHtml(c.batch_id || c.code)}" ${checked} onchange="adminCodesToggle(this)" aria-label="选择邀请码"><code>${escapeHtml(c.code)}</code></span></td>
+      <td class="rc-note-cell${note ? "" : " rc-empty-cell"}">${escapeHtml(note)}</td>
+      <td class="rc-status-cell ${codeStatusClass(st)}">${codeStatusLabel(st)}</td>
+      <td class="rc-user-cell${user ? "" : " rc-empty-cell"}">${escapeHtml(user)}</td>
+      <td class="rc-time-cell">${escapeHtml(when)}</td>
+      <td class="rc-actions"><button class="btn-sm" data-code="${escapeHtml(c.code)}" onclick="copyText(this.dataset.code, '已复制')">复制</button>${canRevoke ? `<button class="btn-sm danger" data-code="${escapeHtml(c.code)}" onclick="adminRevokeCode(this.dataset.code)">作废</button>` : ""}</td>
     </tr>`;
   }
 

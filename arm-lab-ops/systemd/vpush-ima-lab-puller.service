@@ -14,6 +14,7 @@ Environment=CACHE_ROOT=/data/vpush-ima-cache
 Environment=P115_LAB_ROOT=/vpush
 Environment=P115_COOKIES_FILE=/opt/vpush-ima-lab/secrets/115-cookies.txt
 Environment=P115_DEVICE_TYPE=harmony
+Environment=ARM_STORAGE_BACKUP=/opt/vpush-ima-lab/bin/arm-storage-backup.sh
 EnvironmentFile=-/data/vpush-ima-cache/ops-puller.env
 ExecStart=/opt/vpush-ima-lab/venv/bin/python /opt/vpush-ima-lab/scripts/puller_loop.py
 Restart=always

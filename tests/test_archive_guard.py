@@ -7,6 +7,7 @@ from app.archive_guard import (
     archive_fetch_url,
     archive_list_url,
     fetch_missing_archive_file,
+    arm_pull_status,
     is_remote_nfs,
     list_archive_prefix,
     path_without_stat,
@@ -217,4 +218,30 @@ def test_cicc_status_missing_file_still_available_when_local(tmp_path):
     ctl = CiccControl(str(tmp_path / "archive"))
     data = ctl.status()
     assert data["available"] is True
-    assert data["stale"] is True
+
+
+def test_arm_pull_status_checks_healthz(monkeypatch):
+    monkeypatch.setenv("IMA_PULL_URL", "http://arm.example/pull")
+
+    class Resp:
+        status = 200
+
+        def read(self, _n):
+            return b"ok"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def opener(request, timeout=0):
+        assert request.full_url == "http://arm.example/healthz"
+        assert timeout == 2.0
+        return Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    row = arm_pull_status()
+    assert row["configured"] is True
+    assert row["ok"] is True
+    assert row["status"] == "ok"

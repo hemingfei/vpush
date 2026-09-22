@@ -158,7 +158,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if logical:
             query = f"?{parsed.query}" if parsed.query else ""
             self.path = f"/{logical}{query}"
-        elif path in {"/news", "/news/"}:
+        elif path == "/news" or path.startswith("/news/"):
             self.path = "/index.html"
         super().do_GET()
 
@@ -188,7 +188,7 @@ def page(playwright_instance: Playwright, static_origin: str):
     browser = playwright_instance.chromium.launch(channel="chrome", headless=True)
     context = browser.new_context(service_workers="block")
     page = context.new_page()
-    page.goto(static_origin, wait_until="domcontentloaded")
+    page.goto(static_origin, wait_until="load")
     yield page
     context.close()
     browser.close()
@@ -198,29 +198,65 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
     payload = json.dumps({
         "delayed": delayed,
         "failImage": fail_image,
-        "sources": {"items": [{"id": 1, "name": "Test", "selected": True, "group_name": "测试组"}], "collection_enabled": True, "unread_count": 2},
+        "sources": {
+            "items": [
+                {"id": 1, "name": "华尔街见闻", "selected": True, "group_name": "宏观与市场", "unread_count": 2},
+                {"id": 2, "name": "财联社", "selected": True, "group_name": "宏观与市场", "unread_count": 0},
+            ],
+            "collection_enabled": True,
+            "unread_count": 2,
+        },
         "news": {"items": [{
-            "id": 7, "has_image": True, "source_name": "Test",
+            "id": 7, "has_image": True, "source_name": "华尔街见闻", "source_id": 1,
             "published_at": "2026-09-04T00:00:00Z", "title": "Title",
-            "summary": "Summary", "is_new": False,
+            "summary": "Summary", "topics": ["宏观"], "is_read": False, "is_new": True,
         }], "next_offset": 1, "has_more": False, "view_started_at": None},
     }, ensure_ascii=False)
     page.context.add_init_script(
         "const data = " + payload + """;
           localStorage.setItem('dav_token', 'test-token');
           window.__newsRequests = [];
-          window.fetch = async (input) => {
+          window.fetch = async (input, init = {}) => {
             const url = String(input);
-            if (url.includes('/api/news')) window.__newsRequests.push(url);
+            if (url.includes('/api/news')) {
+              window.__newsRequests.push({ url, method: (init.method || 'GET'), body: init.body || null });
+            }
             if (url.includes('/api/me')) {
               return { ok: true, status: 200, json: async () => ({ id: 1, username: 'test', news_visible: true }) };
             }
             if (url.includes('/api/news/sources')) {
-              return { ok: true, status: 200, json: async () => data.sources };
+              return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(data.sources)) };
             }
             if (url.includes('/api/news/7/images/')) {
               if (data.failImage) throw new Error('offline');
               return { ok: true, status: 200, blob: async () => new Blob(['x']) };
+            }
+            if (url.includes('/read-all/undo')) {
+              return { ok: true, status: 200, json: async () => ({ ok: true }) };
+            }
+            if (url.includes('/read-all')) {
+              return { ok: true, status: 200, json: async () => ({
+                ok: true,
+                read_all_seen_at: '2026-09-04T12:00:00+00:00',
+                previous_seen_at: null,
+              }) };
+            }
+            if (url.includes('/read')) {
+              return { ok: true, status: 200, json: async () => ({ ok: true }) };
+            }
+            if (url.includes('/api/news/realtime') || url.includes('/api/news/research')) {
+              // 实时资讯/调研纪要栏目：列表结构与文章流不同，返回空流即可（骨架与空态走各自分支）
+              if (data.delayed) {
+                return {
+                  ok: true,
+                  status: 200,
+                  json: () => new Promise(resolve => { window.__resolveNews = resolve; }),
+                };
+              }
+              return { ok: true, status: 200, json: async () => ({ items: [], offset: 0, has_more: false, selected_count: 0, sources: [] }) };
+            }
+            if (url.includes('/api/news/') && !url.includes('/images') && !url.includes('/sources')) {
+              return { ok: true, status: 200, json: async () => ({ id: 7, title: 'Title', summary: 'Summary', content_html: '<p>Body</p>', source_name: '华尔街见闻', published_at: '2026-09-04T00:00:00Z', url: 'https://example.com', prev_id: 6, next_id: 8 }) };
             }
             if (url.includes('/api/news')) {
               if (data.delayed) {
@@ -230,7 +266,7 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
                   json: () => new Promise(resolve => { window.__resolveNews = resolve; }),
                 };
               }
-              return { ok: true, status: 200, json: async () => data.news };
+              return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(data.news)) };
             }
             return { ok: true, status: 200, json: async () => ({}) };
           };
@@ -800,7 +836,7 @@ def test_post_origin_link_aligns_with_tags(page: Page, static_origin: str, width
     page.goto(static_origin)
     page.evaluate("() => go('timeline')")
     expect(page.locator(".post-item .p-meta span.cat")).to_be_visible()
-    expect(page.get_by_role("button", name="复制图卡")).to_be_visible()
+    expect(page.get_by_role("button", name="图卡分享")).to_be_visible()
     expect(page.get_by_role("link", name="查看原文")).to_be_visible()
     geo = page.evaluate("""() => {
       const cat = document.querySelector('.p-meta span.cat');
@@ -890,8 +926,8 @@ def test_post_card_export_copies_from_timeline_and_kol(page: Page, static_origin
     page.goto(static_origin)
     _install_card_export_stub(page)
     page.evaluate("() => go('timeline')")
-    expect(page.get_by_role("button", name="复制图卡")).to_have_count(3)
-    page.get_by_role("button", name="复制图卡").first.click()
+    expect(page.get_by_role("button", name="图卡分享")).to_have_count(3)
+    page.get_by_role("button", name="图卡分享").first.click()
     page.wait_for_function("() => (window.__exportCardHtml || '').includes('X post full text')")
     expect(page.locator("#toast")).to_contain_text("已复制，去微信粘贴即可")
     twitter_html = page.evaluate("window.__exportCardHtml")
@@ -900,7 +936,7 @@ def test_post_card_export_copies_from_timeline_and_kol(page: Page, static_origin
     assert "vpush.net" not in twitter_html
     assert page.evaluate("window.__clipWrites.length") == 1
 
-    page.get_by_role("button", name="复制图卡").nth(1).click()
+    page.get_by_role("button", name="图卡分享").nth(1).click()
     page.wait_for_function("() => (window.__exportCardHtml || '').includes('超过两百字')")
     xueqiu_html = page.evaluate("window.__exportCardHtml")
     assert "哈" * 80 in xueqiu_html
@@ -908,7 +944,7 @@ def test_post_card_export_copies_from_timeline_and_kol(page: Page, static_origin
     assert "xueqiu-icon" in xueqiu_html
 
     page.evaluate("() => setTheme('dark')")
-    page.get_by_role("button", name="复制图卡").nth(2).click()
+    page.get_by_role("button", name="图卡分享").nth(2).click()
     page.wait_for_function("() => (window.__exportCardHtml || '').includes('调仓明细')")
     combo_html = page.evaluate("window.__exportCardHtml")
     assert "is-dark" in combo_html
@@ -919,9 +955,9 @@ def test_post_card_export_copies_from_timeline_and_kol(page: Page, static_origin
 
     page.evaluate("() => go('kol/2')")
     expect(page.get_by_role("heading", name="Kale · 最近动态")).to_be_visible()
-    expect(page.get_by_role("button", name="复制图卡")).to_have_count(1)
+    expect(page.get_by_role("button", name="图卡分享")).to_have_count(1)
     page.evaluate("() => { window.__exportCardHtml = ''; }")
-    page.get_by_role("button", name="复制图卡").click()
+    page.get_by_role("button", name="图卡分享").click()
     page.wait_for_function("() => (window.__exportCardHtml || '').includes('X post full text')")
     expect(page.locator("#toast")).to_contain_text("已复制，去微信粘贴即可")
     assert "@icekale" in page.evaluate("window.__exportCardHtml")
@@ -944,7 +980,7 @@ def test_post_card_export_shares_on_phone(page: Page, static_origin: str):
       navigator.share = async (data) => { window.__shares.push(data); };
     }""")
     page.evaluate("() => go('timeline')")
-    page.get_by_role("button", name="复制图卡").click()
+    page.get_by_role("button", name="图卡分享").click()
     page.wait_for_function("() => (window.__shares || []).length === 1")
     shared = page.evaluate("() => window.__shares[0]")
     assert shared["files"]
@@ -1814,4 +1850,100 @@ def test_news_list_groups_by_day_and_unread_toggle_sends_param(page: Page, stati
     expect(toggle).to_have_class(re.compile(r"is-on"))
     expect(page.locator("#news-list .news-day-sep").first).to_be_visible()
     sent = page.evaluate("() => window.__newsRequests")
-    assert any("unread=1" in url for url in sent)
+    assert any("unread=1" in call["url"] for call in sent)
+
+
+def open_financial_articles_tab(page: Page) -> None:
+    """hmf 财经资讯为三栏目制：/news 默认落在实时资讯，文章列表需先切「财经新闻」栏目。"""
+    page.get_by_role("tab", name="财经新闻").click()
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280])
+def test_news_stream_switches_source_navigation_by_viewport(page, static_origin, width):
+    install_news_bootstrap(page)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
+    open_financial_articles_tab(page)
+    expect(page.locator(".section-title")).to_have_text("财经资讯")
+    expect(page.locator(".news-item-unread-dot")).to_have_count(1)
+    expect(page.locator(".news-item-topics i").first).to_have_text("宏观")
+    box = page.locator(".news-list-item").first.bounding_box()
+    assert box is not None
+    # 三栏目工具条为单行筛选区，第一张卡片应在首屏内（手机端工具条可换行，略放宽）
+    assert box["y"] < (460 if width <= 768 else 480)
+    if width > 768:
+        expect(page.locator("#news-query")).to_be_visible()
+        expect(page.locator("#news-source-filter")).to_be_visible()
+    else:
+        expect(page.locator("#news-query")).to_be_visible()
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280])
+def test_news_stream_does_not_overflow_or_overlap(page, static_origin, width):
+    install_news_bootstrap(page)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
+    open_financial_articles_tab(page)
+    expect(page.locator(".section-title")).to_have_text("财经资讯")
+    assert page.evaluate("() => document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    assert page.evaluate("""() => {
+      const item = document.querySelector('.news-list-item');
+      const title = item && item.querySelector('h3');
+      const thumb = item && item.querySelector('.news-list-thumb');
+      const mark = item && item.querySelector('.news-mark-read');
+      if (!item || !title || !thumb) return false;
+      const overlap = (a, b) => {
+        const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+        return !(ra.right <= rb.left || ra.left >= rb.right || ra.bottom <= rb.top || ra.top >= rb.bottom);
+      };
+      return !overlap(title, thumb) && (!mark || !overlap(title, mark));
+    }""")
+
+
+def test_news_item_mark_read_updates_counts_without_navigation(page: Page, static_origin: str):
+    install_news_bootstrap(page)
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
+    open_financial_articles_tab(page)
+    assert page.evaluate("() => { const btn = document.querySelector('.news-mark-read'); return !!btn && !btn.closest('a[href]'); }")
+    page.get_by_role("button", name="标为已读").click()
+    expect(page.locator('[data-news-id="7"]')).not_to_have_class(re.compile(r"is-unread"))
+    expect(page.locator('[data-news-id="7"] .news-item-unread-dot')).to_have_count(0)
+    expect(page.locator('[data-news-id="7"] .news-mark-read')).to_have_count(0)
+    assert page.url.endswith("/news")
+    assert any("/api/news/7/read" in call["url"] for call in page.evaluate("window.__newsRequests"))
+
+
+def test_news_article_page_marks_read_on_open(page: Page, static_origin: str):
+    install_news_bootstrap(page)
+    page.goto(f"{static_origin}/news/7", wait_until="domcontentloaded")
+    expect(page.get_by_role("heading", name="Title")).to_be_visible()
+    page.wait_for_function("() => (window.__newsRequests || []).some((call) => String(call.url).includes('/api/news/7/read') && String(call.method || 'GET').toUpperCase() === 'POST')")
+
+
+def test_news_read_all_offers_five_second_undo(page: Page, static_origin: str):
+    install_news_bootstrap(page)
+    page.clock.install()
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
+    open_financial_articles_tab(page)
+    page.get_by_role("button", name=re.compile("全部已读")).click()
+    expect(page.locator("#news-read-undo")).to_be_visible()
+    expect(page.get_by_role("button", name="撤销")).to_be_visible()
+    # 点击处理期间假时钟也会往前走几十毫秒，不能卡在 4999/5000 的 1ms 边界上
+    page.clock.run_for(4500)
+    expect(page.locator("#news-read-undo")).to_be_visible()
+    page.clock.run_for(600)
+    expect(page.locator("#news-read-undo")).to_be_hidden()
+
+
+def test_news_read_all_undo_restores_list(page: Page, static_origin: str):
+    install_news_bootstrap(page)
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
+    open_financial_articles_tab(page)
+    page.get_by_role("button", name=re.compile("全部已读")).click()
+    expect(page.locator("#news-read-undo")).to_be_visible()
+    page.get_by_role("button", name="撤销").click()
+    expect(page.locator("#news-read-undo")).to_be_hidden()
+    expect(page.locator('[data-news-id="7"]')).to_have_class(re.compile(r"is-unread"))
+    calls = page.evaluate("window.__newsRequests")
+    assert any(call["url"].endswith("/api/news/read-all/undo") or "/api/news/read-all/undo" in call["url"] for call in calls)
+    assert any(call.get("method", "").upper() == "POST" and "/read-all/undo" in call["url"] for call in calls)
