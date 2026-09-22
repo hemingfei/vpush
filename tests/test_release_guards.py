@@ -70,12 +70,12 @@ SENTINELS += [
     ("app/api.py", "cicc-categories", "品类定向 GET/PUT 端点"),
     ("app/cicc_alerts.py", "def paused_alert", "熔断告警文案（quota/auth 区分）"),
     ("app/static/app.js", "saveCiccCategories", "中金页签品类定向多选保存"),
-    ("app/static/views/admin/infra.js", "备份未生效", "存储页签诚实展示备份未配置"),
+    ("app/static/views/admin/infra.js", "/api/admin/ima-arm", "存储页签查看 ARM /pull，不再展示 restic 未配置"),
 ]
 # —— 知识库设置增强第三批（feat/kb-settings-batch2 后续，2026-08-30）——
 SENTINELS += [
-    ("app/static/app.js", "runStorageConsistency", "存储页签一致性体检入口"),
-    ("app/static/app.js", "runStorageDedup", "去重手动触发入口"),
+    ("app/static/app.js", "refreshImaStorage", "存储页签刷新 ARM /pull 状态"),
+    ("app/api.py", "/admin/ima-arm", "管理端只探测 ARM /pull，不触发存储机去重"),
     ("app/static/views/admin/cicc.js", "cicc-keywords", "标题关键词白名单输入"),
     ("app/knowledge_notify.py", "def maybe_notify_knowledge_keywords", "研报关键词合并推送"),
     ("app/static/views/push-settings.js", "匹配研报中心", "设置页研报匹配开关"),

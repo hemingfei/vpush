@@ -16,40 +16,6 @@ export function createAdminInfraView(dependencies) {
     PLATFORM_LABELS,
   } = dependencies;
 
-  async function runStorageConsistency() {
-    const btn = document.getElementById("ima-consistency-run");
-    const box = document.getElementById("ima-consistency");
-    if (!box) return;
-    if (btn) { btn.disabled = true; btn.textContent = "体检中…"; }
-    try {
-      await api("/api/admin/ima-storage/consistency/run", { method: "POST" });
-      await new Promise((r) => setTimeout(r, 5000));
-      const rep = await api("/api/admin/ima-storage/consistency");
-      const items = [];
-      if ((rep.corrupt_count ?? 0) > 0) items.push(`损坏 PDF ${rep.corrupt_count} 个（${(rep.corrupt || []).slice(0, 3).join("、")}…）`);
-      if ((rep.dup_id_count ?? 0) > 0) items.push(`重复报告 id ${rep.dup_id_count} 个`);
-      if ((rep.bad_name_count ?? 0) > 0) items.push(`命名不规范 ${rep.bad_name_count} 个`);
-      if ((rep.empty_dir_count ?? 0) > 0) items.push(`空目录 ${rep.empty_dir_count} 个`);
-      if ((rep.no_sidecar_count ?? 0) > 0) items.push(`无摘要元数据 ${rep.no_sidecar_count} 篇`);
-      box.hidden = false;
-      box.innerHTML = items.length
-        ? `<p class="section-meta">体检发现：${items.join("；")}。${rep.files ?? ""} 个 PDF 已扫描。</p>`
-        : `<p class="section-meta">体检通过：未发现异常。</p>`;
-    } catch (err) {
-      box.hidden = false;
-      box.innerHTML = `<p class="muted">体检失败：${escapeHtml(err.message)}</p>`;
-    } finally {
-      if (btn) { btn.disabled = false; btn.textContent = "一致性体检"; }
-    }
-  }
-
-  async function runStorageDedup() {
-    try {
-      const r = await api("/api/admin/ima-storage/dedup", { method: "POST" });
-      flash(r.queued ? "去重任务已启动（低优先级，日志见存储机 ui_dedup.log）" : "去重任务下发失败", r.queued ? "ok" : "error");
-    } catch (err) { flash(`下发失败：${err.message}`, "error"); }
-  }
-
   async function loadStorageHealth() {
     const box = document.getElementById("ima-storage-health");
     const status = document.getElementById("ima-storage-status");
@@ -66,20 +32,6 @@ export function createAdminInfraView(dependencies) {
       if (status) status.textContent = "ARM 状态加载失败";
       box.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
     }
-  }
-
-  async function saveStorageAlerts() {
-    const body = {
-      disk_warn: Number((document.getElementById("ima-alert-warn") || {}).value) || 80,
-      disk_crit: Number((document.getElementById("ima-alert-crit") || {}).value) || 90,
-      stale_minutes: Number((document.getElementById("ima-alert-stale") || {}).value) || 30,
-      notify_enabled: !!(document.getElementById("ima-alert-notify") || {}).checked,
-    };
-    try {
-      await api("/api/admin/ima-storage/alerts", { method: "PUT", body: JSON.stringify(body) });
-      flash("告警设置已保存");
-      loadStorageHealth();
-    } catch (err) { flash(`保存失败：${err.message}`, "error"); }
   }
 
   async function refreshImaStorage() {
@@ -101,25 +53,6 @@ export function createAdminInfraView(dependencies) {
         box.innerHTML = `<p class="section-meta">最近采集 ${escapeHtml(when)} · 成功 ${data.groups || 0} 个库 · 下载 ${data.downloaded || 0} · 失败 ${data.failed || 0}</p>`;
       }
       flash("ARM 状态已刷新");
-    } catch (err) {
-      if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-      flash(err.message, "error");
-    } finally {
-      if (btn && document.body.contains(btn)) btn.disabled = false;
-    }
-  }
-
-  async function backupImaStorage() {
-    const btn = $("#ima-storage-backup");
-    if (btn?.disabled) return;
-    const routeSeq = currentRouteSeq();
-    const token = state.token;
-    const sessionGeneration = imaMountState.sessionGeneration;
-    if (btn) btn.disabled = true;
-    try {
-      const data = await api("/api/admin/ima-storage/backup", { method: "POST" });
-      if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-      flash(data.status === "already_running" ? "备份已在进行" : "已发送备份命令，结果稍后看存储页签");
     } catch (err) {
       if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
       flash(err.message, "error");
@@ -640,12 +573,8 @@ export function createAdminInfraView(dependencies) {
   }
 
   return {
-    runStorageConsistency,
-    runStorageDedup,
     loadStorageHealth,
-    saveStorageAlerts,
     refreshImaStorage,
-    backupImaStorage,
     loadProxyAdmin,
     syncProxyRouteInputs,
     syncProxyPoolForm,
