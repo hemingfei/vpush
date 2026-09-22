@@ -2399,12 +2399,23 @@ def test_shanghai_schedule_is_next_0100():
     from datetime import datetime, timedelta, timezone
     tz = timezone(timedelta(hours=8))
     before = datetime(2026, 9, 1, 0, 30, tzinfo=tz).timestamp()
-    after = datetime(2026, 9, 1, 1, 5, tzinfo=tz).timestamp()
-    today = datetime(2026, 9, 1, 1, 0, tzinfo=tz).timestamp()
+    after_0100 = datetime(2026, 9, 1, 1, 5, tzinfo=tz).timestamp()
+    after_0900 = datetime(2026, 9, 1, 9, 5, tzinfo=tz).timestamp()
+    after_1700 = datetime(2026, 9, 1, 17, 5, tzinfo=tz).timestamp()
+    slot_0100 = datetime(2026, 9, 1, 1, 0, tzinfo=tz).timestamp()
+    slot_0900 = datetime(2026, 9, 1, 9, 0, tzinfo=tz).timestamp()
+    slot_1700 = datetime(2026, 9, 1, 17, 0, tzinfo=tz).timestamp()
+    prev_1700 = datetime(2026, 8, 31, 17, 0, tzinfo=tz).timestamp()
     tomorrow = datetime(2026, 9, 2, 1, 0, tzinfo=tz).timestamp()
-    assert shanghai_schedule_gate(before) == today
-    assert next_shanghai_schedule(before) == today
-    assert next_shanghai_schedule(after) == tomorrow
+    assert shanghai_schedule_gate(before) == prev_1700
+    assert next_shanghai_schedule(before) == slot_0100
+    assert next_shanghai_schedule(after_0100) == slot_0900
+    assert next_shanghai_schedule(after_0900) == slot_1700
+    assert next_shanghai_schedule(after_1700) == tomorrow
+    assert shanghai_schedule_gate(after_0100) == slot_0100
+    assert shanghai_schedule_gate(after_0900) == slot_0900
+    assert shanghai_schedule_gate(after_1700) == slot_1700
+    assert next_shanghai_schedule(after_0100, hour=1) == tomorrow
 
 
 def test_group_next_run_at_catches_up_24h_group_after_0100():
@@ -2413,8 +2424,15 @@ def test_group_next_run_at_catches_up_24h_group_after_0100():
     tz = timezone(timedelta(hours=8))
     now = datetime(2026, 9, 1, 2, 0, tzinfo=tz).timestamp()
     yesterday = datetime(2026, 8, 31, 1, 5, tzinfo=tz).timestamp()
+    after_0900 = datetime(2026, 9, 1, 10, 0, tzinfo=tz).timestamp()
+    after_1700 = datetime(2026, 9, 1, 18, 0, tzinfo=tz).timestamp()
+    ran_0100 = datetime(2026, 9, 1, 1, 5, tzinfo=tz).timestamp()
+    ran_0900 = datetime(2026, 9, 1, 9, 5, tzinfo=tz).timestamp()
     group = ImaGroupConfig("g", "库", "kb", "root", True, "discovered", ("root",), 86400)
     assert group_next_run_at(group, yesterday, now) == now
+    assert group_next_run_at(group, ran_0100, after_0900) == after_0900
+    assert group_next_run_at(group, ran_0900, after_1700) == after_1700
+    assert group_next_run_at(group, ran_0900, after_0900) == datetime(2026, 9, 1, 17, 0, tzinfo=tz).timestamp()
 
 
 def test_group_next_run_at_keeps_subdaily_interval():
@@ -2479,6 +2497,8 @@ def test_24h_group_due_only_after_shanghai_0100(tmp_path):
     from datetime import datetime, timedelta, timezone
     tz = timezone(timedelta(hours=8))
     gate = datetime(2026, 9, 1, 1, 0, tzinfo=tz).timestamp()
+    gate_0900 = datetime(2026, 9, 1, 9, 0, tzinfo=tz).timestamp()
+    gate_1700 = datetime(2026, 9, 1, 17, 0, tzinfo=tz).timestamp()
     db = FakeDB({
         ima_documents.IMA_PURE_GROUPS_KEY: json.dumps([{
             "id": "g", "name": "库", "knowledge_base_id": "kb",
@@ -2493,6 +2513,10 @@ def test_24h_group_due_only_after_shanghai_0100(tmp_path):
     assert service._group_due(group, gate + 60) is True
     db.set_setting(IMA_PURE_GROUP_RUNTIME_KEY, json.dumps({"g": {"last_started_at": int(gate + 120)}}))
     assert service._group_due(group, gate + 180) is False
+    assert service._group_due(group, gate_0900 + 60) is True
+    db.set_setting(IMA_PURE_GROUP_RUNTIME_KEY, json.dumps({"g": {"last_started_at": int(gate_0900 + 120)}}))
+    assert service._group_due(group, gate_0900 + 180) is False
+    assert service._group_due(group, gate_1700 + 60) is True
 
 
 def test_from_db_preserves_stored_group_interval():

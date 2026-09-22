@@ -3162,6 +3162,7 @@ def test_knowledge_settings_p1_p2_control_density():
     health = _fn_body("loadStorageHealth")
     assert "/api/admin/ima-arm" in health or "renderArmStorage" in health
     assert "下一轮" in _fn_body("renderArmStorage")
+    assert "01:00 / 09:00 / 17:00" in _fn_body("renderArmStorage")
     assert 'id="ima-arm-groups"' in _fn_body("renderArmStorage")
     card = _fn_body("renderLibraryControls")
     assert "<details open" not in card
@@ -5823,6 +5824,8 @@ def test_ima_mount_uses_master_detail_and_selected_group_controls():
     assert "imaIntervalSegHtml" not in row
     assert 'id="ima-interval-${escapeHtml(groupId)}-${sec}"' in interval
     assert 'aria-pressed="${current === sec}"' in interval
+    assert '[86400, "3次"]' in interval
+    assert "01:00 / 09:00 / 17:00" in _fn_body("renderImaSelectedGroup")
     assert "renderImaSelectedGroup" in render
     assert 'role="option"' in row
     assert 'aria-selected="${selected}"' in row

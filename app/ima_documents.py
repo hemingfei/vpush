@@ -72,6 +72,7 @@ IMA_FTS_MAX_BATCHES = 11
 IMA_STATE_FLUSH_COUNT = 20
 IMA_STATE_FLUSH_SECONDS = 2.0
 IMA_SCHEDULE_HOUR = 1  # 上海时间每日自动同步起点
+IMA_SCHEDULE_HOURS = (1, 9, 17)  # 24h 档：一天三次（01:00 / 09:00 / 17:00）
 ARM_LIBRARY_SYNC_INTERVAL = 3600
 ARM_LIBRARY_SYNC_BATCH = 40
 ARM_LIBRARY_FIRST_DELAY = 180
@@ -91,17 +92,37 @@ CLIENT_TYPE = "256001"
 TOKEN_TTL = 7000
 
 
-def next_shanghai_schedule(now: float, hour: int = IMA_SCHEDULE_HOUR) -> float:
-    dt = datetime.fromtimestamp(now, CN_TZ)
-    gate = dt.replace(hour=hour, minute=0, second=0, microsecond=0)
-    if dt >= gate:
-        gate += timedelta(days=1)
-    return gate.timestamp()
+def _normalize_schedule_hours(hour: int | tuple[int, ...] | None = None) -> tuple[int, ...]:
+    if hour is None:
+        hours = IMA_SCHEDULE_HOURS
+    elif isinstance(hour, int):
+        hours = (hour,)
+    else:
+        hours = tuple(int(item) for item in hour)
+    cleaned = tuple(sorted({max(0, min(23, int(item))) for item in hours}))
+    return cleaned or IMA_SCHEDULE_HOURS
 
 
-def shanghai_schedule_gate(now: float, hour: int = IMA_SCHEDULE_HOUR) -> float:
+def next_shanghai_schedule(now: float, hour: int | tuple[int, ...] | None = None) -> float:
+    hours = _normalize_schedule_hours(hour)
     dt = datetime.fromtimestamp(now, CN_TZ)
-    return dt.replace(hour=hour, minute=0, second=0, microsecond=0).timestamp()
+    for item in hours:
+        gate = dt.replace(hour=item, minute=0, second=0, microsecond=0)
+        if dt < gate:
+            return gate.timestamp()
+    nxt = (dt + timedelta(days=1)).replace(hour=hours[0], minute=0, second=0, microsecond=0)
+    return nxt.timestamp()
+
+
+def shanghai_schedule_gate(now: float, hour: int | tuple[int, ...] | None = None) -> float:
+    hours = _normalize_schedule_hours(hour)
+    dt = datetime.fromtimestamp(now, CN_TZ)
+    current = (dt - timedelta(days=1)).replace(hour=hours[-1], minute=0, second=0, microsecond=0)
+    for item in hours:
+        gate = dt.replace(hour=item, minute=0, second=0, microsecond=0)
+        if dt >= gate:
+            current = gate
+    return current.timestamp()
 
 
 def arm_status_libraries(
