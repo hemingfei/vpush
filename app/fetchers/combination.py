@@ -288,6 +288,14 @@ def _looks_like_holdings(data) -> bool:
     )
 
 
+def _is_challenge(resp) -> bool:
+    """EdgeOne 对调仓接口下发的 tads 挑战页：HTTP 200 + text/html + 设 cookie 的脚本。"""
+    if resp.status_code != 200 or "text/html" not in resp.headers.get("content-type", ""):
+        return False
+    body = resp.text or ""
+    return "EO_Bot_Ssid" in body or "__tst_status" in body
+
+
 def _nav_series(obj) -> list[dict]:
     if not isinstance(obj, dict):
         return []
@@ -339,7 +347,7 @@ class CombinationFetcher(Fetcher):
     def client(self, value):
         self._http.set(value)
 
-    def _apply_cookie(self) -> None:
+    def _apply_cookie(self, force_warm: bool = False) -> None:
         cookie = self.db.get_setting(XUEQIU_COOKIE_KEY) or self.source_config.cookie
         merged = merge_waf_cookie(cookie)
         client = self.client
@@ -349,15 +357,16 @@ class CombinationFetcher(Fetcher):
                 apply_xueqiu_cookie(client, merged)
                 client._vpush_cookie = merged
                 client._vpush_warm = None
-            self._warm_session(client, merged)
+            self._warm_session(client, merged, force=force_warm)
             return
         apply_xueqiu_cookie(client, merged)
 
-    def _warm_session(self, client, cookie: str) -> None:
-        if getattr(client, "_vpush_warm", None) == cookie:
-            return
+    def _warm_session(self, client, cookie: str, force: bool = False) -> bool:
+        """同一会话先打开首页拿 EdgeOne cookie。首页自己被挑战时不置位，下次仍会重试预热。"""
+        if not force and getattr(client, "_vpush_warm", None) == cookie:
+            return True
         try:
-            client.get(
+            resp = client.get(
                 HOME_URL,
                 headers={
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -367,8 +376,12 @@ class CombinationFetcher(Fetcher):
             )
         except Exception as exc:  # noqa: BLE001 - 预热失败时仍尝试调仓接口
             logger.warning("组合会话预热失败: %s", exc)
-            return
+            return False
+        if _is_challenge(resp):
+            logger.warning("组合会话预热命中挑战页，未取得首页 cookie")
+            return False
         client._vpush_warm = cookie
+        return True
 
     def _refresh_cookie(self) -> None:
         """雪球 cookie 失效时直接抛错（与雪球帖抓取共用，无法自动续期）。"""
@@ -427,10 +440,13 @@ class CombinationFetcher(Fetcher):
             raise RuntimeError(f"无效的组合编码: {kol['external_id']}")
         self._apply_cookie()
         def get_page(page: int) -> dict:
-            resp = self.client.get(
-                REBALANCING_URL,
-                params={"cube_symbol": cube_symbol, "page": page, "count": 20},
-            )
+            params = {"cube_symbol": cube_symbol, "page": page, "count": 20}
+            resp = self.client.get(REBALANCING_URL, params=params)
+            if _is_challenge(resp):
+                # 挑战页按会话钉住：重试同请求没用，必须重新预热一次再打
+                logger.warning("组合 %s 调仓接口命中挑战页，重新预热会话后重试", cube_symbol)
+                self._apply_cookie(force_warm=True)
+                resp = self.client.get(REBALANCING_URL, params=params)
             if resp.status_code in (401, 403):
                 self._refresh_cookie()
             resp.raise_for_status()
