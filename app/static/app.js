@@ -4971,6 +4971,7 @@ const { exportPostCard } = createPostCardExport({
 });
 
 const {
+  clearNewsFilters,
   clearNewsReaderState,
   loadFinancialNews,
   markAllNewsRead,
@@ -4985,6 +4986,7 @@ const {
   selectNewsSource,
   selectNewsTopic,
   setNewsFontSize,
+  toggleNewsSearch,
   toggleNewsUnreadOnly,
   undoNewsReadAll,
 } = createNewsView({
@@ -6132,6 +6134,7 @@ const INLINE_HANDLERS = {
   clearAdminCodesResult,
   clearImaDocumentsFilter,
   clearImaDocumentsFilters,
+  clearNewsFilters,
   clearSavedCookie,
   closeAdminModal,
   closeLightbox,
@@ -6289,6 +6292,7 @@ const INLINE_HANDLERS = {
   testBackupWebDAV,
   testProxyNode,
   tlApplyFilter,
+  toggleNewsSearch,
   toggleNewsUnreadOnly,
   tlApplyRailSearch,
   tlFilterPanel,

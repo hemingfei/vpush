@@ -141,28 +141,50 @@ export function createNewsView(dependencies) {
   function newsListItemHtml(item) {
     const unread = !item.is_read;
     const thumbnail = item.has_image
-      ? `<img class="news-list-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 84'%3E%3C/svg%3E" data-news-thumbnail="${item.id}" alt="" loading="lazy" onerror="this.style.display='none'">`
+      ? `<img class="news-list-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'%3E%3C/svg%3E" data-news-thumbnail="${item.id}" alt="" width="112" height="75" loading="lazy" onerror="this.closest('.news-list-thumb-link').style.display='none'">`
       : "";
     const topics = Array.isArray(item.topics) && item.topics.length
       ? `<span class="news-item-topics">${item.topics.map((topic) => `<i>${escapeHtml(topic)}</i>`).join("")}</span>`
       : "";
-    return `<article class="news-list-item ${unread ? "is-unread" : ""}" data-news-id="${item.id}">
+    return `<article class="news-list-item ${unread ? "is-unread" : "is-read"}" data-news-id="${item.id}">
     <div class="news-list-copy">
       <a class="news-item-open" href="/news/${item.id}">
-        ${topics}
         <div class="news-item-title-row">${unread ? '<i class="news-item-unread-dot" aria-label="未读"></i>' : ""}<h3>${escapeHtml(item.title)}</h3></div>
         <p>${escapeHtml(item.summary || "暂无摘要")}</p>
-        <div class="news-list-meta"><span>${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time></div>
       </a>
-      ${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})">${CHECK_ICON}<span>标为已读</span></button>` : ""}
+      <div class="news-list-meta"><span class="news-item-source">${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${topics}${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})" aria-label="标为已读">${CHECK_ICON}<span>标为已读</span></button>` : ""}</div>
     </div>${thumbnail ? `<a class="news-list-thumb-link" href="/news/${item.id}" tabindex="-1" aria-hidden="true">${thumbnail}</a>` : ""}
   </article>`;
   }
 
-  function newsListHtml(items) {
-    return groupNewsItemsByDay(items).map((group) => `
-      <div class="news-day-sep"><span>${escapeHtml(group.label)}</span></div>
-      ${group.items.map(newsListItemHtml).join("")}`).join("");
+  function newsListHtml(items, { append = false } = {}) {
+    const groups = groupNewsItemsByDay(items);
+    let continued = "";
+    if (append) {
+      const labels = document.querySelectorAll("#news-list .news-day-sep span");
+      continued = labels.length ? labels[labels.length - 1].textContent : "";
+    }
+    return groups.map((group, index) => {
+      const head = append && index === 0 && group.label === continued
+        ? ""
+        : `<div class="news-day-sep"><span>${escapeHtml(group.label)}</span></div>`;
+      return `${head}${group.items.map(newsListItemHtml).join("")}`;
+    }).join("");
+  }
+
+  function newsEmptyHtml() {
+    const query = (state.newsQuery || "").trim();
+    const hasSource = state.newsSources.some((source) => source.selected) || state.newsFilterSourceId;
+    if (!hasSource) {
+      return emptyState("还没有选择新闻来源", `<div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">选择来源</button></div>`);
+    }
+    if (state.newsUnreadOnly && !query && !state.newsTopic && !state.newsFilterSourceId) {
+      return emptyState("没有未读文章，已经全部看完了");
+    }
+    if (query || state.newsTopic || state.newsFilterSourceId || state.newsUnreadOnly) {
+      return emptyState("暂无相关财经资讯", `<div><button type="button" class="btn-ghost" onclick="clearNewsFilters()">清除筛选</button></div>`);
+    }
+    return emptyState("没有符合条件的资讯", `<div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">选择来源</button></div>`);
   }
 
   function selectedNewsSources() {
@@ -180,7 +202,7 @@ export function createNewsView(dependencies) {
     const rows = [...groups.entries()].map(([label, sources]) => `
     <details class="news-source-group" open>
       <summary>${CHEVRON_DOWN_ICON}<span>${escapeHtml(label)}</span></summary>
-      ${sources.map((source) => `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" onclick="selectNewsSource('${source.id}')"><span>${escapeHtml(source.name)}</span><b>${Number(source.unread_count) || ""}</b></button>`).join("")}
+      ${sources.map((source) => `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')"><span>${escapeHtml(source.name)}</span><b>${Number(source.unread_count) || ""}</b></button>`).join("")}
     </details>`).join("");
     return `<nav class="news-source-rail" aria-label="资讯来源">
     <div class="news-source-rail-head"><strong>资讯来源</strong><button type="button" class="icon-btn" onclick="openNewsSourcePicker()" aria-label="管理资讯来源" title="管理资讯来源">${GEAR_ICON}</button></div>
@@ -202,7 +224,7 @@ export function createNewsView(dependencies) {
   }
 
   function newsListSkeletonHtml() {
-    const card = '<div class="admin-sk-card"><div class="admin-sk-line admin-sk-head"></div><div class="admin-sk-line"></div></div>';
+    const card = '<div class="admin-sk-card"><div class="news-sk-copy"><div class="admin-sk-line admin-sk-head"></div><div class="admin-sk-line"></div><div class="admin-sk-line"></div></div><div class="news-sk-thumb"></div></div>';
     return `<div class="admin-skeleton" aria-hidden="true">${card.repeat(3)}</div>`;
   }
 
@@ -211,27 +233,29 @@ export function createNewsView(dependencies) {
     if (!main) return;
     const unreadOn = !!state.newsUnreadOnly;
     const unreadCount = Number(state.newsUnreadCount) || 0;
-    main.innerHTML = `<section class="news-page" id="news-page">
+    const searching = !!(state.newsQuery || "").trim();
+    main.innerHTML = `<section class="news-page${searching ? " is-searching" : ""}" id="news-page">
   <header class="news-stream-head">
-    <div><h2 class="section-title">资讯流</h2><p class="section-meta">实时更新的财经资讯聚合</p></div>
+    <div class="news-stream-title"><h2 class="section-title">资讯流</h2><p class="section-meta">实时更新的财经资讯聚合</p></div>
+    <div class="news-source-mobile"><select aria-label="资讯来源" onchange="selectNewsSource(this.value)">${newsGroupedOptions()}</select>${CHEVRON_DOWN_ICON}</div>
     <div class="news-stream-actions">
-      <label class="news-stream-search">${SEARCH_ICON}<input id="news-query" type="search" placeholder="搜索资讯..." value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)" aria-label="搜索资讯"></label>
-      ${unreadCount ? `<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()">${CHECK_CHECK_ICON} 全部已读</button>` : ""}
-      <button type="button" class="btn-ghost news-source-manage" onclick="openNewsSourcePicker()">${GEAR_ICON} 我的来源</button>
+      <button type="button" class="icon-btn news-search-toggle${searching ? " is-on" : ""}" onclick="toggleNewsSearch()" aria-expanded="${searching ? "true" : "false"}" aria-label="搜索资讯">${SEARCH_ICON}</button>
+      ${unreadCount ? `<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()" aria-label="全部已读">${CHECK_CHECK_ICON}<span>全部已读</span></button>` : ""}
+      <button type="button" class="btn-ghost news-source-manage" onclick="openNewsSourcePicker()">${GEAR_ICON}<span>我的来源</span></button>
     </div>
+    <label class="news-stream-search">${SEARCH_ICON}<input id="news-query" type="search" placeholder="搜索资讯..." value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)" aria-label="搜索资讯"></label>
   </header>
   ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停资讯采集，历史文章仍可阅读。</div>'}
   <div class="news-stream-topbar">
-    <div class="news-source-mobile"><select aria-label="资讯来源" onchange="selectNewsSource(this.value)">${newsGroupedOptions()}</select>${CHEVRON_DOWN_ICON}</div>
     ${newsTopicBarHtml()}
     <button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}">${EYE_ICON}<span>未读</span>${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</button>
   </div>
   <div class="news-stream-layout">
-    ${newsSourceNavigationHtml()}
     <main class="news-stream-main">
       <div id="news-list" class="news-list">${newsListSkeletonHtml()}</div>
       <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
     </main>
+    ${newsSourceNavigationHtml()}
   </div>
   <div id="news-read-undo" class="news-read-undo" role="status" aria-live="polite" hidden></div>
 </section>`;
@@ -268,7 +292,7 @@ export function createNewsView(dependencies) {
     if (state.newsItems.length && state.newsListKey === newsListKey()) {
       renderNewsListShell(state.newsCollectionEnabled !== false);
       const list = $("#news-list");
-      list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : emptyState("没有符合条件的资讯");
+      list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : newsEmptyHtml();
       attachListImages(seq);
       startNewsAutoLoad(seq);
       window.scrollTo(0, state.newsScrollY || 0);
@@ -319,18 +343,22 @@ export function createNewsView(dependencies) {
       state.newsOffset = data.next_offset || state.newsItems.length;
       state.newsHasMore = !!data.has_more;
       if (reset) {
-        const hasSource = state.newsSources.some((source) => source.selected) || state.newsFilterSourceId;
-        list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : emptyState(
-          state.newsUnreadOnly ? "没有未读文章，已经全部看完了" : hasSource ? "没有符合条件的资讯" : "还没有选择新闻来源",
-          `<div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">选择来源</button></div>`,
-        );
+        list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : newsEmptyHtml();
       } else if (items.length) {
-        list.insertAdjacentHTML("beforeend", newsListHtml(items));
+        list.insertAdjacentHTML("beforeend", newsListHtml(items, { append: true }));
       }
+      const sentinel = $("#news-load-sentinel");
+      if (sentinel) sentinel.innerHTML = "";
       attachListImages(seq);
       startNewsAutoLoad(seq);
     } catch (err) {
       if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
+      if (!reset && state.newsItems.length) {
+        stopNewsAutoLoad();
+        const sentinel = $("#news-load-sentinel");
+        if (sentinel) sentinel.innerHTML = `<button type="button" class="btn-ghost" onclick="loadFinancialNews(false)">加载失败，点击重试</button>`;
+        return;
+      }
       list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="loadFinancialNews(${reset})">重试</button></div>`);
     }
   }
@@ -348,7 +376,11 @@ export function createNewsView(dependencies) {
       state.newsImageUrls.set(newsImageUrlKey(articleId, index), url);
       image.src = url;
     } catch {
-      if (routeStillActive(seq) && image && document.body.contains(image)) image.remove();
+      if (routeStillActive(seq) && image && document.body.contains(image)) {
+        const link = image.closest(".news-list-thumb-link");
+        if (link) link.remove();
+        else image.remove();
+      }
     }
   }
 
@@ -433,20 +465,66 @@ export function createNewsView(dependencies) {
     return true;
   }
 
+  function paintNewsUnreadChrome() {
+    const count = Number(state.newsUnreadCount) || 0;
+    const badge = count > 99 ? "99+" : String(count);
+    document.querySelectorAll(".news-unread-toggle").forEach((button) => {
+      let mark = button.querySelector("b");
+      if (!count) {
+        mark?.remove();
+        return;
+      }
+      if (!mark) {
+        mark = document.createElement("b");
+        button.appendChild(mark);
+      }
+      mark.textContent = badge;
+    });
+    document.querySelectorAll(".news-source-all b").forEach((node) => {
+      node.textContent = count ? String(count) : "";
+    });
+    for (const source of state.newsSources) {
+      const row = document.querySelector(`.news-source-row[data-source-id="${source.id}"] b`);
+      if (row) row.textContent = Number(source.unread_count) ? String(source.unread_count) : "";
+    }
+    if (!count) document.querySelector(".news-read-all")?.remove();
+  }
+
+  function paintNewsItemRead(articleId) {
+    const card = document.querySelector(`[data-news-id="${articleId}"]`);
+    if (!card) return false;
+    if (state.newsUnreadOnly) {
+      card.remove();
+      const list = $("#news-list");
+      if (list && !list.querySelector(".news-list-item")) list.innerHTML = newsEmptyHtml();
+      return true;
+    }
+    card.classList.remove("is-unread");
+    card.classList.add("is-read");
+    card.querySelector(".news-item-unread-dot")?.remove();
+    card.querySelector(".news-mark-read")?.remove();
+    return true;
+  }
+
   async function markNewsItemRead(articleId, { navigate = false } = {}) {
     const seq = currentRouteSeq();
     const item = state.newsItems.find((entry) => Number(entry.id) === Number(articleId));
     const changed = item && !item.is_read;
     if (changed) applyNewsItemRead(articleId);
+    if (changed && !navigate && $("#news-list")) {
+      paintNewsItemRead(articleId);
+      paintNewsUnreadChrome();
+    }
     try {
       if (changed) await api(`/api/news/${articleId}/read`, { method: "POST" });
       if (!routeStillActive(seq)) return;
       syncUnreadBadge();
       if (navigate) return go(`news/${articleId}`);
       if (!$("#news-list")) return;
+      if (changed) return;
       renderNewsListShell(state.newsCollectionEnabled !== false);
       const list = $("#news-list");
-      list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : emptyState("没有符合条件的资讯");
+      list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : newsEmptyHtml();
       attachListImages(seq);
       startNewsAutoLoad(seq);
     } catch (err) {
@@ -476,6 +554,7 @@ export function createNewsView(dependencies) {
 
   async function markAllNewsRead() {
     const seq = currentRouteSeq();
+    const marked = Number(state.newsUnreadCount) || 0;
     try {
       const data = await api("/api/news/read-all", { method: "POST" });
       state.newsUnreadCount = 0;
@@ -490,14 +569,14 @@ export function createNewsView(dependencies) {
       const list = $("#news-list");
       if (!list) return;
       renderNewsListShell(state.newsCollectionEnabled !== false);
-      $("#news-list").innerHTML = state.newsUnreadOnly ? emptyState("没有未读文章，已经全部看完了") : newsListHtml(state.newsItems);
+      $("#news-list").innerHTML = state.newsUnreadOnly ? newsEmptyHtml() : newsListHtml(state.newsItems);
       if (!state.newsUnreadOnly) {
         attachListImages(seq);
         startNewsAutoLoad(seq);
       }
       const banner = $("#news-read-undo");
       banner.hidden = false;
-      banner.innerHTML = `<span>已将全部资讯标为已读</span><button type="button" onclick="undoNewsReadAll()">撤销</button>`;
+      banner.innerHTML = `<span>已将 ${marked} 篇资讯标为已读</span><button type="button" onclick="undoNewsReadAll()">撤销</button>`;
       clearTimeout(readAllUndoTimer);
       readAllUndoTimer = setTimeout(clearNewsReadUndo, 5000);
     } catch (err) { flash(err.message, "error"); }
@@ -621,6 +700,28 @@ export function createNewsView(dependencies) {
     return loadFinancialNews(true, currentRouteSeq());
   }
 
+  function toggleNewsSearch() {
+    const page = $("#news-page");
+    if (!page) return;
+    const open = page.classList.toggle("is-searching");
+    const button = page.querySelector(".news-search-toggle");
+    if (button) {
+      button.setAttribute("aria-expanded", open ? "true" : "false");
+      button.classList.toggle("is-on", open || !!(state.newsQuery || "").trim());
+    }
+    if (open) $("#news-query")?.focus();
+  }
+
+  function clearNewsFilters() {
+    state.newsUnreadOnly = false;
+    state.newsQuery = "";
+    state.newsTopic = "";
+    state.newsFilterSourceId = "";
+    state.newsListKey = newsListKey();
+    renderNewsListShell(state.newsCollectionEnabled !== false);
+    return loadFinancialNews(true, currentRouteSeq());
+  }
+
   function selectNewsTopic(topic) {
     state.newsTopic = topic || "";
     state.newsListKey = newsListKey();
@@ -649,9 +750,11 @@ export function createNewsView(dependencies) {
     renderFinancialNewsList,
     renderNewsCenter,
     saveNewsSources,
+    clearNewsFilters,
     selectNewsSource,
     selectNewsTopic,
     setNewsFontSize,
+    toggleNewsSearch,
     toggleNewsUnreadOnly,
     undoNewsReadAll,
   };

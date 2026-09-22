@@ -1159,13 +1159,22 @@ def test_news_stream_switches_source_navigation_by_viewport(page, static_origin,
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
     expect(page.locator(".section-title")).to_have_text("资讯流")
-    expect(page.locator(".news-stream-search input")).to_be_visible()
     expect(page.locator(".news-item-unread-dot")).to_have_count(1)
     expect(page.locator(".news-item-topics i").first).to_have_text("宏观")
+    box = page.locator(".news-list-item").first.bounding_box()
+    assert box is not None
+    # 手机首屏工具条收成两行后，第一张卡片应落在 300px 以内
+    assert box["y"] < (300 if width <= 768 else 360)
     if width > 768:
+        expect(page.locator(".news-stream-search input")).to_be_visible()
         expect(page.locator(".news-source-rail")).to_be_visible()
         expect(page.locator(".news-source-mobile")).to_be_hidden()
+        rail = page.locator(".news-source-rail").bounding_box()
+        assert rail is not None and rail["x"] > box["x"]
     else:
+        expect(page.locator(".news-stream-search input")).to_be_hidden()
+        page.get_by_role("button", name="搜索资讯").click()
+        expect(page.locator(".news-stream-search input")).to_be_visible()
         expect(page.locator(".news-source-rail")).to_be_hidden()
         expect(page.locator(".news-source-mobile")).to_be_visible()
 
@@ -1217,9 +1226,10 @@ def test_news_read_all_offers_five_second_undo(page: Page, static_origin: str):
     page.get_by_role("button", name=re.compile("全部已读")).click()
     expect(page.locator("#news-read-undo")).to_be_visible()
     expect(page.get_by_role("button", name="撤销")).to_be_visible()
-    page.clock.run_for(4999)
+    # 点击处理期间假时钟也会往前走几十毫秒，不能卡在 4999/5000 的 1ms 边界上
+    page.clock.run_for(4500)
     expect(page.locator("#news-read-undo")).to_be_visible()
-    page.clock.run_for(1)
+    page.clock.run_for(600)
     expect(page.locator("#news-read-undo")).to_be_hidden()
 
 
