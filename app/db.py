@@ -6622,6 +6622,27 @@ class DB:
         )
         return int(rows[0]["n"] if rows else 0)
 
+    def ima_latest_download_batch(self, group_id: str) -> tuple[str, int]:
+        """Newest downloaded_at and how many rows share that second."""
+        rows = self._read_only_rows(
+            "SELECT downloaded_at FROM ima_document_index "
+            "WHERE group_id = ? AND downloaded_at != '' "
+            "ORDER BY downloaded_at DESC LIMIT 1",
+            (group_id,),
+        )
+        if not rows:
+            return "", 0
+        stamp = str(rows[0]["downloaded_at"] or "")
+        prefix = stamp[:19]
+        if len(prefix) < 19:
+            return stamp, 1
+        counted = self._read_only_rows(
+            "SELECT COUNT(*) AS n FROM ima_document_index "
+            "WHERE group_id = ? AND downloaded_at LIKE ?",
+            (group_id, prefix + "%"),
+        )
+        return stamp, int(counted[0]["n"] if counted else 0)
+
     def get_tag_vocabulary(self) -> list[dict]:
         """读贴文打标词表（settings 持久化），返回「标签 + 关键词」对象数组。
 

@@ -160,6 +160,25 @@ def arm_status_libraries(
     return rows
 
 
+def cicc_status_row(stamp: str, count: int, *, name: str = "中金") -> dict:
+    """Last CICC ingest batch. Not part of the IMA group sync."""
+    finished = 0
+    text = str(stamp or "").strip()
+    if text:
+        try:
+            finished = int(datetime.fromisoformat(text).timestamp())
+        except ValueError:
+            finished = 0
+    return {
+        "id": "local-cicc-research",
+        "name": (name or "中金")[:80],
+        "downloaded": int(count or 0),
+        "failed": 0,
+        "finished_at": finished,
+        "error": "",
+    }
+
+
 def group_next_run_at(group: ImaGroupConfig, last_started_at: float, now: float) -> float:
     interval = _clamp_group_interval(group.interval_seconds)
     if interval >= 86400:

@@ -4678,7 +4678,12 @@ def create_api_router(
     @router.get("/admin/ima-arm", dependencies=[Depends(require_admin)])
     def ima_arm_link(admin: dict = Depends(require_admin)):
         from .archive_guard import arm_pull_status
-        from .ima_documents import arm_status_libraries, next_shanghai_schedule
+        from .ima_documents import (
+            CICC_RESEARCH_SLUG,
+            arm_status_libraries,
+            cicc_status_row,
+            next_shanghai_schedule,
+        )
 
         pull = arm_pull_status()
         finished_raw = str(db.get_setting("ima_pure_last_finished_at") or "").strip()
@@ -4720,6 +4725,20 @@ def create_api_router(
             result,
             download_count=db.ima_downloads_between,
         )
+        cicc_name = "中金"
+        raw_local = db.get_setting("ima_local_libraries") or ""
+        if raw_local:
+            try:
+                local_doc = json.loads(raw_local)
+            except json.JSONDecodeError:
+                local_doc = {}
+            if isinstance(local_doc, dict):
+                for item in local_doc.get("libraries") or []:
+                    if isinstance(item, dict) and item.get("slug") == CICC_RESEARCH_SLUG:
+                        cicc_name = str(item.get("name") or cicc_name)
+                        break
+        cicc_stamp, cicc_count = db.ima_latest_download_batch("local-cicc-research")
+        libraries.append(cicc_status_row(cicc_stamp, cicc_count, name=cicc_name))
         return {
             "pull": pull,
             "last_finished_at": finished,

@@ -45,3 +45,13 @@ def test_arm_status_falls_back_to_download_window():
     assert rows[0]["downloaded"] == 12
     assert rows[0]["failed"] == 0
     assert rows[0]["error"] == "busy"
+
+
+def test_cicc_row_uses_last_ingest_stamp():
+    from app.ima_documents import cicc_status_row
+
+    row = cicc_status_row("2026-09-22T10:11:50.395376+00:00", 24, name="中金公司研报")
+    assert row["id"] == "local-cicc-research"
+    assert row["name"] == "中金公司研报"
+    assert row["downloaded"] == 24
+    assert row["finished_at"] > 0
