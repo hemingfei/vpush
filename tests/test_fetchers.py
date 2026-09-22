@@ -168,6 +168,56 @@ def test_cube_client_uses_chrome_impersonation(monkeypatch):
     assert client.cookies.get("xq_a_token") == "abc"
 
 
+def test_cube_session_opens_homepage_once_per_cookie():
+    """history.json 需要同一会话先打开首页；cookie 没变时不重复打开，也不清掉首页下发的 cookie。"""
+    calls = []
+
+    class Jar:
+        def __init__(self):
+            self.cleared = 0
+            self.values = {}
+
+        def clear(self):
+            self.cleared += 1
+            self.values.clear()
+
+        def set(self, name, value, domain="", path="/"):
+            self.values[name] = value
+
+    class Fake:
+        impersonate = "chrome124"
+
+        def __init__(self):
+            self.headers = {}
+            self.cookies = Jar()
+
+        def get(self, url, params=None, headers=None):
+            calls.append(url)
+            request = httpx.Request("GET", url)
+            if "history.json" in url:
+                return httpx.Response(200, json={"list": []}, request=request)
+            if url.rstrip("/").endswith("xueqiu.com"):
+                self.cookies.set("ssxmod_itna", "from-home", domain=".xueqiu.com")
+                return httpx.Response(200, text="<html></html>", request=request)
+            return httpx.Response(200, json={}, request=request)
+
+    db = DB(":memory:")
+    fetcher = CombinationFetcher(
+        XueqiuConfig(cookie="xq_a_token=abc"), db=db, client=Fake()
+    )
+    kol = {"id": 1, "name": "伯言-A股", "external_id": "ZH3623878"}
+    fetcher.fetch(kol)
+    assert calls[0] == "https://xueqiu.com/"
+    assert any("history.json" in url for url in calls)
+    assert fetcher.client.cookies.values["ssxmod_itna"] == "from-home"
+    cleared = fetcher.client.cookies.cleared
+    before = len(calls)
+    fetcher.fetch(kol)
+    assert fetcher.client.cookies.cleared == cleared
+    assert calls[before:] == [url for url in calls[before:] if url != "https://xueqiu.com/"]
+    assert "ssxmod_itna" in fetcher.client.cookies.values
+
+
 def test_xueqiu_waf_cookie_merged_into_request(monkeypatch, tmp_path):
     """sidecar cookie 文件存在时整套使用，请求 cookie 与文件一致。"""
     waf_file = tmp_path / "waf_cookies.json"

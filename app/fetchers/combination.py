@@ -28,6 +28,7 @@ from .xueqiu import (
 
 logger = logging.getLogger(__name__)
 
+HOME_URL = "https://xueqiu.com/"
 REBALANCING_URL = "https://xueqiu.com/cubes/rebalancing/history.json"
 CUBE_QUOTE_URL = "https://xueqiu.com/cubes/quote.json"
 CUBE_CURRENT_URL = "https://xueqiu.com/cubes/rebalancing/current.json"
@@ -340,7 +341,34 @@ class CombinationFetcher(Fetcher):
 
     def _apply_cookie(self) -> None:
         cookie = self.db.get_setting(XUEQIU_COOKIE_KEY) or self.source_config.cookie
-        apply_xueqiu_cookie(self.client, merge_waf_cookie(cookie))
+        merged = merge_waf_cookie(cookie)
+        client = self.client
+        # 首页下发的 EdgeOne cookie 必须留在同一会话里。每次 clear 再打 history.json 会重新碰到挑战页。
+        if getattr(client, "impersonate", None):
+            if getattr(client, "_vpush_cookie", None) != merged:
+                apply_xueqiu_cookie(client, merged)
+                client._vpush_cookie = merged
+                client._vpush_warm = None
+            self._warm_session(client, merged)
+            return
+        apply_xueqiu_cookie(client, merged)
+
+    def _warm_session(self, client, cookie: str) -> None:
+        if getattr(client, "_vpush_warm", None) == cookie:
+            return
+        try:
+            client.get(
+                HOME_URL,
+                headers={
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Upgrade-Insecure-Requests": "1",
+                    "X-Requested-With": None,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - 预热失败时仍尝试调仓接口
+            logger.warning("组合会话预热失败: %s", exc)
+            return
+        client._vpush_warm = cookie
 
     def _refresh_cookie(self) -> None:
         """雪球 cookie 失效时直接抛错（与雪球帖抓取共用，无法自动续期）。"""
