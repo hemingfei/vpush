@@ -126,7 +126,7 @@ def _polling_bool(db: DB, key: str, default: bool = False) -> bool:
 NORMAL_IDLE_CAP_SECONDS = 900
 PRIORITY_IDLE_CAP_SECONDS = 180
 X_FALLBACK_CAP_SECONDS = 1800
-X_RATE_LIMIT_BACKOFF_SECONDS = 900  # X 429 窗口约 15 分钟，30s 起跳会在窗内反复撞限
+X_RATE_LIMIT_BACKOFF_SECONDS = 900  # X 429 窗口约 15 分钟；雪球 110017 同理，30s 起跳会在窗内反复撞限
 COMBINATION_BASE_SECONDS = 30
 COMBINATION_IDLE_CAP_SECONDS = 120
 SECONDARY_BASE_SECONDS = 900
@@ -151,7 +151,7 @@ def _is_platform_wide_error(exc: BaseException) -> bool:
     if isinstance(exc, ProxyUnavailable):
         return True
     text = str(exc)
-    if any(token in text for token in ("cookie", "WAF", "反爬", "登录")):
+    if any(token in text for token in ("cookie", "WAF", "反爬", "登录", "限流")):
         return True
     if "HTTP 429" in text and ("X GraphQL" in text or "X typeahead" in text):
         return True
@@ -1122,7 +1122,9 @@ def _fetch_kol_once(
         with state_lock:
             state.fail_count += 1
             delay = min(30 * (2 ** (state.fail_count - 1)), 600)
-            if _is_platform_wide_error(exc) and "HTTP 429" in str(exc):
+            if _is_platform_wide_error(exc) and (
+                "HTTP 429" in str(exc) or "限流" in str(exc)
+            ):
                 delay = max(delay, X_RATE_LIMIT_BACKOFF_SECONDS)
             until = time.monotonic() + delay
             state.kol_skip_until[kol["id"]] = until

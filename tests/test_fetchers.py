@@ -267,6 +267,53 @@ def test_cube_retries_history_after_challenge_page():
     assert fetcher.client.cookies.values["ssxmod_itna"] == "from-home"
 
 
+def test_cube_history_rate_limit_raises_platform_wide_error():
+    """400 + 110017 要带「限流」抛出，调度器才会给整平台 15 分钟冷却。"""
+    from app.scheduler import _is_platform_wide_error
+
+    class Jar:
+        def __init__(self):
+            self.values = {}
+
+        def clear(self):
+            self.values.clear()
+
+        def set(self, name, value, domain="", path="/"):
+            self.values[name] = value
+
+    class Fake:
+        impersonate = "chrome124"
+
+        def __init__(self):
+            self.headers = {}
+            self.cookies = Jar()
+
+        def get(self, url, params=None, headers=None):
+            request = httpx.Request("GET", url)
+            if "history.json" in url:
+                return httpx.Response(
+                    400,
+                    json={
+                        "error_code": "110017",
+                        "error_description": "操作过于频繁，请稍后再试",
+                    },
+                    request=request,
+                )
+            self.cookies.set("ssxmod_itna", "from-home", domain=".xueqiu.com")
+            return httpx.Response(200, text="<html></html>", request=request)
+
+    db = DB(":memory:")
+    fetcher = CombinationFetcher(
+        XueqiuConfig(cookie="xq_a_token=abc"), db=db, client=Fake()
+    )
+    kol = {"id": 1, "name": "伯言-A股", "external_id": "ZH3623878"}
+    with pytest.raises(RuntimeError) as err:
+        fetcher.fetch(kol)
+    message = str(err.value)
+    assert "限流" in message and "110017" in message
+    assert _is_platform_wide_error(err.value)
+
+
 def test_xueqiu_waf_cookie_merged_into_request(monkeypatch, tmp_path):
     """sidecar cookie 文件存在时整套使用，请求 cookie 与文件一致。"""
     waf_file = tmp_path / "waf_cookies.json"

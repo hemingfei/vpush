@@ -1305,6 +1305,18 @@ def test_twitter_429_platform_backoff_at_least_15_minutes(monkeypatch):
         assert remaining >= 890, err
 
 
+def test_xueqiu_rate_limit_platform_backoff_at_least_15_minutes(monkeypatch):
+    """雪球 110017 同样是限流窗口：要整平台退避，不能 30s 后接着撞。"""
+    monkeypatch.setattr("app.scheduler.random.uniform", lambda *_: 0)
+    db = make_db()
+    add_kol_subscribed(db, "xueqiu", "伯言-A股", "ZH3623878")
+    states = {"xueqiu": PlatformState()}
+    fetcher = FakeFetcherError("雪球限流 110017：ZH3623878 调仓接口，稍后重试")
+    poll_once(db, {"xueqiu": fetcher}, [], states, interval_seconds=0)
+    remaining = states["xueqiu"].skip_until - time.monotonic()
+    assert remaining >= 890
+
+
 def test_generic_failures_do_not_auto_disable_at_alert_threshold(monkeypatch):
     """普通 boom 只告警，不在第 3 次就停用。"""
     db = make_db()

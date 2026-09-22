@@ -296,6 +296,20 @@ def _is_challenge(resp) -> bool:
     return "EO_Bot_Ssid" in body or "__tst_status" in body
 
 
+def _rate_limit_reason(resp) -> str:
+    """雪球 429 / 400+110017「操作过于频繁」：返回错误码供调度器判平台级冷却。"""
+    if resp.status_code == 429:
+        return "429"
+    if resp.status_code != 400:
+        return ""
+    try:
+        data = resp.json()
+    except ValueError:
+        return ""
+    code = str(data.get("error_code") or "") if isinstance(data, dict) else ""
+    return code if code == "110017" else ""
+
+
 def _nav_series(obj) -> list[dict]:
     if not isinstance(obj, dict):
         return []
@@ -449,6 +463,10 @@ class CombinationFetcher(Fetcher):
                 resp = self.client.get(REBALANCING_URL, params=params)
             if resp.status_code in (401, 403):
                 self._refresh_cookie()
+            reason = _rate_limit_reason(resp)
+            if reason:
+                # 「限流」字样会让调度器把整平台冷却 15 分钟，避免窗内反复撞限
+                raise RuntimeError(f"雪球限流 {reason}：{cube_symbol} 调仓接口，稍后重试")
             resp.raise_for_status()
             try:
                 return resp.json()
