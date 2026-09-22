@@ -166,7 +166,6 @@ def page(playwright_instance: Playwright, static_origin: str):
     context = browser.new_context(service_workers="block")
     page = context.new_page()
     page.goto(static_origin, wait_until="domcontentloaded")
-    page.wait_for_function("() => typeof window.go === 'function' && typeof window.setTheme === 'function'")
     yield page
     context.close()
     browser.close()
@@ -472,7 +471,6 @@ def test_timeline_long_text_keeps_navigation_in_viewport(
                              ("tags", ["LongTag" * 12])]:
             post[field] = value
             page.goto(static_origin)
-            page.wait_for_function("() => typeof window.go === 'function'")
             page.evaluate("go('timeline')")
             expect(page.locator(".post-item")).to_be_visible()
             page.evaluate("theme => document.documentElement.className = 'theme-' + theme", theme)
