@@ -16,6 +16,7 @@ DEFAULT_CICC_COOKIES = "/secrets/cicc-cookies.txt"
 DEFAULT_PASSWORD_FILE = "/secrets/arm-ops-password.txt"
 DEFAULT_TIMER_UNIT = "vpush-ima-lab-sync.timer"
 DEFAULT_CICC_TIMER_UNIT = "vpush-cicc-lab-sync.timer"
+DEFAULT_STORAGE_BACKUP_TIMER = "vpush-arm-storage-backup.timer"
 DEFAULT_TIMER_HELPER = "/opt/vpush-ima-lab/bin/apply-lab-sync-timers.sh"
 DEFAULT_SCRIPTS_ROOT = "/opt/vpush-ima-lab/src/scripts"
 # Host venv on Oracle-SJ-ARM. Image Python lacks app.* deps.
@@ -256,6 +257,10 @@ def timer_unit() -> str:
 
 def cicc_timer_unit() -> str:
     return env_str("ARM_OPS_CICC_TIMER_UNIT", DEFAULT_CICC_TIMER_UNIT)
+
+
+def storage_backup_timer_unit() -> str:
+    return env_str("ARM_OPS_STORAGE_BACKUP_TIMER", DEFAULT_STORAGE_BACKUP_TIMER)
 
 
 def lab_settings_path() -> Path:

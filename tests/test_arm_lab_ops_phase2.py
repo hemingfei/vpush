@@ -267,6 +267,11 @@ def test_status_includes_sync_waterline_failed_queue(lab_env):
     assert payload["puller"]["uploads"]["fail"] == 1
     assert payload["cicc"]["present"] is True
     assert payload["roles"]["vpush_link"] == "http_pull"
+    assert payload["roles"]["storage"] == "storage_then_115"
+    assert [row["id"] for row in payload["backups"]] == ["storage", "p115"]
+    assert payload["backups"][0]["priority"] == 1
+    assert payload["backups"][1]["priority"] == 2
+    assert payload["openlist"]["role"] == "browse"
     assert payload["puller"]["policy"]["keep_hot"] is True
     assert "export" in payload
     assert "secret-cicc" not in dumped

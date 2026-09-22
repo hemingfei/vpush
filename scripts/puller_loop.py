@@ -13,6 +13,7 @@ import os
 import shutil
 import signal
 import stat
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -697,6 +698,22 @@ class Puller:
             jobs.append((hot, rel, attempts))
         return jobs
 
+    def push_storage_before_115(self) -> None:
+        """Cold-backup new hot files to the storage box before any 115 call.
+
+        No-op unless ARM_STORAGE_BACKUP is set. Failure is logged and does not
+        remove hot bytes; 115 still runs afterward as the lower-priority copy.
+        """
+        script = os.environ.get("ARM_STORAGE_BACKUP", "").strip()
+        if not script:
+            return
+        timeout = env_int("ARM_STORAGE_BACKUP_TIMEOUT", 600)
+        logging.info("storage backup before 115 script=%s", script)
+        try:
+            subprocess.run([script], timeout=timeout, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            logging.warning("storage backup failed err=%s", safe_exc(exc))
+
     def tick(self) -> None:
         self.tick_ok = self.tick_fail = self.tick_skip = 0
         t0 = time.time()
@@ -704,6 +721,8 @@ class Puller:
         if self.keep_hot:
             admitted = self.admit_staging()
             self.promote_failed_pdfs()
+        if admitted:
+            self.push_storage_before_115()
         try:
             self.client_get()
         except SystemExit as exc:

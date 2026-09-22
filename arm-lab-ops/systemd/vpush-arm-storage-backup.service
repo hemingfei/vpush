@@ -1,0 +1,23 @@
+[Unit]
+Description=V Push ARM incremental cold backup to storage (no delete)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+Environment=TZ=Asia/Shanghai
+Environment=CACHE_ROOT=/data/vpush-ima-cache
+Environment=STORAGE_BACKUP_HOST=root@198.12.125.212
+Environment=STORAGE_BACKUP_KEY=/opt/vpush-ima-lab/secrets/storage-backup
+Environment=STORAGE_BACKUP_SRC=/srv/vpush-ima
+Environment=STORAGE_BACKUP_DEST=/srv/vpush-ima
+Environment=VPUSH_NFS_SYNC_SOURCE=/data/vpush-ima-cache/hot
+Environment=VPUSH_NFS_SYNC_DEST=/srv/vpush-ima
+Environment=VPUSH_PYTHON=/opt/vpush-ima-lab/venv/bin/python
+Environment=VPUSH_SRC_ROOT=/opt/vpush-ima-lab/src
+ExecStart=/opt/vpush-ima-lab/bin/arm-storage-backup.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=1800
+NoNewPrivileges=true
