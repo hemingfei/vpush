@@ -126,7 +126,8 @@ def _polling_bool(db: DB, key: str, default: bool = False) -> bool:
 NORMAL_IDLE_CAP_SECONDS = 900
 PRIORITY_IDLE_CAP_SECONDS = 180
 X_FALLBACK_CAP_SECONDS = 1800
-X_RATE_LIMIT_BACKOFF_SECONDS = 900  # X 429 窗口约 15 分钟；雪球 110017 同理，30s 起跳会在窗内反复撞限
+X_RATE_LIMIT_BACKOFF_SECONDS = 900  # X 429 窗口约 15 分钟，30s 起跳会在窗内反复撞限
+XUEQIU_RATE_LIMIT_BACKOFF_SECONDS = 1800  # 雪球 110017 窗口更长，且撞限会重置窗口
 COMBINATION_BASE_SECONDS = 30
 COMBINATION_IDLE_CAP_SECONDS = 120
 SECONDARY_BASE_SECONDS = 900
@@ -1122,10 +1123,16 @@ def _fetch_kol_once(
         with state_lock:
             state.fail_count += 1
             delay = min(30 * (2 ** (state.fail_count - 1)), 600)
+            limit_text = str(exc)
             if _is_platform_wide_error(exc) and (
-                "HTTP 429" in str(exc) or "限流" in str(exc)
+                "HTTP 429" in limit_text or "限流" in limit_text
             ):
-                delay = max(delay, X_RATE_LIMIT_BACKOFF_SECONDS)
+                limit_backoff = (
+                    XUEQIU_RATE_LIMIT_BACKOFF_SECONDS
+                    if "限流" in limit_text
+                    else X_RATE_LIMIT_BACKOFF_SECONDS
+                )
+                delay = max(delay, limit_backoff)
             until = time.monotonic() + delay
             state.kol_skip_until[kol["id"]] = until
             if _is_platform_wide_error(exc):
