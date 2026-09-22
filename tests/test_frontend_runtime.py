@@ -165,7 +165,7 @@ def page(playwright_instance: Playwright, static_origin: str):
     browser = playwright_instance.chromium.launch(channel="chrome", headless=True)
     context = browser.new_context(service_workers="block")
     page = context.new_page()
-    page.goto(static_origin, wait_until="domcontentloaded")
+    page.goto(static_origin, wait_until="load")
     yield page
     context.close()
     browser.close()
