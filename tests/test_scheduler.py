@@ -4255,6 +4255,65 @@ def test_scheduler_run_loop_sleeps_priority_interval(monkeypatch):
     assert 29 < waits[0] <= 30, f"应约为组合最短间隔 30s，实际 {waits[0]}"
 
 
+def test_maintenance_block_does_not_stall_notification(monkeypatch):
+    """后勤钟卡在备份时，通知钟仍继续轮询。"""
+    db = make_db()
+    db.set_setting("stock_alias_last_date", time.strftime("%Y-%m-%d"))
+    polling = SimpleNamespace(
+        notify_on_start=False,
+        jitter_seconds=0,
+        interval_seconds=180,
+        priority_interval_seconds=60,
+        digest_interval_seconds=0,
+        secondary_digest_interval_seconds=0,
+        source_probe_interval_seconds=0,
+        cookie_keepalive_interval_seconds=0,
+        daily_report_hour=24,
+        posts_retention_days=0,
+        push_logs_retention_days=0,
+    )
+    scheduler = Scheduler(
+        db,
+        {},
+        [],
+        polling,
+        notifiers_config=SimpleNamespace(
+            telegram=SimpleNamespace(bot_token="", chat_id=""),
+            feishu=SimpleNamespace(),
+            wecom=SimpleNamespace(),
+        ),
+        xueqiu_config=SimpleNamespace(cookie=""),
+        weibo_config=SimpleNamespace(cookie="", username="", password=""),
+    )
+    scheduler._last_report_extract = time.monotonic()
+    scheduler._last_ima_digest = time.monotonic()
+    started = threading.Event()
+    release = threading.Event()
+    polls = []
+
+    def blocked_backup(_db):
+        started.set()
+        assert release.wait(timeout=3)
+
+    monkeypatch.setattr("app.scheduler.run_scheduled", blocked_backup)
+    monkeypatch.setattr("app.scheduler.poll_once", lambda *_a, **_k: polls.append(time.monotonic()))
+    monkeypatch.setattr("app.scheduler._scheduler_loop_delay", lambda *_a, **_k: 0.05)
+
+    async def main():
+        task = asyncio.create_task(scheduler.run())
+        assert await asyncio.to_thread(started.wait, 2)
+        deadline = time.monotonic() + 1.2
+        while time.monotonic() < deadline and len(polls) < 2:
+            await asyncio.sleep(0.02)
+        count = len(polls)
+        release.set()
+        scheduler._stop.set()
+        await asyncio.wait_for(task, timeout=3)
+        return count
+
+    assert asyncio.run(main()) >= 2
+
+
 def test_scheduler_loop_delay_floors_at_one():
     from app.scheduler import _scheduler_loop_delay
 

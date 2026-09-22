@@ -2021,348 +2021,381 @@ class Scheduler:
         if self.polling_config.notify_on_start:
             await self._send_startup_message()
         self._recover_failed_pushes()
+        # ponytail: 两条循环，不做任务框架。后勤再慢也不挡下一轮抓取。
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(self._notification_loop(), name="notify-clock")
+            tg.create_task(self._maintenance_loop(), name="maint-clock")
+
+    async def _notification_loop(self) -> None:
         while not self._stop.is_set():
             started = time.monotonic()
-            interval_seconds = _polling_setting(
-                self.db, "config_interval_seconds", self.polling_config.interval_seconds
+            await self._notification_pass(started)
+            if self._stop.is_set():
+                return
+            await self._sleep_turn(started)
+
+    async def _maintenance_loop(self) -> None:
+        while not self._stop.is_set():
+            started = time.monotonic()
+            await self._maintenance_pass()
+            if self._stop.is_set():
+                return
+            await self._sleep_turn(started)
+
+    async def _sleep_turn(self, started: float) -> None:
+        elapsed = time.monotonic() - started
+        interval_seconds = _polling_setting(
+            self.db, "config_interval_seconds", self.polling_config.interval_seconds
+        )
+        priority_interval = _polling_setting(
+            self.db,
+            "config_priority_interval_seconds",
+            self.polling_config.priority_interval_seconds,
+        )
+        delay = _scheduler_loop_delay(
+            interval_seconds,
+            priority_interval,
+            self.polling_config.jitter_seconds,
+            db=self.db,
+        )
+        try:
+            await asyncio.wait_for(
+                self._stop.wait(), timeout=max(0.0, delay - elapsed)
             )
-            priority_interval = _polling_setting(
+        except TimeoutError:
+            pass
+
+    async def _notification_pass(self, started: float) -> None:
+        interval_seconds = _polling_setting(
+            self.db, "config_interval_seconds", self.polling_config.interval_seconds
+        )
+        priority_interval = _polling_setting(
+            self.db,
+            "config_priority_interval_seconds",
+            self.polling_config.priority_interval_seconds,
+        )
+        digest_interval = _polling_setting(
+            self.db, "config_digest_interval_seconds", self.polling_config.digest_interval_seconds
+        )
+        secondary_digest_interval = _polling_setting(
+            self.db,
+            "config_secondary_digest_interval_seconds",
+            self.polling_config.secondary_digest_interval_seconds,
+        )
+        secondary_min_count = _polling_setting(
+            self.db,
+            "config_secondary_min_digest_count",
+            SECONDARY_MIN_DIGEST_COUNT,
+        )
+        try:
+            await asyncio.to_thread(
+                poll_once,
                 self.db,
-                "config_priority_interval_seconds",
-                self.polling_config.priority_interval_seconds,
-            )
-            digest_interval = _polling_setting(
-                self.db, "config_digest_interval_seconds", self.polling_config.digest_interval_seconds
-            )
-            secondary_digest_interval = _polling_setting(
-                self.db,
-                "config_secondary_digest_interval_seconds",
-                self.polling_config.secondary_digest_interval_seconds,
-            )
-            secondary_min_count = _polling_setting(
-                self.db,
-                "config_secondary_min_digest_count",
-                SECONDARY_MIN_DIGEST_COUNT,
-            )
-            try:
-                await asyncio.to_thread(
-                    poll_once,
-                    self.db,
-                    self.fetchers,
-                    self.notifiers,
-                    self.states,
-                    self.notifiers_config,
-                    interval_seconds,
-                    priority_interval,
-                    self._digest if digest_interval > 0 else None,
-                    self.retry_queue,
-                    self._dnd_buffer,
-                    secondary_buffer=self._secondary_buffer if secondary_digest_interval > 0 else None,
-                    llm_config=self.llm_config,
-                )
-                self.db.set_setting("stats_last_poll_at", str(int(time.time())))
-                self.db.set_setting(
-                    "stats_last_poll_duration_ms",
-                    str(int((time.monotonic() - started) * 1000)),
-                )
-                self.db.set_setting("stats_last_poll_error", "")
-            except Exception:  # noqa: BLE001 - 任何异常都不能终止循环
-                logger.exception("轮询周期异常")
-                self.db.set_setting("stats_last_poll_error", "轮询周期异常")
-            try:
-                await asyncio.to_thread(self._submit_news_due)
-            except Exception:  # noqa: BLE001
-                logger.exception("财经新闻调度异常")
-            now_mono = time.monotonic()
-            # 推送失败重试（每 60 秒检查一次）
-            if now_mono - self._last_retry >= 60:
-                self._last_retry = now_mono
-                try:
-                    await asyncio.to_thread(self._retry_due_pushes)
-                except Exception:  # noqa: BLE001
-                    logger.exception("重试推送异常")
-            # 合并摘要到点统一推送（普通大V，优先大V保持实时）
-            if (
-                digest_interval > 0
-                and self._digest
-                and now_mono - self._last_digest_flush >= digest_interval
-            ):
-                self._last_digest_flush = now_mono
-                try:
-                    await asyncio.to_thread(
-                        flush_digest,
-                        self.db,
-                        self._digest,
-                        self.notifiers,
-                        self.notifiers_config,
-                        self.retry_queue,
-                        self._dnd_buffer,
-                        self.llm_config,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception("摘要推送失败")
-            # 次要大V：每轮按用户首帖入缓冲计时，到期才发；个人次要共用此缓冲
-            if secondary_digest_interval > 0 and self._secondary_buffer:
-                try:
-                    await asyncio.to_thread(
-                        self._flush_secondary_buffers,
-                        secondary_min_count,
-                        secondary_digest_interval,
-                        now_mono,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception("次要大V合并摘要推送失败")
-            # 免打扰时段结束：补推汇总
-            try:
-                await asyncio.to_thread(self._flush_dnd_buffers)
-            except Exception:  # noqa: BLE001
-                logger.exception("免打扰汇总推送失败")
-            # 雪球 cookie 主动探测
-            probe_interval = _polling_setting(
-                self.db,
-                "config_source_probe_interval_seconds",
-                self.polling_config.source_probe_interval_seconds,
-            )
-            if probe_interval > 0 and now_mono - self._last_xueqiu_probe >= probe_interval:
-                self._last_xueqiu_probe = now_mono
-                try:
-                    await asyncio.to_thread(
-                        probe_xueqiu,
-                        self.db,
-                        self.notifiers,
-                        self.xueqiu_config,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception("雪球探测异常")
-            # 雪球/微博 cookie 保活（刷新会话防过期）
-            keepalive_interval = _polling_setting(
-                self.db,
-                "config_cookie_keepalive_interval_seconds",
-                self.polling_config.cookie_keepalive_interval_seconds,
-            )
-            if keepalive_interval > 0 and now_mono - self._last_cookie_keepalive >= keepalive_interval:
-                self._last_cookie_keepalive = now_mono
-                try:
-                    await asyncio.to_thread(
-                        keepalive_xueqiu_cookie,
-                        self.db,
-                        self.notifiers,
-                        self.xueqiu_config,
-                    )
-                    await asyncio.to_thread(
-                        keepalive_weibo_cookie,
-                        self.db,
-                        self.notifiers,
-                        self.weibo_config,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception("cookie 保活异常")
-            # 每日精选：每天到达设定小时且当天未发过时推送；发送成功才标记已发，
-            # 失败保留未发状态下一轮重试，避免发送失败当天漏发
-            if self._daily_report_due():
-                try:
-                    report_ok = await asyncio.to_thread(self._send_daily_report)
-                except Exception:  # noqa: BLE001
-                    logger.exception("每日精选推送异常")
-                    report_ok = False
-                if report_ok:
-                    self.db.set_setting("daily_report_last_date", time.strftime("%Y-%m-%d"))
-            # 定时 WebDAV 备份：到点后当天未成功则跑，失败可在后续循环重试
-            try:
-                backup_ok = await asyncio.to_thread(run_scheduled, self.db)
-            except Exception:  # noqa: BLE001
-                logger.exception("定时备份异常")
-                backup_ok = False
-            if backup_ok is False:
-                try:
-                    maybe_alert_backup_failure(
-                        self.db,
-                        self.notifiers,
-                        self.db.get_setting("backup_last_error") or "定时备份失败",
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception("备份失败告警异常")
-            # 平台级健康阈值检查（每 10 分钟一次，轻量 SQL）：成功率过低/整体静默告警
-            if now_mono - self._last_health_check >= SOURCE_HEALTH_CHECK_INTERVAL:
-                self._last_health_check = now_mono
-                try:
-                    await asyncio.to_thread(
-                        maybe_alert_source_health, self.db, self.notifiers
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception("数据源健康告警异常")
-            if now_mono - self._last_cicc_alert_check >= CICC_ALERT_CHECK_INTERVAL:
-                self._last_cicc_alert_check = now_mono
-                try:
-                    from .cicc_alerts import maybe_check_cicc
-
-                    await asyncio.to_thread(
-                        maybe_check_cicc, self.db, self.notifiers, self.notifiers_config
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception("中金存储告警异常")
-            if now_mono - self._last_knowledge_notify >= 60:
-                self._last_knowledge_notify = now_mono
-                try:
-                    from .knowledge_notify import maybe_notify_knowledge_keywords
-
-                    await asyncio.to_thread(
-                        maybe_notify_knowledge_keywords, self.db, self.notifiers_config
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception("研报关键词提醒异常")
-            if now_mono - self._last_news_notify >= 60:
-                self._last_news_notify = now_mono
-                try:
-                    from .news_notify import maybe_notify_news_keywords
-
-                    await asyncio.to_thread(
-                        maybe_notify_news_keywords, self.db, self.notifiers_config
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception("财经新闻关键词提醒异常")
-            if now_mono - self._last_proxy_tick >= PROXY_TICK_INTERVAL:
-                self._last_proxy_tick = now_mono
-                try:
-                    await asyncio.to_thread(tick_proxy_pools, self.db)
-                except Exception:  # noqa: BLE001
-                    logger.exception("代理池刷新异常")
-            if now_mono - self._last_imgbed >= 20:
-                self._last_imgbed = now_mono
-                try:
-                    from . import imgbed
-
-                    await asyncio.to_thread(imgbed.process_pending, self.db)
-                except Exception:  # noqa: BLE001
-                    logger.exception("图床镜像异常")
-            if now_mono - self._last_truth_backfill >= 60:
-                self._last_truth_backfill = now_mono
-                try:
-                    if _polling_bool(self.db, "config_translate_twitter_content", False):
-                        await asyncio.to_thread(backfill_truth_translations, self.db)
-                except Exception:  # noqa: BLE001
-                    logger.exception("Truth 翻译回填异常")
-            # 股票黑话别名识别 + 误标清理：每天一次（配 LLM 才识别，清理恒执行）
-            if self._stock_alias_due():
-                ran = False
-                try:
-                    ran = await asyncio.to_thread(self._run_stock_alias_task)
-                except Exception:  # noqa: BLE001
-                    logger.exception("股票别名识别异常")
-                    ran = True  # 失败也记已跑，避免当天反复打 LLM
-                if ran:
-                    self.db.set_setting("stock_alias_last_date", time.strftime("%Y-%m-%d"))
-            try:
-                removed_users = await asyncio.to_thread(self.db.purge_inactive_users_if_due)
-                if removed_users:
-                    logger.info("清理未激活用户 %d 人", removed_users)
-            except Exception:  # noqa: BLE001
-                logger.exception("未激活用户清理失败")
-            # 研报结构化抽取（每小时一批，LLM 离线批处理；失败不影响主流程）
-            extract_interval = int(self.db.get_setting("report_extract_interval_seconds") or 3600)
-            if (
-                now_mono - self._last_report_extract > extract_interval
-                and not self._report_extract_running
-            ):
-                # 大批次单轮可达 20-30 分钟：后台任务化，主循环的采集/推送不被阻塞
-                self._last_report_extract = now_mono
-                self._report_extract_running = True
-
-                async def _run_extract_round():
-                    try:
-                        done = await asyncio.to_thread(self._run_report_extraction_task)
-                        if done:
-                            logger.info("研报结构化抽取本轮完成 %d 篇", done)
-                    except Exception:  # noqa: BLE001
-                        logger.exception("研报结构化抽取异常")
-                    finally:
-                        self._report_extract_running = False
-
-                asyncio.create_task(_run_extract_round(), name="report-extraction")
-
-            # 标的聚合编译（每小时一批，LLM 跨文档汇编；源研报没变就不重编）
-            if now_mono - self._last_ima_digest > 3600 and not self._ima_digest_running:
-                self._last_ima_digest = now_mono
-                self._ima_digest_running = True
-
-                async def _run_digest_round():
-                    try:
-                        done = await asyncio.to_thread(self._run_ticker_digest_task)
-                        if done:
-                            logger.info("标的综述编译本轮完成 %d 个", done)
-                    except Exception:  # noqa: BLE001
-                        logger.exception("标的综述编译异常")
-                    finally:
-                        self._ima_digest_running = False
-
-                asyncio.create_task(_run_digest_round(), name="ima-ticker-digest")
-
-            # 定期清理过期帖子（默认每 6 小时检查一次）
-            if now_mono - self._last_cleanup > 6 * 3600:
-                self._last_cleanup = now_mono
-                retention = self.polling_config.posts_retention_days
-                if retention > 0:
-                    try:
-                        removed = await asyncio.to_thread(
-                            self.db.delete_posts_older_than, retention
-                        )
-                        if removed:
-                            logger.info("清理过期帖子 %d 条（保留 %d 天）", removed, retention)
-                    except Exception:  # noqa: BLE001
-                        logger.exception("帖子清理失败")
-                if retention > 0:
-                    try:
-                        removed_news = await asyncio.to_thread(
-                            self.db.delete_news_articles_older_than, retention
-                        )
-                        if removed_news:
-                            logger.info("清理过期财经新闻 %d 条（保留 %d 天）", removed_news, retention)
-                    except Exception:  # noqa: BLE001
-                        logger.exception("财经新闻清理失败")
-                log_retention = self.polling_config.push_logs_retention_days
-                if log_retention > 0:
-                    try:
-                        removed_logs = await asyncio.to_thread(
-                            self.db.delete_push_logs_older_than, log_retention
-                        )
-                        if removed_logs:
-                            logger.info("清理推送日志 %d 条（保留 %d 天）", removed_logs, log_retention)
-                    except Exception:  # noqa: BLE001
-                        logger.exception("推送日志清理失败")
-                # 数据源稳定性事件保留 7 天足够看趋势，过长无意义
-                try:
-                    removed_events = self.db.delete_source_events_older_than(7)
-                    if removed_events:
-                        logger.info("清理数据源事件 %d 条（保留 7 天）", removed_events)
-                except Exception:  # noqa: BLE001
-                    logger.exception("数据源事件清理失败")
-                # 管理员操作日志保留 180 天，避免无限增长
-                try:
-                    removed_admin = self.db.delete_admin_logs_older_than(180)
-                    if removed_admin:
-                        logger.info("清理操作日志 %d 条（保留 180 天）", removed_admin)
-                except Exception:  # noqa: BLE001
-                    logger.exception("操作日志清理失败")
-                try:
-                    from . import imgbed as imgbed_mod
-                    removed_img = await asyncio.to_thread(imgbed_mod.purge_expired, self.db)
-                    if removed_img:
-                        logger.info("清理过期图床镜像 %d 条", removed_img)
-                except Exception:  # noqa: BLE001
-                    logger.exception("图床镜像清理失败")
-            elapsed = time.monotonic() - started
-            delay = _scheduler_loop_delay(
+                self.fetchers,
+                self.notifiers,
+                self.states,
+                self.notifiers_config,
                 interval_seconds,
                 priority_interval,
-                self.polling_config.jitter_seconds,
-                db=self.db,
+                self._digest if digest_interval > 0 else None,
+                self.retry_queue,
+                self._dnd_buffer,
+                secondary_buffer=self._secondary_buffer if secondary_digest_interval > 0 else None,
+                llm_config=self.llm_config,
             )
+            self.db.set_setting("stats_last_poll_at", str(int(time.time())))
+            self.db.set_setting(
+                "stats_last_poll_duration_ms",
+                str(int((time.monotonic() - started) * 1000)),
+            )
+            self.db.set_setting("stats_last_poll_error", "")
+        except Exception:  # noqa: BLE001 - 任何异常都不能终止循环
+            logger.exception("轮询周期异常")
+            self.db.set_setting("stats_last_poll_error", "轮询周期异常")
+        now_mono = time.monotonic()
+        # 推送失败重试（每 60 秒检查一次）
+        if now_mono - self._last_retry >= 60:
+            self._last_retry = now_mono
             try:
-                await asyncio.wait_for(
-                    self._stop.wait(), timeout=max(0.0, delay - elapsed)
+                await asyncio.to_thread(self._retry_due_pushes)
+            except Exception:  # noqa: BLE001
+                logger.exception("重试推送异常")
+        # 合并摘要到点统一推送（普通大V，优先大V保持实时）
+        if (
+            digest_interval > 0
+            and self._digest
+            and now_mono - self._last_digest_flush >= digest_interval
+        ):
+            self._last_digest_flush = now_mono
+            try:
+                await asyncio.to_thread(
+                    flush_digest,
+                    self.db,
+                    self._digest,
+                    self.notifiers,
+                    self.notifiers_config,
+                    self.retry_queue,
+                    self._dnd_buffer,
+                    self.llm_config,
                 )
-            except TimeoutError:
-                pass
+            except Exception:  # noqa: BLE001
+                logger.exception("摘要推送失败")
+        # 次要大V：每轮按用户首帖入缓冲计时，到期才发；个人次要共用此缓冲
+        if secondary_digest_interval > 0 and self._secondary_buffer:
+            try:
+                await asyncio.to_thread(
+                    self._flush_secondary_buffers,
+                    secondary_min_count,
+                    secondary_digest_interval,
+                    now_mono,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("次要大V合并摘要推送失败")
+        # 免打扰时段结束：补推汇总
+        try:
+            await asyncio.to_thread(self._flush_dnd_buffers)
+        except Exception:  # noqa: BLE001
+            logger.exception("免打扰汇总推送失败")
+
+    async def _maintenance_pass(self) -> None:
+        try:
+            await asyncio.to_thread(self._submit_news_due)
+        except Exception:  # noqa: BLE001
+            logger.exception("财经新闻调度异常")
+        now_mono = time.monotonic()
+        # 雪球 cookie 主动探测
+        probe_interval = _polling_setting(
+            self.db,
+            "config_source_probe_interval_seconds",
+            self.polling_config.source_probe_interval_seconds,
+        )
+        if probe_interval > 0 and now_mono - self._last_xueqiu_probe >= probe_interval:
+            self._last_xueqiu_probe = now_mono
+            try:
+                await asyncio.to_thread(
+                    probe_xueqiu,
+                    self.db,
+                    self.notifiers,
+                    self.xueqiu_config,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("雪球探测异常")
+        # 雪球/微博 cookie 保活（刷新会话防过期）
+        keepalive_interval = _polling_setting(
+            self.db,
+            "config_cookie_keepalive_interval_seconds",
+            self.polling_config.cookie_keepalive_interval_seconds,
+        )
+        if keepalive_interval > 0 and now_mono - self._last_cookie_keepalive >= keepalive_interval:
+            self._last_cookie_keepalive = now_mono
+            try:
+                await asyncio.to_thread(
+                    keepalive_xueqiu_cookie,
+                    self.db,
+                    self.notifiers,
+                    self.xueqiu_config,
+                )
+                await asyncio.to_thread(
+                    keepalive_weibo_cookie,
+                    self.db,
+                    self.notifiers,
+                    self.weibo_config,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("cookie 保活异常")
+        # 每日精选：每天到达设定小时且当天未发过时推送；发送成功才标记已发，
+        # 失败保留未发状态下一轮重试，避免发送失败当天漏发
+        if self._daily_report_due():
+            try:
+                report_ok = await asyncio.to_thread(self._send_daily_report)
+            except Exception:  # noqa: BLE001
+                logger.exception("每日精选推送异常")
+                report_ok = False
+            if report_ok:
+                self.db.set_setting("daily_report_last_date", time.strftime("%Y-%m-%d"))
+        # 定时 WebDAV 备份：到点后当天未成功则跑，失败可在后续循环重试
+        try:
+            backup_ok = await asyncio.to_thread(run_scheduled, self.db)
+        except Exception:  # noqa: BLE001
+            logger.exception("定时备份异常")
+            backup_ok = False
+        if backup_ok is False:
+            try:
+                maybe_alert_backup_failure(
+                    self.db,
+                    self.notifiers,
+                    self.db.get_setting("backup_last_error") or "定时备份失败",
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("备份失败告警异常")
+        # 平台级健康阈值检查（每 10 分钟一次，轻量 SQL）：成功率过低/整体静默告警
+        if now_mono - self._last_health_check >= SOURCE_HEALTH_CHECK_INTERVAL:
+            self._last_health_check = now_mono
+            try:
+                await asyncio.to_thread(
+                    maybe_alert_source_health, self.db, self.notifiers
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("数据源健康告警异常")
+        if now_mono - self._last_cicc_alert_check >= CICC_ALERT_CHECK_INTERVAL:
+            self._last_cicc_alert_check = now_mono
+            try:
+                from .cicc_alerts import maybe_check_cicc
+
+                await asyncio.to_thread(
+                    maybe_check_cicc, self.db, self.notifiers, self.notifiers_config
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("中金存储告警异常")
+        if now_mono - self._last_knowledge_notify >= 60:
+            self._last_knowledge_notify = now_mono
+            try:
+                from .knowledge_notify import maybe_notify_knowledge_keywords
+
+                await asyncio.to_thread(
+                    maybe_notify_knowledge_keywords, self.db, self.notifiers_config
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("研报关键词提醒异常")
+        if now_mono - self._last_news_notify >= 60:
+            self._last_news_notify = now_mono
+            try:
+                from .news_notify import maybe_notify_news_keywords
+
+                await asyncio.to_thread(
+                    maybe_notify_news_keywords, self.db, self.notifiers_config
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("财经新闻关键词提醒异常")
+        if now_mono - self._last_proxy_tick >= PROXY_TICK_INTERVAL:
+            self._last_proxy_tick = now_mono
+            try:
+                await asyncio.to_thread(tick_proxy_pools, self.db)
+            except Exception:  # noqa: BLE001
+                logger.exception("代理池刷新异常")
+        if now_mono - self._last_imgbed >= 20:
+            self._last_imgbed = now_mono
+            try:
+                from . import imgbed
+
+                await asyncio.to_thread(imgbed.process_pending, self.db)
+            except Exception:  # noqa: BLE001
+                logger.exception("图床镜像异常")
+        if now_mono - self._last_truth_backfill >= 60:
+            self._last_truth_backfill = now_mono
+            try:
+                if _polling_bool(self.db, "config_translate_twitter_content", False):
+                    await asyncio.to_thread(backfill_truth_translations, self.db)
+            except Exception:  # noqa: BLE001
+                logger.exception("Truth 翻译回填异常")
+        # 股票黑话别名识别 + 误标清理：每天一次（配 LLM 才识别，清理恒执行）
+        if self._stock_alias_due():
+            ran = False
+            try:
+                ran = await asyncio.to_thread(self._run_stock_alias_task)
+            except Exception:  # noqa: BLE001
+                logger.exception("股票别名识别异常")
+                ran = True  # 失败也记已跑，避免当天反复打 LLM
+            if ran:
+                self.db.set_setting("stock_alias_last_date", time.strftime("%Y-%m-%d"))
+        try:
+            removed_users = await asyncio.to_thread(self.db.purge_inactive_users_if_due)
+            if removed_users:
+                logger.info("清理未激活用户 %d 人", removed_users)
+        except Exception:  # noqa: BLE001
+            logger.exception("未激活用户清理失败")
+        # 研报结构化抽取（每小时一批，LLM 离线批处理；失败不影响主流程）
+        extract_interval = int(self.db.get_setting("report_extract_interval_seconds") or 3600)
+        if (
+            now_mono - self._last_report_extract > extract_interval
+            and not self._report_extract_running
+        ):
+            # 大批次单轮可达 20-30 分钟：后台任务化，主循环的采集/推送不被阻塞
+            self._last_report_extract = now_mono
+            self._report_extract_running = True
+
+            async def _run_extract_round():
+                try:
+                    done = await asyncio.to_thread(self._run_report_extraction_task)
+                    if done:
+                        logger.info("研报结构化抽取本轮完成 %d 篇", done)
+                except Exception:  # noqa: BLE001
+                    logger.exception("研报结构化抽取异常")
+                finally:
+                    self._report_extract_running = False
+
+            asyncio.create_task(_run_extract_round(), name="report-extraction")
+
+        # 标的聚合编译（每小时一批，LLM 跨文档汇编；源研报没变就不重编）
+        if now_mono - self._last_ima_digest > 3600 and not self._ima_digest_running:
+            self._last_ima_digest = now_mono
+            self._ima_digest_running = True
+
+            async def _run_digest_round():
+                try:
+                    done = await asyncio.to_thread(self._run_ticker_digest_task)
+                    if done:
+                        logger.info("标的综述编译本轮完成 %d 个", done)
+                except Exception:  # noqa: BLE001
+                    logger.exception("标的综述编译异常")
+                finally:
+                    self._ima_digest_running = False
+
+            asyncio.create_task(_run_digest_round(), name="ima-ticker-digest")
+
+        # 定期清理过期帖子（默认每 6 小时检查一次）
+        if now_mono - self._last_cleanup > 6 * 3600:
+            self._last_cleanup = now_mono
+            retention = self.polling_config.posts_retention_days
+            if retention > 0:
+                try:
+                    removed = await asyncio.to_thread(
+                        self.db.delete_posts_older_than, retention
+                    )
+                    if removed:
+                        logger.info("清理过期帖子 %d 条（保留 %d 天）", removed, retention)
+                except Exception:  # noqa: BLE001
+                    logger.exception("帖子清理失败")
+            if retention > 0:
+                try:
+                    removed_news = await asyncio.to_thread(
+                        self.db.delete_news_articles_older_than, retention
+                    )
+                    if removed_news:
+                        logger.info("清理过期财经新闻 %d 条（保留 %d 天）", removed_news, retention)
+                except Exception:  # noqa: BLE001
+                    logger.exception("财经新闻清理失败")
+            log_retention = self.polling_config.push_logs_retention_days
+            if log_retention > 0:
+                try:
+                    removed_logs = await asyncio.to_thread(
+                        self.db.delete_push_logs_older_than, log_retention
+                    )
+                    if removed_logs:
+                        logger.info("清理推送日志 %d 条（保留 %d 天）", removed_logs, log_retention)
+                except Exception:  # noqa: BLE001
+                    logger.exception("推送日志清理失败")
+            # 数据源稳定性事件保留 7 天足够看趋势，过长无意义
+            try:
+                removed_events = self.db.delete_source_events_older_than(7)
+                if removed_events:
+                    logger.info("清理数据源事件 %d 条（保留 7 天）", removed_events)
+            except Exception:  # noqa: BLE001
+                logger.exception("数据源事件清理失败")
+            # 管理员操作日志保留 180 天，避免无限增长
+            try:
+                removed_admin = self.db.delete_admin_logs_older_than(180)
+                if removed_admin:
+                    logger.info("清理操作日志 %d 条（保留 180 天）", removed_admin)
+            except Exception:  # noqa: BLE001
+                logger.exception("操作日志清理失败")
+            try:
+                from . import imgbed as imgbed_mod
+                removed_img = await asyncio.to_thread(imgbed_mod.purge_expired, self.db)
+                if removed_img:
+                    logger.info("清理过期图床镜像 %d 条", removed_img)
+            except Exception:  # noqa: BLE001
+                logger.exception("图床镜像清理失败")
 
     def _recover_failed_pushes(self) -> None:
         """重启后把最近 24 小时失败的推送重新入队。"""
