@@ -1307,12 +1307,13 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
 
 
 def test_holdings_kol_board_tabs_expand_sort(page: Page):
-    """大V持股板块（工厂级打桩）：页顶 tab 切换、四榜渲染、行展开大V名单、
-    窗口钮重拉、最近观点滑动栏筛选、清仓榜盈亏排序与割肉/止盈徽。"""
+    """大V持股板块（工厂级打桩）：页顶 tab 切换、四榜渲染、行展开大V名单、chip 下钻开
+    预估持仓抽屉（非整页）、窗口钮重拉、最近观点滑动栏筛选、清仓榜盈亏排序与割肉/止盈徽。"""
     page.evaluate("""async () => {
       const { createHoldingsView } = await import('/views/holdings.js');
+      const { createMxKolHoldingsView } = await import('/views/mx-kol-holdings.js');
       document.body.innerHTML = '<main id="main"></main>';
-      const h = window.hdTest = { calls: [], flashes: [] };
+      const h = window.hdTest = { calls: [], flashes: [], nav: [] };
       h.kolSummary = (days) => ({
         window_days: days,
         heavy: [
@@ -1367,6 +1368,27 @@ def test_holdings_kol_board_tabs_expand_sort(page: Page):
         showConfirm: async () => true,
       });
       Object.assign(window, h.view);
+      // 下钻抽屉用真实工厂（非桩）：/holdings 无 #mxv-drawer-slot，走 #main 兜底挂载
+      const mxcView = createMxKolHoldingsView({
+        $: (sel) => document.querySelector(sel),
+        state: { token: '' },
+        api: async (path) => {
+          h.calls.push(path);
+          if (path.endsWith('/mx-pnl')) return { days: 30, total_return_pct: 1.2, winners: 1, losers: 0 };
+          const id = Number((path.match(/kols\\/(\\d+)/) || [])[1] || 0);
+          return { kol: { kol_id: id, name: '大V' + id, avatar: '' }, window_days: 30, timeline: [],
+                   holdings: [], topics: [], opinion_count: 0, generated_at: '2026-09-20 10:00' };
+        },
+        escapeHtml: (s) => String(s ?? ''),
+        setPageTitle: () => {},
+        go: (href) => h.nav.push(href),
+        routeStillActive: () => true,
+        emptyState: () => '',
+        flash: () => {},
+        closeViewsDrawer: () => {},
+        mxHoldingsInScope: () => true,
+      });
+      Object.assign(window, mxcView);
       await h.view.renderHoldings(1);
     }""")
     # 页顶 tab：默认我的持股（空清单空态），切到大V持股后四榜骨架出现
@@ -1385,9 +1407,16 @@ def test_holdings_kol_board_tabs_expand_sort(page: Page):
     expect(page.locator(".hd-kol-chip").first).to_contain_text("王哥")
     expect(page.locator(".hd-krow-kols")).to_have_count(1)  # 只有茅台一行处于展开
     expect(rows.nth(1).locator(".hd-krow-kols")).to_have_count(0)
-    # 下钻走现有单大V页路由（带前导斜杠）
-    href_like = page.locator(".hd-kol-chip").first.get_attribute("onclick")
-    assert "go('/mx-kol/1')" in href_like
+    # 下钻：chip 点开右侧预估持仓抽屉（不再是整页路由），stopPropagation 不把行收起
+    chip_onclick = page.locator(".hd-kol-chip").first.get_attribute("onclick")
+    assert "mxcOpenDrawer(1)" in chip_onclick
+    page.locator(".hd-kol-chip").first.click()
+    expect(page.locator(".mxc-drawer")).to_have_count(1)
+    expect(page.locator(".mxc-drawer .mxc-head h2")).to_have_text("大V1")
+    expect(page.locator(".hd-krow-kols")).to_have_count(1)  # 行仍展开
+    assert page.evaluate("hdTest.nav") == []  # 一次整页跳转都没走
+    page.evaluate("mxcCloseDrawer()")
+    expect(page.locator(".mxc-drawer")).to_have_count(0)
     # 交错开缩互不干扰：再开曙光 → 各自展开；收曙光 → 茅台不受影响仍展开
     rows.nth(1).click()
     expect(page.locator(".hd-kol-chip")).to_have_count(4)
@@ -1419,7 +1448,7 @@ def test_holdings_kol_board_tabs_expand_sort(page: Page):
     expect(rows.nth(1).locator(".hd-krow-name")).to_have_text("五粮液")
     # 展开茅台：chip 同方向排——亏多在前、无价沉底
     rows.nth(0).click()
-    chips = page.locator(".hd-kol-chip.static")
+    chips = page.locator(".hd-kol-chip.detail")
     expect(chips).to_have_count(3)
     expect(chips.nth(0)).to_contain_text("王哥")
     expect(chips.nth(0).locator(".hd-kol-pct.cut")).to_have_text("-12.5%")
@@ -1427,6 +1456,12 @@ def test_holdings_kol_board_tabs_expand_sort(page: Page):
     expect(chips.nth(1).locator(".hd-kol-pct.win")).to_have_text("+8.3%")
     expect(chips.nth(2)).to_contain_text("孙哥")
     expect(chips.nth(2).locator(".hd-kol-pct")).to_have_text("—")
+    # Regression：清仓 chip 曾是点不动的 static span（下钻断头）——点李哥开他的抽屉，行不收起
+    assert "mxcOpenDrawer(2)" in chips.nth(1).get_attribute("onclick")
+    chips.nth(1).click()
+    expect(page.locator(".mxc-drawer .mxc-head h2")).to_have_text("大V2")
+    expect(page.locator(".hd-krow-kols")).to_have_count(1)
+    page.evaluate("mxcCloseDrawer()")
     # 切「盈↑」：行序翻转（五粮液到最前）+ 按钮 on 态迁移（Regression：曾只刷
     # 榜体不刷控制带，按钮高亮纹丝不动、行收起时整榜毫无变化＝点了没反应）
     page.locator(".hd-kol-controls").get_by_role("button", name="盈↑").click()
@@ -1437,7 +1472,7 @@ def test_holdings_kol_board_tabs_expand_sort(page: Page):
     assert "on" not in page.locator(".hd-kol-controls").get_by_role(
         "button", name="亏↑").get_attribute("class")
     # 茅台行仍处于展开（行键跨重渲染保持），chip 反序：赚多在前、无价仍沉底
-    chips = page.locator(".hd-kol-chip.static")
+    chips = page.locator(".hd-kol-chip.detail")
     expect(chips).to_have_count(3)
     expect(chips.nth(0)).to_contain_text("李哥")
     expect(chips.nth(1)).to_contain_text("王哥")
@@ -1445,7 +1480,7 @@ def test_holdings_kol_board_tabs_expand_sort(page: Page):
     # 切回「亏↑」：行序复原
     page.locator(".hd-kol-controls").get_by_role("button", name="亏↑").click()
     expect(rows.nth(0).locator(".hd-krow-name")).to_have_text("贵州茅台")
-    chips = page.locator(".hd-kol-chip.static")
+    chips = page.locator(".hd-kol-chip.detail")
     expect(chips.nth(0)).to_contain_text("王哥")
     # 最近观点滑动栏（回共同进攻榜验证筛选）：0=不筛；大值滤掉旧动作
     page.locator(".hd-kol-controls").get_by_role("button", name="共同进攻").click()

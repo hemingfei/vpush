@@ -140,8 +140,14 @@ def test_holdings_kol_board_contract():
     assert 'localStorage.setItem("hd_kol_recent"' in HOLDINGS_JS  # 滑动栏跨路由保留
     assert "hdKolSetTab" in HOLDINGS_JS and '"attack"' in HOLDINGS_JS  # 四榜页签
     assert "hdKolToggleRow" in HOLDINGS_JS  # 行展开（按行键，不跨行联动）
-    # 下钻：大V chip 跳现有单大V页（go 路由带前导斜杠），不新建页面
-    assert "go('/mx-kol/" in HOLDINGS_JS
+    # 下钻：chip（含清仓行的）一律开预估持仓抽屉，不跳整页——停在榜上看完大V再收回来。
+    # mxcOpenDrawer 走 app.js INLINE_HANDLERS 全局（与动态页持仓按钮同一入口）
+    assert HOLDINGS_JS.count("mxcOpenDrawer(") == 2  # 重仓/进攻/题材 + 清仓两处 chip
+    assert "go('/mx-kol/" not in HOLDINGS_JS
+    assert "hd-kol-chip static" not in HOLDINGS_JS and "hd-kol-chip detail" in HOLDINGS_JS
+    assert ".hd-kol-chip.static" not in HOLDINGS_CSS
+    # 清仓 chip 必须带 kol_id：曾经只是 static span（点开不了，等于下钻断头）
+    assert "mxcOpenDrawer(${Number(e.kol_id) || 0})" in _fn_body("hdKolClearRow", HOLDINGS_JS)
     # 清仓榜：割肉/止盈徽 + 盈亏排序
     assert "hdKolSetSort" in HOLDINGS_JS and '"cut"' in HOLDINGS_JS and '"profit"' in HOLDINGS_JS
     assert "realized_pnl_pct" in HOLDINGS_JS

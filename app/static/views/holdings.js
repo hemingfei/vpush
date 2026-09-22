@@ -387,8 +387,10 @@ export function createHoldingsView(dependencies) {
       : `<span class="hd-kava ava-fallback">${escapeHtml((k.name || "?")[0])}</span>`;
   }
 
+  // 大V chip → 预估持仓抽屉（mxcOpenDrawer 走 app.js INLINE_HANDLERS 全局，与动态页
+  // 持仓按钮同一入口）：停在榜上不跳整页；stopPropagation 防冒泡到整行把行收起
   function hdKolKolsRow(k) {
-    return `<button type="button" class="hd-kol-chip" onclick="event.stopPropagation();go('/mx-kol/${k.kol_id}')" title="查看 ${escapeHtml(k.name)} 的预估持仓">
+    return `<button type="button" class="hd-kol-chip" onclick="event.stopPropagation();mxcOpenDrawer(${Number(k.kol_id) || 0})" title="查看 ${escapeHtml(k.name)} 的预估持仓">
       ${hdKolAva(k)}<span>${escapeHtml(k.name)}</span></button>`;
   }
 
@@ -445,9 +447,9 @@ export function createHoldingsView(dependencies) {
         const pct = e.realized_pnl_pct === null
           ? `<span class="hd-kol-pct" title="行情缺失，无法估算">—</span>`
           : `<span class="hd-kol-pct${cls}">${e.realized_pnl_pct > 0 ? "+" : ""}${e.realized_pnl_pct}%</span>`;
-        return `<span class="hd-kol-chip static" onclick="event.stopPropagation()">
+        return `<button type="button" class="hd-kol-chip detail" onclick="event.stopPropagation();mxcOpenDrawer(${Number(e.kol_id) || 0})" title="查看 ${escapeHtml(e.name)} 的预估持仓">
           ${hdKolAva(e)}<span>${escapeHtml(e.name)}</span>
-          <span class="hd-kol-at" title="清仓时间">${escapeHtml(fmtTime(e.at))}</span>${pct}</span>`;
+          <span class="hd-kol-at" title="清仓时间">${escapeHtml(fmtTime(e.at))}</span>${pct}</button>`;
       }).join("")}</div>` : ""}
     </div>`;
   }
