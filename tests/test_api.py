@@ -2226,8 +2226,6 @@ def test_weibo_kol_link_normalized():
 
 
 def test_xueqiu_cookie_write_and_batch_rss_url(monkeypatch, tmp_path):
-    seed = {}
-    monkeypatch.setattr("app.api.write_xueqiu_seed_cookie", lambda cookie: seed.update(cookie=cookie))
     client = make_client()
     headers = auth_headers(client)
 
@@ -2240,7 +2238,6 @@ def test_xueqiu_cookie_write_and_batch_rss_url(monkeypatch, tmp_path):
         json={"cookie": "xq_a_token=abc; u=123"},
     )
     assert resp.status_code == 200
-    assert seed == {"cookie": "xq_a_token=abc; u=123"}
     status = client.get("/api/admin/xueqiu-cookie", headers=headers).json()
     assert status["set"] is True and status["preview"] == "已配置"
 
@@ -2366,8 +2363,6 @@ def test_ima_api_key_status_never_returns_credential_bytes():
 
 def test_admin_can_clear_saved_cookies(monkeypatch):
     """管理员可清除已保存 Cookie；未知源拒绝，空清除可重复。"""
-    seed = {}
-    monkeypatch.setattr("app.api.write_xueqiu_seed_cookie", lambda cookie: seed.update(cookie=cookie))
     client = make_client()
     headers = auth_headers(client)
     user = register(client, "plainuser", "pass123456")
@@ -2386,7 +2381,6 @@ def test_admin_can_clear_saved_cookies(monkeypatch):
     )
     resp = client.delete("/api/admin/cookies/xueqiu", headers=headers)
     assert resp.status_code == 200 and resp.json()["ok"] is True
-    assert seed.get("cookie") == ""
     assert client.get("/api/admin/xueqiu-cookie", headers=headers).json()["set"] is False
     assert client.get("/api/stats", headers=headers).json()["xueqiu_cookie"]["set"] is False
     assert client.delete("/api/admin/cookies/xueqiu", headers=headers).status_code == 200

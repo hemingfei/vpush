@@ -315,3 +315,51 @@ python3 scripts/xq_poll_probe_estimate.py /data/dav.db
 | 1 | 生产环境实际节省率 | 需用生产库跑 `xq_poll_probe_estimate.py` 得到精确数字 |
 | 2 | 高活跃 KOL 是否该跳过探测 | 若某 KOL 每轮都有更新，探测反而多一次请求；可按实际命中率做分流（当前未做，因为即使最活跃样本收益仍 90%+） |
 | 3 | 组合档（`ZH*`）是否适用 | 组合调仓频率极低，理论上收益最大，但 `combination.py` 走的是独立拉取路径，本次未改 |
+
+---
+
+## 11. 网页 cookie 兜底通道下线（2026-09-23）
+
+### 11.1 为什么必须下线
+
+App 通道上线后，线上实测：**回退次数 0**、雪球抓取 40 条新帖零失败、主容器**从未读取** waf-bot 产出的 cookie 文件。留在那里不是"保险"，而是三个问题的叠加：
+
+1. **假兜底**：容器停掉后 `/data/waf_cookies.json` 会**冻结在最后一次成功值**，cookie 失效后表现为静默失败 —— 比没有兜底更危险，因为维护者会以为还有退路。
+2. **该路径本来就不可用**：本服务出口 IP 打网页域已被 `400016`/`110017` 拦截（见 §9），waf-bot 刷的 cookie 也救不了。
+3. **暴露面**：`WAF_SEED_COOKIE` 是一整套登录 cookie，明文躺在 compose 里。
+
+### 11.2 下线顺序（顺序本身就是安全措施）
+
+**先删代码 → 再停容器**。反过来做会制造上面第 1 条的静默失败窗口。
+
+```bash
+# ① 代码（本仓库，走 Lane A 发布）
+#    删 xueqiu.py 的 web 域回退分支 + merge_waf_cookie/_load_waf_cookies/
+#    write_xueqiu_seed_cookie；api.py / main.py 的调用同步清理
+
+# ② VPS（/opt/vpush）
+docker compose stop waf-bot && docker compose rm -f waf-bot
+#    restart=unless-stopped 不会自己回来
+#    然后从 /opt/vpush/docker-compose.yml 删掉 waf-bot service、
+#    主容器的 WAF_COOKIE_FILE / XUEQIU_SEED_COOKIE_FILE、
+#    以及 WAF_SEED_COOKIE=${XUEQIU_COOKIE}（明文登录 cookie）
+```
+
+### 11.3 代码变更清单
+
+| 文件 | 变更 |
+|---|---|
+| `app/fetchers/xueqiu.py` | 删 `merge_waf_cookie` / `_load_waf_cookies` / `write_xueqiu_seed_cookie` / `_cookie_sha256`；删 `WAF_COOKIE_FILE` / `XUEQIU_SEED_COOKIE_FILE` / `XUEQIU_WEB_TIMELINE_URL` / `BROWSER_UA`；`resolve_xueqiu_identity` 与 `resolve_profile` 不再回退，注册失败直接抛出由调度器退避 |
+| `app/api.py` | `set_xueqiu_cookie` / `clear_saved_cookie` 不再同步 sidecar 文件 |
+| `app/main.py` | 启动时不再向 sidecar 投递 seed cookie |
+| `tests/conftest.py` | 默认从「关闭 App 通道」改为「**stub 掉注册**」——既不发真实请求，又让用例走生产真实路径 |
+| `tests/test_fetchers.py` | 删除 10 个专测网页路径的用例（www 跳转、waf cookie 合并/缺失/旧 seed、EdgeOne 挑战重试、cookie 失效文案等） |
+| `docker-compose.prod.yml` | 删 `waf-bot` service 与三个环境变量（含明文 `XUEQIU_COOKIE`） |
+
+**保留**：`XUEQIU_COOKIE_KEY` / `XUEQIU_COOKIE_TIME_KEY` 与后台「Cookie 管理」界面（`kol_requests` 的昵称解析仍读它），但**不再参与抓取链路**。若要彻底清理，可作为下一步。
+
+### 11.4 回滚
+
+**无运行时开关** —— `XUEQIU_APP_IDENTITY=0` 现在直接抛错（不再静默回退）。要恢复网页路径需要 `git revert` 本次提交并重启 waf-bot 容器。
+
+这是刻意的：保留一个"能关掉主通道退回死路径"的开关，只会重蹈 §11.1 的覆辙。

@@ -15,9 +15,7 @@ from app.config import XueqiuConfig
 from app.db import DB
 from app.fetchers.combination import CUBE_QUOTE_URL, CombinationFetcher, REBALANCING_URL
 from app.fetchers.xueqiu import (
-    BROWSER_UA,
     XUEQIU_TIMELINE_URL,
-    XUEQIU_WEB_TIMELINE_URL,
     XueqiuFetcher,
 )
 
@@ -96,8 +94,12 @@ def test_expired_app_token_rotates_and_retries(app_identity):
     assert all(r.url.host == "api.xueqiu.com" for r in seen)
 
 
-def test_register_failure_falls_back_to_web_cookie(monkeypatch, app_identity):
-    """注册失败时不阻断抓取：退回旧 cookie + 网页域名，由告警链路兜底。"""
+def test_register_failure_raises_without_web_fallback(monkeypatch, app_identity):
+    """注册失败不再静默退回网页 cookie（该通道已随 waf-bot 下线）：直接抛出由调度器退避。
+
+    这里刻意保留一个 DB 里的旧 cookie，验证它不会被拿来兜底 —— 否则会制造「有兜底」的错觉，
+    而那条路径在本服务出口 IP 上已被 400016/110017 拦截。
+    """
     monkeypatch.setattr(
         xq_identity, "identity", lambda: (_ for _ in ()).throw(RuntimeError("网络不可达"))
     )
@@ -109,11 +111,10 @@ def test_register_failure_falls_back_to_web_cookie(monkeypatch, app_identity):
         client=_timeline_client(seen, payload),
     )
 
-    fetcher.fetch({"id": 1, "name": "大V", "external_id": "123"})
+    with pytest.raises(RuntimeError):
+        fetcher.fetch({"id": 1, "name": "大V", "external_id": "123"})
 
-    assert seen[0].url.host == "xueqiu.com"
-    assert seen[0].url.path == XUEQIU_WEB_TIMELINE_URL.removeprefix("https://xueqiu.com")
-    assert seen[0].headers["User-Agent"] == BROWSER_UA
+    assert seen == []  # 没有退回任何请求
     assert XUEQIU_TIMELINE_URL.startswith("https://api.xueqiu.com/")
 
 

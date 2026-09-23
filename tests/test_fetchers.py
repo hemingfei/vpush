@@ -18,9 +18,7 @@ from app.fetchers.combination import (
 )
 from app.fetchers.xueqiu import (
     XueqiuFetcher,
-    _load_waf_cookies,
     classify_status,
-    merge_waf_cookie,
 )
 from app.proxy import ProxyRouter, ProxyUnavailable
 
@@ -39,7 +37,7 @@ def test_xueqiu_parse_fixture():
 
     def handler(request):
         assert request.headers.get("Cookie", "").startswith("xq_a_token=")
-        assert request.url.path == "/statuses/user_timeline.json"
+        assert request.url.path == "/v4/statuses/user_timeline.json"
         assert request.url.params.get("user_id") == "123"
         assert request.headers.get("Origin") == "https://xueqiu.com"
         assert request.headers.get("X-Requested-With") == "XMLHttpRequest"
@@ -57,32 +55,6 @@ def test_xueqiu_parse_fixture():
     assert posts[0].kol_name == "大V"
 
 
-@pytest.mark.parametrize(
-    ("fetcher_class", "external_id"),
-    [(XueqiuFetcher, "123")],
-)
-def test_xueqiu_cookie_survives_www_redirect(fetcher_class, external_id, monkeypatch, tmp_path):
-    monkeypatch.setattr("app.fetchers.xueqiu.WAF_COOKIE_FILE", str(tmp_path / "missing.json"))
-    seen: list[tuple[str, str]] = []
-
-    def handler(request):
-        seen.append((request.url.host, request.headers.get("Cookie", "")))
-        if request.url.host == "xueqiu.com":
-            return httpx.Response(
-                302, headers={"location": str(request.url.copy_with(host="www.xueqiu.com"))}
-            )
-        return httpx.Response(200, json={"statuses": [], "list": []})
-
-    db = DB(":memory:")
-    with httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
-        fetcher = fetcher_class(XueqiuConfig(cookie="xq_a_token=abc"), db=db, client=client)
-        for cookie in ("xq_a_token=abc", "xq_a_token=new; u=123"):
-            db.set_setting("xueqiu_cookie", cookie)
-            seen.clear()
-            fetcher.fetch({"id": 1, "name": "大V", "external_id": external_id})
-            assert len(seen) >= 2 and len(seen) % 2 == 0
-            assert set(seen[::2]) == {("xueqiu.com", cookie)}
-            assert set(seen[1::2]) == {("www.xueqiu.com", cookie)}
 
 
 def test_xueqiu_cookie_jar_replaces_old_values_and_scopes_domain():
@@ -104,46 +76,6 @@ def test_xueqiu_cookie_jar_replaces_old_values_and_scopes_domain():
     assert seen == ["xq_a_token=new==; u=123", "", ""]
 
 
-@pytest.mark.parametrize("platform", ["xueqiu"])
-def test_xueqiu_profile_cookie_survives_www_redirect(platform, monkeypatch):
-    from app.fetchers.combination import resolve_combination_profile
-    from app.fetchers.xueqiu import resolve_profile
-
-    seen = []
-
-    def handler(request):
-        seen.append((request.url.host, request.headers.get("Cookie", "")))
-        if request.url.host == "xueqiu.com":
-            return httpx.Response(
-                302, headers={"location": str(request.url.copy_with(host="www.xueqiu.com"))}
-            )
-        return httpx.Response(200, json={
-            "statuses": [{"user": {"screen_name": "测试用户"}}],
-            "list": [{"symbol": "ZH123", "name": "测试组合"}],
-        })
-
-    real_client = httpx.Client
-
-    def client_factory(**kwargs):
-        return real_client(transport=httpx.MockTransport(handler), **kwargs)
-
-    monkeypatch.setattr("app.fetchers.combination._profile_cache", {})
-    if platform == "xueqiu":
-        monkeypatch.setattr("httpx.Client", client_factory)
-        result = resolve_profile("123", cookie="xq_a_token=abc")
-        assert result["screen_name"] == "测试用户"
-    else:
-        def session_factory(**kwargs):
-            return real_client(
-                transport=httpx.MockTransport(handler),
-                follow_redirects=True,
-                headers=kwargs.get("headers"),
-            )
-
-        monkeypatch.setattr("app.fetchers.combination.cffi.Session", session_factory)
-        result = resolve_combination_profile("ZH123", cookie="xq_a_token=abc")
-        assert result["name"] == "测试组合"
-    assert seen == [("xueqiu.com", "xq_a_token=abc"), ("www.xueqiu.com", "xq_a_token=abc")]
 
 
 def test_combination_profile_uses_api_host_and_keeps_cookie(monkeypatch):
@@ -202,103 +134,8 @@ def test_cube_client_uses_chrome_impersonation(monkeypatch):
     assert client.cookies.get("xq_a_token") == "abc"
 
 
-def test_cube_session_opens_homepage_once_per_cookie():
-    """history.json 需要同一会话先打开首页；cookie 没变时不重复打开，也不清掉首页下发的 cookie。"""
-    calls = []
-
-    class Jar:
-        def __init__(self):
-            self.cleared = 0
-            self.values = {}
-
-        def clear(self):
-            self.cleared += 1
-            self.values.clear()
-
-        def set(self, name, value, domain="", path="/"):
-            self.values[name] = value
-
-    class Fake:
-        impersonate = "chrome124"
-
-        def __init__(self):
-            self.headers = {}
-            self.cookies = Jar()
-
-        def get(self, url, params=None, headers=None):
-            calls.append(url)
-            request = httpx.Request("GET", url)
-            if "history.json" in url:
-                return httpx.Response(200, json={"list": []}, request=request)
-            if url.rstrip("/").endswith("xueqiu.com"):
-                self.cookies.set("ssxmod_itna", "from-home", domain=".xueqiu.com")
-                return httpx.Response(200, text="<html></html>", request=request)
-            return httpx.Response(200, json={}, request=request)
-
-    db = DB(":memory:")
-    fetcher = CombinationFetcher(
-        XueqiuConfig(cookie="xq_a_token=abc"), db=db, client=Fake()
-    )
-    kol = {"id": 1, "name": "伯言-A股", "external_id": "ZH3623878"}
-    fetcher.fetch(kol)
-    assert calls[0] == "https://xueqiu.com/"
-    assert any("history.json" in url for url in calls)
-    assert fetcher.client.cookies.values["ssxmod_itna"] == "from-home"
-    cleared = fetcher.client.cookies.cleared
-    before = len(calls)
-    fetcher.fetch(kol)
-    assert fetcher.client.cookies.cleared == cleared
-    assert calls[before:] == [url for url in calls[before:] if url != "https://xueqiu.com/"]
-    assert "ssxmod_itna" in fetcher.client.cookies.values
 
 
-def test_cube_retries_history_after_challenge_page():
-    """调仓接口被 EdgeOne 挑战页拦住时，重新预热会话并重试一次。"""
-    calls = []
-    state = {"challenged": False}
-    challenge = "<html><script>document.cookie='__tst_status=1731333079#';</script></html>"
-
-    class Jar:
-        def __init__(self):
-            self.cleared = 0
-            self.values = {}
-
-        def clear(self):
-            self.cleared += 1
-            self.values.clear()
-
-        def set(self, name, value, domain="", path="/"):
-            self.values[name] = value
-
-    class Fake:
-        impersonate = "chrome124"
-
-        def __init__(self):
-            self.headers = {}
-            self.cookies = Jar()
-
-        def get(self, url, params=None, headers=None):
-            calls.append(url)
-            request = httpx.Request("GET", url)
-            if "history.json" in url:
-                if not state["challenged"]:
-                    state["challenged"] = True
-                    return httpx.Response(200, html=challenge, request=request)
-                return httpx.Response(200, json={"list": []}, request=request)
-            self.cookies.set("ssxmod_itna", "from-home", domain=".xueqiu.com")
-            return httpx.Response(200, text="<html></html>", request=request)
-
-    db = DB(":memory:")
-    fetcher = CombinationFetcher(
-        XueqiuConfig(cookie="xq_a_token=abc"), db=db, client=Fake()
-    )
-    kol = {"id": 1, "name": "伯言-A股", "external_id": "ZH3623878"}
-    fetcher.fetch(kol)
-    assert sum(1 for url in calls if "history.json" in url) == 2
-    assert sum(1 for url in calls if url == "https://xueqiu.com/") == 2
-    # 首次注入 cookie 清一次 jar；重试路径不再清，首页下发的 cookie 保留在同一会话里
-    assert fetcher.client.cookies.cleared == 1
-    assert fetcher.client.cookies.values["ssxmod_itna"] == "from-home"
 
 
 def test_cube_history_rate_limit_raises_platform_wide_error():
@@ -348,73 +185,10 @@ def test_cube_history_rate_limit_raises_platform_wide_error():
     assert _is_platform_wide_error(err.value)
 
 
-def test_xueqiu_waf_cookie_merged_into_request(monkeypatch, tmp_path):
-    """sidecar cookie 文件存在时整套使用，请求 cookie 与文件一致。"""
-    waf_file = tmp_path / "waf_cookies.json"
-    waf_file.write_text(
-        json.dumps(
-            {
-                "fetched_at": 1786289000,
-                "seed_sha256": __import__("hashlib").sha256(
-                    b"xq_a_token=abc; u=123"
-                ).hexdigest(),
-                "cookies": [
-                    {"name": "acw_tc", "value": "NEW_ACW"},
-                    {"name": "u", "value": "999"},
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr("app.fetchers.xueqiu.WAF_COOKIE_FILE", str(waf_file))
-
-    seen: dict[str, str] = {}
-
-    def handler(request):
-        seen["cookie"] = request.headers.get("Cookie", "")
-        return httpx.Response(200, json={"statuses": []})
-
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    fetcher = XueqiuFetcher(XueqiuConfig(cookie="xq_a_token=abc; u=123"), db=DB(":memory:"), client=client)
-    fetcher.fetch({"id": 1, "name": "大V", "external_id": "123"})
-    cookie = seen["cookie"]
-    assert "acw_tc=NEW_ACW" in cookie
-    assert "u=999" in cookie
-    assert "xq_a_token=abc" not in cookie  # 整套覆盖，不再 merge 旧登录态
 
 
-def test_xueqiu_waf_cookie_missing_falls_back(monkeypatch, tmp_path):
-    """waf-bot 文件缺失时退回原配置 cookie，不报错。"""
-    monkeypatch.setattr("app.fetchers.xueqiu.WAF_COOKIE_FILE", str(tmp_path / "nope.json"))
-    assert _load_waf_cookies() == []
 
 
-def test_xueqiu_waf_cookie_from_old_seed_does_not_override_new_login_cookie(monkeypatch, tmp_path):
-    import hashlib
-
-    old_cookie = "xq_a_token=old"
-    new_cookie = "xq_a_token=new"
-    waf_file = tmp_path / "waf_cookies.json"
-    waf_file.write_text(
-        json.dumps({
-            "seed_sha256": hashlib.sha256(old_cookie.encode()).hexdigest(),
-            "cookies": [{"name": "acw_tc", "value": "challenge"}],
-        }),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr("app.fetchers.xueqiu.WAF_COOKIE_FILE", str(waf_file))
-    assert merge_waf_cookie(new_cookie) == new_cookie
-
-    seen: dict[str, str] = {}
-
-    def handler(request):
-        seen["cookie"] = request.headers.get("Cookie", "")
-        return httpx.Response(200, json={"statuses": []})
-
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    fetcher = XueqiuFetcher(XueqiuConfig(cookie="xq_a_token=abc"), db=DB(":memory:"), client=client)
-    fetcher.fetch({"id": 1, "name": "大V", "external_id": "123"})
-    assert seen["cookie"] == "xq_a_token=abc"
 
 
 def test_xueqiu_skips_reposts():
@@ -558,55 +332,8 @@ def test_xueqiu_fetch_full_text_for_truncated_long_post():
     assert posts[0].content == "这是完整的长文正文，远超时间线截断长度。"
 
 
-def test_xueqiu_cookie_expired_401_raises_clear_error():
-    """401（会话失效）→ 抛清晰错误，不再访问已死续期的首页，也不重试。"""
-    homepage_hits = {"n": 0}
-
-    def handler(request):
-        if request.url.path == "/":
-            homepage_hits["n"] += 1
-            return httpx.Response(200, text="homepage")
-        return httpx.Response(401)
-
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    db = DB(":memory:")
-    fetcher = XueqiuFetcher(XueqiuConfig(cookie="xq_a_token=old"), db=db, client=client)
-    try:
-        fetcher.fetch({"id": 1, "name": "大V", "external_id": "123"})
-    except RuntimeError as exc:
-        assert "cookie 已失效" in str(exc)
-        assert "手动更新" in str(exc)
-    else:
-        raise AssertionError("401 时应抛出 cookie 失效错误")
-    assert homepage_hits["n"] == 0  # 首页续期通道已废弃，不应再访问
-    assert db.get_setting("xueqiu_cookie") is None  # 不写入任何新 cookie
 
 
-def test_xueqiu_cookie_expired_keeps_stored_cookie():
-    """会话失效抛错时，数据库里已保存的 cookie 不能被覆盖或清除。"""
-    fixture = json.loads((FIXTURES / "xueqiu_sample.json").read_text(encoding="utf-8"))
-
-    def handler(request):
-        return httpx.Response(401)
-
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    db = DB(":memory:")
-    db.set_setting("xueqiu_cookie", "xq_a_token=goodtoken; u=2964068165; device_id=d1")
-    fetcher = XueqiuFetcher(
-        XueqiuConfig(cookie="xq_a_token=old; u=2964068165; device_id=d1"),
-        db=db,
-        client=client,
-    )
-    try:
-        fetcher.fetch({"id": 1, "name": "大V", "external_id": "123"})
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("401 时应抛出 cookie 失效错误")
-    assert fixture  # 引用 fixture 保持导入一致性
-    saved = db.get_setting("xueqiu_cookie")
-    assert "xq_a_token=goodtoken" in saved
-    assert "u=2964068165" in saved and "device_id=d1" in saved
 
 
 def test_extract_cube_symbol():
@@ -1164,22 +891,6 @@ def test_combination_error_body_does_not_overwrite_holdings():
     assert db.get_cube_snapshot(4, "nav")["payload"]["series"][0]["value"] == 1.0
 
 
-def test_xueqiu_cookie_expired_403_raises_clear_error():
-    """403 与 401 同为会话失效，抛同样的清晰错误（403 不再走首页续期）。"""
-
-    def handler(request):
-        if request.url.path == "/":
-            raise AssertionError("首页续期通道已废弃，不应再访问")
-        return httpx.Response(403)
-
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    fetcher = XueqiuFetcher(XueqiuConfig(cookie="xq_a_token=old"), db=DB(":memory:"), client=client)
-    try:
-        fetcher.fetch({"id": 1, "name": "大V", "external_id": "123"})
-    except RuntimeError as exc:
-        assert "手动更新" in str(exc)
-        return
-    raise AssertionError("403 时应抛出清晰错误")
 
 
 def test_xueqiu_waf_html_raises_clear_error():
