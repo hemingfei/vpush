@@ -130,6 +130,7 @@ X_DIRECT_ALERT_INTERVAL = 6 * 3600
 SOURCE_OK_KEY = "source_ok_{platform}"
 SOURCE_ERR_KEY = "source_err_{platform}"
 SOURCE_FAILS_KEY = "source_fails_{platform}"
+SOURCE_SKIP_KEY = "source_skip_until_{platform}"
 XUEQIU_PROBE_ALERT_KEY = "xueqiu_probe_alert_at"
 COOKIE_KEEPALIVE_ALERT_KEY = "cookie_keepalive_alert_at"
 WEIBO_COOKIE_TIME_KEY = "weibo_cookie_updated_at"
@@ -207,6 +208,7 @@ NORMAL_IDLE_CAP_SECONDS = 900
 PRIORITY_IDLE_CAP_SECONDS = 180
 X_FALLBACK_CAP_SECONDS = 1800
 X_RATE_LIMIT_BACKOFF_SECONDS = 900  # X 429 窗口约 15 分钟，30s 起跳会在窗内反复撞限
+XUEQIU_RATE_LIMIT_BACKOFF_SECONDS = 1800  # 雪球 110017 窗口更长，且撞限会重置窗口
 COMBINATION_BASE_SECONDS = 30
 COMBINATION_IDLE_CAP_SECONDS = 120
 SECONDARY_BASE_SECONDS = 900
@@ -231,7 +233,7 @@ def _is_platform_wide_error(exc: BaseException) -> bool:
     if isinstance(exc, ProxyUnavailable):
         return True
     text = str(exc)
-    if any(token in text for token in ("cookie", "WAF", "反爬", "登录")):
+    if any(token in text for token in ("cookie", "WAF", "反爬", "登录", "限流")):
         return True
     if "HTTP 429" in text and ("X GraphQL" in text or "X typeahead" in text):
         return True
@@ -869,13 +871,99 @@ def maybe_alert_source_recovered(
     )
 
 
-def maybe_alert_source_health(db: DB, notifiers: list[Notifier]) -> None:
-    """平台级健康阈值告警：24h 成功率过低、或长时间无成功抓取（整体静默）。
+def _unix(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
-    与 maybe_alert_source_failure（单 KOL 连续失败）互补——那个管单点失败，
-    这里管「平台整体变差但每轮恰有 1 个大V成功」的温水煮蛙场景：
-    降频后每轮 KOL 少，成功率口径可能仍高，但若长时间整体没成功就该人工介入。
-    每 6 小时最多一条（SOURCE_ALERT_INTERVAL），多平台问题合并推送。
+
+def health_grace_seconds(db: DB) -> int:
+    """到点后再给一个全局轮询周期，覆盖「该抓了、还在等下一轮调度」。"""
+    return max(_unix(db.get_setting("config_interval_seconds")), 60)
+
+
+def kol_fetch_state(
+    kol: dict, now: int, grace: int, platform_skip_until: int = 0
+) -> str:
+    """ok | never | fail | down | overdue。只该传入启用且有订阅的大V。"""
+    if not str(kol.get("last_fetch_at") or ""):
+        return "never"
+    if kol.get("last_fetch_error"):
+        streak = _unix(kol.get("fetch_fail_streak"))
+        return "down" if streak >= SOURCE_FAIL_THRESHOLD else "fail"
+    if platform_skip_until and now < platform_skip_until:
+        return "ok"
+    next_at = _unix(kol.get("next_fetch_at"))
+    if next_at and now > next_at + grace:
+        return "overdue"
+    return "ok"
+
+
+def platform_fetch_health(
+    tracked: list[dict], now: int, grace: int, platform_skip_until: int = 0
+) -> dict:
+    """平台灯取最差的那个该抓大V。混着正常的「还没跑过」不把整行打成未开始。"""
+    empty = {
+        "health": "idle",
+        "ok": False,
+        "fail_kols": 0,
+        "overdue_kols": 0,
+        "never_kols": 0,
+        "tracked": 0,
+        "streak": 0,
+        "last_error": "",
+        "last_ok_at": "",
+    }
+    if not tracked:
+        return empty
+    states = [
+        (kol_fetch_state(kol, now, grace, platform_skip_until), kol) for kol in tracked
+    ]
+    kinds = {state for state, _kol in states}
+    if "down" in kinds:
+        health = "down"
+    elif "fail" in kinds:
+        health = "fail"
+    elif "overdue" in kinds:
+        health = "overdue"
+    elif kinds == {"never"}:
+        health = "never"
+    else:
+        health = "ok"
+    failing = [kol for state, kol in states if state in ("fail", "down")]
+    failing.sort(key=lambda kol: _unix(kol.get("fetch_fail_streak")), reverse=True)
+    last_error = ""
+    streak = 0
+    if failing:
+        kol = failing[0]
+        streak = _unix(kol.get("fetch_fail_streak"))
+        err = kol.get("last_fetch_error") or ""
+        name = kol.get("name") or ""
+        last_error = f"{name}：{err}" if name else err
+    last_ok = 0
+    for kol in tracked:
+        if kol.get("last_fetch_error") or not kol.get("last_fetch_at"):
+            continue
+        last_ok = max(last_ok, _unix(kol.get("last_fetch_at")))
+    return {
+        "health": health,
+        "ok": health == "ok",
+        "fail_kols": len(failing),
+        "overdue_kols": sum(1 for state, _kol in states if state == "overdue"),
+        "never_kols": sum(1 for state, _kol in states if state == "never"),
+        "tracked": len(tracked),
+        "streak": streak,
+        "last_error": last_error[:300],
+        "last_ok_at": str(last_ok) if last_ok else "",
+    }
+
+
+def maybe_alert_source_health(db: DB, notifiers: list[Notifier]) -> None:
+    """平台级健康告警：24h 成功率过低，或该抓的大V已连续数小时没有成功抓取。
+
+    只看启用且有订阅的大V。静默用它们自己的 last_fetch_*，不用 source_ok
+    （本轮没抽到的失败会把那个时间戳刷新）。每 6 小时最多一条。
     """
     if not _alerts_enabled():
         return
@@ -887,12 +975,17 @@ def maybe_alert_source_health(db: DB, notifiers: list[Notifier]) -> None:
                 return
         except (TypeError, ValueError):
             pass
+    subscribed = db.kol_ids_with_subscribers()
+    grouped: dict[str, list[dict]] = {}
+    for kol in db.list_kols():
+        if kol["enabled"] and kol["id"] in subscribed:
+            grouped.setdefault(kol["platform"], []).append(kol)
     issues = []
     for platform in sorted(ALLOWED_PLATFORMS):
-        if not any(k["enabled"] for k in db.list_kols(platform=platform)):
-            continue  # 无启用大V的平台不评估
+        tracked = grouped.get(platform) or []
+        if not tracked:
+            continue
         label = PLATFORM_LABELS.get(platform, platform)
-        # 1) 24h 成功率过低（尝试次数足够多才评估，避免偶发误报）
         ev = db.source_event_stats(platform, 24)
         total = ev["ok"] + ev["fail"]
         if total >= SOURCE_HEALTH_MIN_ATTEMPTS:
@@ -901,15 +994,18 @@ def maybe_alert_source_health(db: DB, notifiers: list[Notifier]) -> None:
                 issues.append(
                     f"{label}：24h 成功率 {rate:.0f}%（成功 {ev['ok']}/失败 {ev['fail']}）"
                 )
-        # 2) 长时间无成功抓取（整体静默，如平台全挂但退避未触发单点告警）
-        ok_at = db.get_setting(f"source_ok_{platform}")
-        if ok_at:
-            try:
-                silent_hours = (now - int(ok_at)) / 3600
-            except (TypeError, ValueError):
-                silent_hours = 0
-            if silent_hours >= SOURCE_HEALTH_SILENT_HOURS:
-                issues.append(f"{label}：已 {silent_hours:.0f} 小时无成功抓取")
+        success_at = 0
+        fetched_at = 0
+        for kol in tracked:
+            at = _unix(kol.get("last_fetch_at"))
+            if not at:
+                continue
+            fetched_at = max(fetched_at, at)
+            if not (kol.get("last_fetch_error") or ""):
+                success_at = max(success_at, at)
+        anchor = success_at or fetched_at
+        if anchor and (now - anchor) / 3600 >= SOURCE_HEALTH_SILENT_HOURS:
+            issues.append(f"{label}：已 {(now - anchor) / 3600:.0f} 小时无成功抓取")
     if not issues:
         return
     db.set_setting(SOURCE_HEALTH_ALERT_KEY, str(now))
@@ -1226,8 +1322,22 @@ def poll_once(
             db.set_setting(SOURCE_FAILS_KEY.format(platform=platform), "0")
             # 整轮无失败才清掉重试倒计时；有失败保留，避免并发顺序导致状态抖动
             db.set_setting(f"source_next_retry_at_{platform}", "")
+    for platform, state in states.items():
+        if state.skip_until <= time.monotonic():
+            db.set_setting(SOURCE_SKIP_KEY.format(platform=platform), "")
     logger.info("轮询完成：%d 个大V，耗时 %.0fms", len(jobs), (time.monotonic() - now) * 1000)
     maybe_alert_x_fallback(db, notifiers)
+
+
+def _remember_kol_fetch(db: DB, kol_id: int, *, error: str, streak: int, delay: float) -> None:
+    now = int(time.time())
+    db.record_kol_fetch(
+        kol_id,
+        at=now,
+        error=error,
+        streak=streak,
+        next_at=now + max(int(delay), 0),
+    )
 
 
 def _fetch_kol_once(
@@ -1279,8 +1389,16 @@ def _fetch_kol_once(
         with state_lock:
             state.fail_count += 1
             delay = min(30 * (2 ** (state.fail_count - 1)), 600)
-            if _is_platform_wide_error(exc) and "HTTP 429" in str(exc):
-                delay = max(delay, X_RATE_LIMIT_BACKOFF_SECONDS)
+            limit_text = str(exc)
+            if _is_platform_wide_error(exc) and (
+                "HTTP 429" in limit_text or "限流" in limit_text
+            ):
+                limit_backoff = (
+                    XUEQIU_RATE_LIMIT_BACKOFF_SECONDS
+                    if "限流" in limit_text
+                    else X_RATE_LIMIT_BACKOFF_SECONDS
+                )
+                delay = max(delay, limit_backoff)
             until = time.monotonic() + delay
             state.kol_skip_until[kol["id"]] = until
             if _is_platform_wide_error(exc):
@@ -1334,8 +1452,12 @@ def _fetch_kol_once(
             kw in str(exc) for kw in ("cookie", "WAF", "反爬")
         ):
             maybe_warn_xueqiu_cookie(db, notifiers, str(exc))
-        # 数据源健康最终状态由 poll_once 依据 round_stats 聚合后一次性写入，
-        # 避免并发 worker 互相清空同平台的成功/失败状态
+        _remember_kol_fetch(db, kol["id"], error=str(exc), streak=kol_fail, delay=delay)
+        if _is_platform_wide_error(exc):
+            db.set_setting(
+                SOURCE_SKIP_KEY.format(platform=kol["platform"]),
+                str(int(time.time() + delay)),
+            )
         return
     note_fetch_proxy(fetcher, True)
     recovered = False
@@ -1356,6 +1478,7 @@ def _fetch_kol_once(
                 kol["platform"], {"ok": 0, "fail": 0, "err": "", "kol": ""}
             )
             st["ok"] += 1
+    _remember_kol_fetch(db, kol["id"], error="", streak=0, delay=effective)
     if recovered:
         maybe_alert_source_recovered(db, notifiers, kol["platform"], kol["name"])
     # 按发布时间升序推送，避免各平台返回顺序（置顶等）导致乱序
@@ -1777,13 +1900,15 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
 
     from .fetchers.xueqiu import (
         XUEQIU_COOKIE_KEY,
-        XUEQIU_TIMELINE_URL,
         apply_xueqiu_cookie,
         normalize_xueqiu_id,
+        resolve_xueqiu_identity,
         xueqiu_session_dead,
     )
 
-    cookie = db.get_setting(XUEQIU_COOKIE_KEY) or source_config.cookie
+    cookie, ua, timeline_url, _ = resolve_xueqiu_identity(db, source_config.cookie)
+    if not cookie and not ua:
+        return  # 两条身份路径都拿不到凭据
     target = next((k for k in db.list_kols(platform="xueqiu") if k["enabled"]), None)
     if target is None:
         return  # 没有启用的雪球大V，无从探测
@@ -1807,9 +1932,11 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
         },
     )
     apply_xueqiu_cookie(client, cookie)
+    if ua:
+        client.headers["User-Agent"] = ua  # App 身份与 UA 成对
     try:
         resp = client.get(
-            XUEQIU_TIMELINE_URL,
+            timeline_url,
             params={"user_id": xueqiu_uid, "page": 1, "count": 1},
         )
         if xueqiu_session_dead(resp):
@@ -1846,35 +1973,53 @@ def _alert_cookie_keepalive(db: DB, notifiers: list[Notifier], label: str, detai
     if last and now - int(last) < SOURCE_ALERT_INTERVAL:
         return
     db.set_setting(COOKIE_KEEPALIVE_ALERT_KEY, str(now))
-    message = (
-        f"⚠️ {label} cookie 保活失败：会话可能已过期或登录态被清除。"
-        f"请到后台「数据源 → Cookie 管理」更新 {label} Cookie。"
-        f"{'微博可扫码续期。' if label == '微博' else ''}"
-        + (f" 详情：{detail[:120]}" if detail else "")
-    )
+    if label == "微博":
+        # 区分两种失效：App 身份续期本身失效（需重新提取凭证）vs 普通 cookie 失效
+        app_err_at = db.get_setting("weibo_app_cred_last_error_at") or ""
+        if app_err_at:
+            app_err = (db.get_setting("weibo_app_cred_last_error") or "")[:120]
+            message = (
+                "⚠️ 微博 App 身份续期失效 —— 需要重新提取 App 凭证。"
+                "vpush 已无法用 gsid/s 自动换取 cookie（本次已回退密码登录/扫码路径）。"
+                "处理方式：在真机重新提取 gsid/aid/s（含 device 参数），写入 settings.weibo_app_cred。"
+                + (f" 最近错误：{app_err}" if app_err else "")
+                + (f" 详情：{detail[:120]}" if detail else "")
+            )
+        else:
+            message = (
+                f"⚠️ {label} cookie 保活失败：会话可能已过期或登录态被清除。"
+                f"请到后台「数据源 → Cookie 管理」更新 {label} Cookie。微博可扫码续期。"
+                + (f" 详情：{detail[:120]}" if detail else "")
+            )
+    else:
+        message = (
+            f"⚠️ {label} cookie 保活失败：会话可能已过期或登录态被清除。"
+            f"请到后台「数据源 → Cookie 管理」更新 {label} Cookie。"
+            + (f" 详情：{detail[:120]}" if detail else "")
+        )
     _send_admin_text(notifiers, message, "cookie 保活告警")
 
 
 def keepalive_xueqiu_cookie(
     db: DB, notifiers: list[Notifier], source_config, client=None
 ) -> None:
-    """定时探测雪球 cookie 是否仍有效，失效时告警（与抓取同路径）。
+    """定时探测雪球抓取身份是否仍有效，失效时告警（与抓取同路径）。
 
-    请求 timeline JSON：有效 cookie 返回 200，失效返回 400。无法自动续期，需手动更新。
+    App 隐式账号下会换新设备指纹重注册，网页 cookie 则无法自动续期，需手动更新。
     """
     from .fetchers.xueqiu import (
         XUEQIU_COOKIE_KEY,
         XUEQIU_COOKIE_TIME_KEY,
-        XUEQIU_TIMELINE_URL,
         apply_xueqiu_cookie,
         merge_cookie_strings,
         normalize_xueqiu_id,
+        resolve_xueqiu_identity,
         xueqiu_session_dead,
     )
 
-    cookie = db.get_setting(XUEQIU_COOKIE_KEY) or source_config.cookie
-    if not cookie:
-        return
+    cookie, ua, timeline_url, _ = resolve_xueqiu_identity(db, source_config.cookie)
+    if not cookie and not ua:
+        return  # 两条身份路径都拿不到凭据
     # 没有启用的雪球大V则无从探测（与 probe_xueqiu 一致）
     target = next((k for k in db.list_kols(platform="xueqiu") if k["enabled"]), None)
     if target is None:
@@ -1904,9 +2049,11 @@ def keepalive_xueqiu_cookie(
             },
         )
     apply_xueqiu_cookie(client, cookie)
+    if ua:
+        client.headers["User-Agent"] = ua  # App 身份与 UA 成对
     try:
         resp = client.get(
-            XUEQIU_TIMELINE_URL,
+            timeline_url,
             params={"user_id": xueqiu_uid, "page": 1, "count": 1},
         )
         if xueqiu_session_dead(resp):
@@ -1978,8 +2125,17 @@ def keepalive_weibo_cookie(db: DB, notifiers: list[Notifier], weibo_config, clie
                 db.set_setting(WEIBO_COOKIE_TIME_KEY, str(int(time.time())))
                 db.set_setting(SOURCE_ERR_KEY.format(platform="weibo"), "")
             return
-        # 会话已失效：有账号密码则自动登录续期，否则告警
+        # 会话已失效：优先用 App 身份续期（无风控、全自动、无需人工扫码）
         db.set_setting(SOURCE_ERR_KEY.format(platform="weibo"), "保活：会话已失效")
+        try:
+            if WeiboFetcher(weibo_config, db, client=client)._refresh_via_app():
+                db.set_setting(WEIBO_COOKIE_TIME_KEY, str(int(time.time())))
+                db.set_setting(SOURCE_ERR_KEY.format(platform="weibo"), "")
+                logger.info("微博 cookie 保活：已通过 App 身份自动续期（无需密码/扫码）")
+                return
+        except Exception:  # noqa: BLE001
+            logger.exception("微博保活：App 身份续期异常，回退到密码登录")
+        # 回退：有账号密码则自动登录续期，否则发二维码
         if weibo_config.username and weibo_config.password:
             try:
                 fetcher = WeiboFetcher(weibo_config, db, client=client)
@@ -3677,13 +3833,7 @@ class Scheduler:
             logger.exception("未激活用户清理失败")
         # 研报结构化抽取（每小时一批，LLM 离线批处理；失败不影响主流程）
         extract_interval = int(self.db.get_setting("report_extract_interval_seconds") or 3600)
-        # 0.0 = 从未跑过：重启后首 tick 立即触发。不能写成 now_mono - 0.0 > interval——
-        # Linux monotonic 自开机起算，刚启动的容器/CI VM uptime 不足 interval 会卡住首轮
-        extract_due = (
-            self._last_report_extract == 0.0
-            or now_mono - self._last_report_extract > extract_interval
-        )
-        if extract_due and not self._report_extract_running:
+        if self._report_extract_due(now_mono, extract_interval) and not self._report_extract_running:
             # 大批次单轮可达 20-30 分钟：后台任务化，主循环的采集/推送不被阻塞
             self._last_report_extract = now_mono
             self._report_extract_running = True
@@ -4181,6 +4331,17 @@ class Scheduler:
         if done:
             db.set_setting(done_key, str(done_today + done))
         return done
+
+    def _report_extract_due(self, now_mono: float, interval: int) -> bool:
+        """研报提取是否到期：哨兵 0.0（本进程从未跑过）直接算到期。
+
+        不能只比 `now_mono - last > interval`：monotonic 是宿主开机计时，
+        宿主刚重启（uptime < interval）时会把首轮提取白等最多一小时。
+        """
+        return (
+            self._last_report_extract == 0.0
+            or now_mono - self._last_report_extract > interval
+        )
 
     def _run_report_extraction_task(self) -> int:
         """研报结构化抽取入口：与 IMA/CICC kick 共用，忙则跳过。"""

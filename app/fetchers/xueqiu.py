@@ -1,16 +1,14 @@
 """雪球用户原创动态抓取。"""
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import os
 import re
-import tempfile
 from pathlib import Path
 
 import httpx
 
+from .. import xq_identity
 from ..avatar_cache import cache_avatar
 from .base import (
     Fetcher,
@@ -25,68 +23,23 @@ logger = logging.getLogger(__name__)
 
 XUEQIU_COOKIE_KEY = "xueqiu_cookie"
 XUEQIU_COOKIE_TIME_KEY = "xueqiu_cookie_updated_at"
-XUEQIU_TIMELINE_URL = "https://xueqiu.com/statuses/user_timeline.json"
+# App 域名路径：不触发阿里云 WAF 挑战（xueqiu.com/statuses/* 会），须与 App UA + App token 成对
+XUEQIU_TIMELINE_URL = "https://api.xueqiu.com/v4/statuses/user_timeline.json"
 
-# waf-bot sidecar 刷新的共享 cookie 文件；未配置时不启用。
-WAF_COOKIE_FILE = os.environ.get("WAF_COOKIE_FILE", "/data/waf_cookies.json")
-XUEQIU_SEED_COOKIE_FILE = os.environ.get(
-    "XUEQIU_SEED_COOKIE_FILE", "/data/xueqiu_seed_cookie.txt"
-)
+# 网页 cookie 兜底通道已于 2026-09-23 随 waf-bot 一起下线：App 隐式账号是唯一身份来源。
+# 下线顺序是「先删兜底代码、再停容器」——否则容器停掉后 /data/waf_cookies.json 会冻结在
+# 最后一次成功值，cookie 失效后表现为静默失败，比没有兜底更危险。
+#
+# XUEQIU_COOKIE_KEY 保留：后台「Cookie 管理」与 kol_requests 的昵称解析仍在用，
+# 但不再参与抓取链路。
 
-
-def _cookie_sha256(cookie: str) -> str:
-    return hashlib.sha256((cookie or "").strip().encode()).hexdigest()
-
-
-def write_xueqiu_seed_cookie(cookie: str) -> None:
-    """Publish the latest admin cookie for the sidecar without exposing it in logs."""
-    destination = XUEQIU_SEED_COOKIE_FILE
-    parent = os.path.dirname(destination) or "."
-    fd, temp_path = tempfile.mkstemp(
-        prefix=".xueqiu_seed_cookie.", dir=parent, text=True
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as file:
-            file.write((cookie or "").strip())
-        os.replace(temp_path, destination)
-    except Exception:
-        try:
-            os.unlink(temp_path)
-        except OSError:
-            pass
-        raise
-
-
-def _load_waf_cookies() -> list[dict[str, str]]:
-    """读 sidecar 写入的 cookie 文件；缺失或损坏时返回空列表。"""
-    try:
-        with open(WAF_COOKIE_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return []
-    return [
-        c
-        for c in (data.get("cookies") or [])
-        if c.get("name") and c.get("value") is not None
-    ]
-
-
-def merge_waf_cookie(cookie: str) -> str:
-    """有 sidecar cookie 文件时整套使用，否则退回原登录串。"""
-    waf = _load_waf_cookies()
-    if not waf:
-        return cookie or ""
-    try:
-        with open(WAF_COOKIE_FILE, encoding="utf-8") as file:
-            metadata = json.load(file)
-    except Exception as exc:
-        if isinstance(exc, (OSError, ValueError)):
-            return cookie or ""
-        raise
-    if metadata.get("seed_sha256") != _cookie_sha256(cookie):
-        logger.warning("sidecar cookie 与当前登录 cookie 不一致，沿用原 cookie")
-        return cookie or ""
-    return "; ".join(f"{c['name']}={c['value']}" for c in waf)
+# 探测式轮询：先用 count=1 轻量探测（约 11.7KB），最新帖已入库则跳过本轮全量拉取（约 207KB）。
+# 判定不依赖本地水位，而是拿探测到的帖子 ID 回查 DB —— 天然免疫「水位写错导致静默漏帖」：
+# 帖子只要没真正入库，探测就一定判定为「有更新」，全量拉取照常发生。
+XUEQIU_PROBE_ENABLED = os.environ.get("XUEQIU_PROBE", "1") != "0"
+# 连续跳过的轮次上限：到点强制全量一次，兜住「探测接口返回陈旧数据」这类反常情况。
+XUEQIU_PROBE_FORCE_FULL_EVERY = max(1, int(os.environ.get("XUEQIU_PROBE_FORCE_FULL", "10")))
+_probe_skip_streak: dict[int, int] = {}  # kol_id -> 连续跳过次数；进程内即可，重启归零无害
 
 
 def apply_xueqiu_cookie(client: httpx.Client, cookie: str) -> None:
@@ -97,6 +50,29 @@ def apply_xueqiu_cookie(client: httpx.Client, cookie: str) -> None:
         name, separator, value = part.strip().partition("=")
         if separator and name:
             client.cookies.set(name, value, domain=".xueqiu.com", path="/")
+
+
+def resolve_xueqiu_identity(
+    db=None, cookie: str = ""
+) -> tuple[str, str, str, bool]:
+    """当前雪球身份 (cookie, ua, timeline_url, is_app)。
+
+    只有 App 隐式账号一条通道（api.xueqiu.com，不触发 WAF 挑战）。注册失败直接抛出，
+    由调度器按平台级退避重试 —— 不再静默退回网页 cookie：那条路径在本服务出口 IP 上
+    已被 400016/110017 拦截，且其数据源（waf-bot）已下线，留着只会制造「有兜底」的错觉。
+
+    db / cookie 参数保留仅为兼容既有调用签名，不再读取。
+    """
+    if not xq_identity.enabled():
+        raise RuntimeError(
+            "雪球 App 身份通道已被 XUEQIU_APP_IDENTITY=0 关闭，且网页 cookie 兜底已下线"
+        )
+    return (
+        xq_identity.identity()["cookie"],
+        xq_identity.APP_UA,
+        XUEQIU_TIMELINE_URL,
+        True,
+    )
 
 
 def normalize_xueqiu_id(external_id: str | None) -> str:
@@ -227,7 +203,10 @@ def _extract_images(status: dict) -> list[str]:
 
 
 def resolve_profile(external_id: str, cookie: str = "", db=None) -> dict:
-    """查询雪球用户昵称与头像（取最新一条动态里的 user 信息），失败返回空 dict。"""
+    """查询雪球用户昵称与头像（取最新一条动态里的 user 信息），失败返回空 dict。
+
+    与抓取同源：只走 App 隐式账号（api.xueqiu.com）。cookie 参数保留仅为兼容调用签名。
+    """
     uid = normalize_xueqiu_id(external_id)
     try:
         from ..proxy import ProxyUnavailable, acquire_client_proxy
@@ -236,23 +215,29 @@ def resolve_profile(external_id: str, cookie: str = "", db=None) -> dict:
             proxy, _pid = acquire_client_proxy(db, "xueqiu")
         except ProxyUnavailable:
             return {}
+        if not xq_identity.enabled():
+            return {}
+        # App token 必须与 App UA 成对，与网页 cookie 混用必被拒（10022/400016）
+        identity_cookie = xq_identity.identity()["cookie"]
+        ua = xq_identity.APP_UA
+        url = XUEQIU_TIMELINE_URL
         client = httpx.Client(
             timeout=15,
             follow_redirects=True,
             proxy=proxy,
             headers={
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+                "User-Agent": ua,
                 "Accept": "application/json, text/plain, */*",
                 "X-Requested-With": "XMLHttpRequest",
                 "Referer": f"https://xueqiu.com/u/{uid}",
             },
         )
-        apply_xueqiu_cookie(client, cookie)
-    except Exception:  # noqa: BLE001 - 非 ASCII ID（误填昵称）构造请求头失败时回退空结果，不阻断审批
+        apply_xueqiu_cookie(client, identity_cookie)
+    except Exception:  # noqa: BLE001 - 非 ASCII ID（误填昵称）/ 身份不可用时回退空结果，不阻断审批
         return {}
     try:
         resp = client.get(
-            XUEQIU_TIMELINE_URL,
+            url,
             params={"user_id": uid, "page": 1, "count": 1},
         )
         resp.raise_for_status()
@@ -278,14 +263,13 @@ class XueqiuFetcher(Fetcher):
         super().__init__(source_config)
         self.db = db
         headers = {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+            "User-Agent": xq_identity.APP_UA,
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Origin": "https://xueqiu.com",
             "X-Requested-With": "XMLHttpRequest",
             "Referer": "https://xueqiu.com/",
         }
-        cookie = getattr(self.source_config, "cookie", "") or ""
 
         def _make_client():
             from ..proxy import acquire_client_proxy, attach_proxy
@@ -294,11 +278,13 @@ class XueqiuFetcher(Fetcher):
             c = httpx.Client(
                 timeout=20, headers=headers, proxy=proxy, follow_redirects=True
             )
-            apply_xueqiu_cookie(c, cookie)
             attach_proxy(c, pid)
             return c
 
         self._http = ThreadLocalClient(_make_client, injected=client)
+        # 身份在 _apply_cookie 里逐次判定（唯一通道：App 隐式账号）
+        self._app_identity = False
+        self._timeline_url = XUEQIU_TIMELINE_URL
 
     @property
     def client(self):
@@ -309,21 +295,25 @@ class XueqiuFetcher(Fetcher):
         self._http.set(value)
 
     def _apply_cookie(self) -> None:
-        """应用与当前登录 seed 匹配的 sidecar cookie，否则使用 DB/配置。"""
-        cookie = self.db.get_setting(XUEQIU_COOKIE_KEY) or self.source_config.cookie
-        apply_xueqiu_cookie(self.client, merge_waf_cookie(cookie))
+        """应用当前身份：唯一通道是 App 隐式账号；注册失败直接抛出，由调度器退避。"""
+        cookie, ua, self._timeline_url, self._app_identity = resolve_xueqiu_identity(
+            self.db, self.source_config.cookie
+        )
+        self.client.headers["User-Agent"] = ua
+        apply_xueqiu_cookie(self.client, cookie)
 
     def _refresh_cookie(self) -> None:
-        """雪球 cookie 失效时无法自动续期，直接抛错进入退避告警链路。"""
-        raise RuntimeError(
-            "雪球 cookie 已失效（接口返回 401/403），"
-            "请到后台「数据源 → Cookie 管理」手动更新后重试"
-        )
+        """身份失效后自动续期：换新设备指纹重新注册隐式账号。"""
+        try:
+            xq_identity.rotate_identity()
+        except Exception as exc:  # noqa: BLE001 - 节流/注册失败时把错误交给调用方退避
+            logger.warning("雪球 App 身份续期失败（%s）", exc)
+        self._apply_cookie()
 
     def fetch(self, kol: dict) -> list[Post]:
         self._apply_cookie()
-        # 使用用户时间线 JSON 接口
-        url = XUEQIU_TIMELINE_URL
+        # 用户时间线 JSON 接口：固定走 api.xueqiu.com（网页域已被 400016/110017 拦截）
+        url = self._timeline_url
         uid = normalize_xueqiu_id(kol["external_id"])
         self.client.headers.update(
             {
@@ -335,11 +325,13 @@ class XueqiuFetcher(Fetcher):
             }
         )
 
-        def get_page(page: int) -> dict:
-            resp = self.client.get(url, params={"user_id": uid, "page": page, "count": 20})
-            if resp.status_code in (401, 403):
-                # cookie 失效：续期不可用，进入退避告警链路
+        def get_page(page: int, count: int = 20) -> dict:
+            params = {"user_id": uid, "page": page, "count": count}
+            resp = self.client.get(url, params=params)
+            if xueqiu_session_dead(resp) or _is_waf_html(resp):
+                # 身份失效：续期一次后重打（只重试一次，仍失败就把错误交给调用方退避）
                 self._refresh_cookie()
+                resp = self.client.get(url, params=params)
             resp.raise_for_status()
             try:
                 return resp.json()
@@ -347,6 +339,26 @@ class XueqiuFetcher(Fetcher):
                 raise RuntimeError(
                     "雪球接口返回异常，请检查 xueqiu cookie 配置后重试"
                 ) from None
+
+        def probe_no_update() -> bool:
+            """count=1 轻量探测：最新帖已入库 → 本轮判定无新帖。
+
+            任何异常或不确定都返回 False（退回全量）—— 宁可多拉一次，不能漏帖。
+            """
+            if self.db is None:  # 无 DB 时无法佐证「已入库」，一律走全量
+                return False
+            try:
+                data = get_page(1, count=1)
+            except Exception as exc:  # noqa: BLE001 - 探测失败不阻断，退回全量
+                logger.debug("雪球探测失败，退回全量拉取: %s", exc)
+                return False
+            statuses = (data or {}).get("statuses") or []
+            newest_id = str((statuses[0] if statuses else {}).get("id") or "")
+            if not newest_id:
+                return False
+            return (self.platform, newest_id) in self.db.existing_post_keys(
+                [(self.platform, newest_id)]
+            )
 
         def build(statuses: list) -> list[Post]:
             posts = []
@@ -378,6 +390,20 @@ class XueqiuFetcher(Fetcher):
                     )
                 )
             return posts
+
+        # 探测式轮询：先用 count=1（约 11.7KB）判断有没有新帖，避免为「无更新」付出全量 207KB。
+        # 到上限后强制全量一次，防止探测长期返回陈旧数据而一直走不到全量路径。
+        if XUEQIU_PROBE_ENABLED:
+            streak = _probe_skip_streak.get(kol["id"], 0)
+            if streak >= XUEQIU_PROBE_FORCE_FULL_EVERY:
+                _probe_skip_streak[kol["id"]] = 0
+                logger.debug("雪球 KOL %s 已连续跳过 %d 轮，本轮强制全量校验", kol["id"], streak)
+            elif probe_no_update():
+                _probe_skip_streak[kol["id"]] = streak + 1
+                logger.debug("雪球 KOL %s 无新帖（探测命中已入库帖），跳过全量", kol["id"])
+                return []
+            else:
+                _probe_skip_streak[kol["id"]] = 0
 
         first_statuses = (get_page(1) or {}).get("statuses") or []
         posts = build(first_statuses)

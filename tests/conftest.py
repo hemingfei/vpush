@@ -29,3 +29,20 @@ def cicc_archive(tmp_path):
     (ctrl / "commands").mkdir(parents=True)
     (ctrl / "results").mkdir(parents=True)
     return archive, ctrl
+
+
+@pytest.fixture(autouse=True)
+def _stub_xueqiu_app_identity(monkeypatch):
+    """雪球只有 App 隐式账号一条身份通道（网页 cookie 兜底已于 2026-09-23 下线）。
+
+    这里 stub 掉注册与轮换：既不向雪球发真实请求，又让所有用例走生产真实路径。
+    需要验证注册/续期失败分支的用例，自行覆盖 `xq_identity.identity`。
+    """
+    monkeypatch.setenv("XUEQIU_APP_IDENTITY", "1")
+    fake_identity = {
+        "cookie": "xq_a_token=app-token; u=2431759417",
+        "uid": 2431759417,
+        "device_id": "1ONEPLUS" + "0" * 32,
+    }
+    monkeypatch.setattr("app.xq_identity.identity", lambda: dict(fake_identity))
+    monkeypatch.setattr("app.xq_identity.rotate_identity", lambda: dict(fake_identity))

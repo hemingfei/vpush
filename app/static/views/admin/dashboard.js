@@ -295,6 +295,10 @@ export function createAdminDashboardView(dependencies) {
         </section>
         <section class="section-panel">
           <header class="section-head">
+            <div><h2 class="section-title">X 抓取通道</h2>
+            <p class="section-meta">${xChannelSummary(s.x_channels || {})}</p></div>
+          </header>
+          <header class="section-head">
             <div><h2 class="section-title">X Cookie</h2>
             <p class="section-meta">${cookieUpdatedLabel(tw)}${tw.preview ? ` · 预览 ${escapeHtml(tw.preview)}` : ""}。登录 x.com → F12 → Application → Cookies，复制整串（需含 auth_token 与 ct0），保存即时生效。</p></div>
           </header>
@@ -406,6 +410,36 @@ export function createAdminDashboardView(dependencies) {
     }
     switchStatsTab(statsTabFromHash());
     return true;
+  }
+
+  // X 抓取通道总览文案：模式 / 分流覆盖 / 429 冷却 / 凭证就位情况。
+  // 两条通道的凭证来源与续期方式不同，后台必须分得清，否则排查会指错方向。
+  function xChannelSummary(ch) {
+    if (!ch || !ch.mode) return "正在加载通道状态…";
+    const split = ch.split || {};
+    const cs = ch.channels || {};
+    const cool = [];
+    if (cs.app?.cooling) {
+      cool.push(`App 通道 429 冷却 ${Math.round((cs.app.cooling_left_seconds || 0) / 60)} 分钟`);
+    }
+    if (cs.cookie?.cooling) {
+      cool.push(`Cookie 通道 429 冷却 ${Math.round((cs.cookie.cooling_left_seconds || 0) / 60)} 分钟`);
+    }
+    let mode;
+    if (ch.mode === "split") {
+      mode = `双通道分流 —— App ${split.app || 0} 个 / Cookie ${split.cookie || 0} 个`
+        + "（两侧配额在服务端独立计数，容量约翻倍）";
+    } else if (ch.mode === "app_only") {
+      mode = `仅 App 通道 —— 全部 ${ch.kol_total || 0} 个大V（Cookie 未配置）`;
+    } else {
+      mode = `仅 Cookie 通道 —— 全部 ${ch.kol_total || 0} 个大V（App 凭证未配置）`;
+    }
+    const creds = [];
+    if (ch.app_ready) creds.push(`App 凭证已配置（${ch.app_token_len || 0} 字符）`);
+    if (ch.cookie_ready) creds.push(`Cookie 已配置（${ch.cookie_len || 0} 字符）`);
+    const coolTail = cool.length ? `　·　${cool.join("；")}` : "";
+    const credTail = creds.length ? `　·　${creds.join("　·　")}` : "";
+    return `${mode}${coolTail}${credTail}`;
   }
 
   function imgbedSettingsHtml(info) {
@@ -529,6 +563,7 @@ export function createAdminDashboardView(dependencies) {
     const cutoff = (nowMs || Date.now()) - STALE_KOL_HOURS * 3600 * 1000;
     const live = (rows || []).filter((k) => k.enabled && (k.subscriber_count == null || Number(k.subscriber_count) > 0));
     const stale = live.filter((k) => {
+      if (k.fetch_state && k.fetch_state !== "ok") return false;
       if (!k.last_post_at) return true;
       const ts = parseDbUtcMs(k.last_post_at);
       return ts == null || ts < cutoff;
@@ -572,17 +607,26 @@ export function createAdminDashboardView(dependencies) {
 
   function sourceStatusCell(src, cookieItems) {
     const note = sourceStatusNote(src);
-    if (src.ok) return `<td class="status-ok" data-label="状态">正常${note}</td>`;
+    const health = src.health || "";
+    if (health === "ok" || (!health && src.ok)) {
+      return `<td class="status-ok" data-label="状态">正常${note}</td>`;
+    }
     if (sourceCredentialGap(src, cookieItems)) {
       return `<td class="dash-status-cred" data-label="状态">凭据缺失${note}</td>`;
     }
-    if (sourceNeverStarted(src)) {
+    if (health === "idle") {
+      return `<td class="muted" data-label="状态">未启用${note}</td>`;
+    }
+    if (health === "never" || sourceNeverStarted(src)) {
       return `<td class="muted" data-label="状态">未开始${note}</td>`;
     }
-    if (src.consecutive_fails >= 3) {
+    if (health === "down" || src.consecutive_fails >= 3) {
       return `<td class="status-fail" data-label="状态">持续失败${note}</td>`;
     }
-    return `<td class="status-warn" data-label="状态">暂无成功${note}</td>`;
+    if (health === "overdue") {
+      return `<td class="status-warn" data-label="状态">逾期${note}</td>`;
+    }
+    return `<td class="status-warn" data-label="状态">失败${note}</td>`;
   }
 
   function sourceRowsHtml(sources, cookieItems) {
@@ -613,7 +657,10 @@ export function createAdminDashboardView(dependencies) {
     if (sourceCredentialGap(src, cookieItems)) {
       return `<td class="dash-source-cause" data-label="最近错误"><button type="button" class="linkish" onclick="go('admin/stats?tab=cookies')">去更新 Cookie</button></td>`;
     }
-    if (sourceNeverStarted(src)) {
+    if (src.health === "overdue") {
+      return `<td class="muted dash-source-cause" data-label="最近错误">到点未抓</td>`;
+    }
+    if (src.health === "never" || sourceNeverStarted(src)) {
       return `<td class="muted dash-source-cause ak-hide-mobile" data-label="最近错误">还没跑过</td>`;
     }
     return `<td class="muted dash-source-cause" data-label="最近错误">—</td>`;
@@ -687,10 +734,13 @@ export function createAdminDashboardView(dependencies) {
     let never = 0;
     let cred = 0;
     let failing = 0;
+    let overdue = 0;
     sources.forEach((src) => {
-      if (src.ok) return;
+      const health = src.health || (src.ok ? "ok" : "");
+      if (health === "ok" || health === "idle") return;
       if (sourceCredentialGap(src, cookies)) cred += 1;
-      else if (sourceNeverStarted(src)) never += 1;
+      else if (health === "never" || sourceNeverStarted(src)) never += 1;
+      else if (health === "overdue") overdue += 1;
       else failing += 1;
     });
     const staleAll = staleEnabledKolRows(s.kol_health).length;
@@ -698,6 +748,7 @@ export function createAdminDashboardView(dependencies) {
     const imgbedFailed = Number((s.imgbed || {}).failed_count) || 0;
     const bits = [];
     if (failing) bits.push(`<li class="is-fail">${failing} 条管线持续失败</li>`);
+    if (overdue) bits.push(`<li class="is-warn">${overdue} 条到点未抓</li>`);
     if (cred) bits.push(`<li class="is-warn">${cred} 条凭据缺失</li>`);
     if (never) bits.push(`<li class="is-idle">${never} 条尚未开始抓取</li>`);
     if (staleAll) bits.push(`<li class="is-fail">${staleAll} 个有订阅大V停更</li>`);

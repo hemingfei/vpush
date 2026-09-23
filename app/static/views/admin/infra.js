@@ -39,7 +39,7 @@ export function createAdminInfraView(dependencies) {
     const table = rows
       ? `<table id="ima-arm-groups"><thead><tr><th>知识库</th><th>下载</th><th>失败</th><th>结束</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table>`
       : `<p class="muted">还没有分库记录。</p>`;
-    box.innerHTML = `<p class="section-meta">最近采集 ${escapeHtml(when)} · 成功 ${data.groups || 0} 个库 · 下载 ${data.downloaded || 0} · 失败 ${data.failed || 0}</p>${err}${table}<p class="section-meta">下一轮 ${escapeHtml(next)}（每天 01:00）</p>`;
+    box.innerHTML = `<p class="section-meta">最近采集 ${escapeHtml(when)} · 成功 ${data.groups || 0} 个库 · 下载 ${data.downloaded || 0} · 失败 ${data.failed || 0}</p>${err}${table}<p class="section-meta">下一轮 ${escapeHtml(next)}（每天 01:00 / 09:00 / 17:00）</p>`;
   }
 
   async function loadStorageHealth() {

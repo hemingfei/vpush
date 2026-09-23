@@ -17,3 +17,4 @@ bleach==6.2.0
 # Windows 无系统 tz 数据库；app/market.py 的 zoneinfo 需要它（Linux 上无害）
 tzdata==2026.3
 zhconv==1.4.3
+gmssl==3.2.2  # 雪球 App 身份通道的国密原语（cryptography 不支持 SM2/SM3/SM4）

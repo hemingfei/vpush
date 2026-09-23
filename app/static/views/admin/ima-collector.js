@@ -102,7 +102,7 @@ export function createAdminImaCollectorView(dependencies) {
     const groupId = String(group?.id || "");
     const current = imaGroupIntervalSeconds(group);
     return `<span class="ima-interval-seg" data-group-id="${escapeHtml(groupId)}">${
-      [[3600, "1h"], [21600, "6h"], [86400, "24h"]].map(([sec, label]) =>
+      [[3600, "1h"], [21600, "6h"], [86400, "3次"]].map(([sec, label]) =>
         `<button type="button" id="ima-interval-${escapeHtml(groupId)}-${sec}" data-sec="${sec}" aria-pressed="${current === sec}" class="${current === sec ? "is-on" : ""}" onclick="setImaGroupInterval(event, this)">${label}</button>`
       ).join("")
     }</span>`;
@@ -145,7 +145,7 @@ export function createAdminImaCollectorView(dependencies) {
     if (title) title.textContent = group.name || String(group.id);
     if (interval) {
       const hours = Math.round(imaGroupIntervalSeconds(group) / 3600);
-      const note = hours >= 24 ? "每日 01:00 后自动同步（上海）" : `每 ${hours} 小时检查`;
+      const note = hours >= 24 ? "每日 01:00 / 09:00 / 17:00 自动同步（上海）" : `每 ${hours} 小时检查`;
       interval.innerHTML = `${imaIntervalSegHtml(group)}<span class="muted">${note}</span>`;
     }
   }

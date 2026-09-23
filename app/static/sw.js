@@ -1,8 +1,8 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-f0bae58fe4ac";
+const CACHE = "dav-shell-4b52f990620e";
 const SHELL = [
   "/",
-  "/app.c8daf14d3751.js",
+  "/app.d5135ad9d053.js",
   // asset-modules:start
   "/core/dialog.3b30511c3cfd.js",
   "/core/html.817ab2339b89.js",
@@ -11,9 +11,9 @@ const SHELL = [
   "/core/platforms.4ca4d56112a2.js",
   "/views/admin/cicc.0cd7529b8514.js",
   "/views/admin/codes.0448f2182b10.js",
-  "/views/admin/dashboard.fbd689320d76.js",
-  "/views/admin/ima-collector.4bdac32b43a8.js",
-  "/views/admin/infra.b6406ed30529.js",
+  "/views/admin/dashboard.96dc7fa6bee0.js",
+  "/views/admin/ima-collector.f5df4416f5ed.js",
+  "/views/admin/infra.71b1bf8b6bcb.js",
   "/views/admin/knowledge.42883ccab396.js",
   "/views/admin/kol.ec08925bc2fb.js",
   "/views/admin/news.87a48772f4f2.js",
@@ -28,7 +28,7 @@ const SHELL = [
   "/views/post-card-export.27dbd2f5c5fa.js",
   "/views/push-settings.c6dcb9dee07b.js",
   // asset-modules:end
-  "/style.2b78ee40cad7.css",
+  "/style.91f7571a5b6a.css",
   "/mx-views.8ae995d2c259.css",
   "/holdings.7270168e6a4f.css",
   "/mx-kol-holdings.a38a07eb5449.css",

@@ -294,9 +294,13 @@ def test_report_extract_due_immediately_after_start(tmp_path):
     # 隐含机器开机超过 interval——CI runner 是刚启动的 VM（uptime 可仅几百秒），必挂。
     # 新口径：due 判断不再依赖 uptime，0.0 恒 due（见 scheduler 主循环 extract_due）
     interval = int(db.get_setting("report_extract_interval_seconds") or 3600)
-    assert scheduler._last_report_extract == 0.0 or (
-        time.monotonic() - scheduler._last_report_extract > interval
-    )
+    # 哨兵语义：与宿主 uptime 无关。monotonic 是开机计时，CI/刚重启的宿主上
+    # 可能只有几百秒（< interval），旧写法会让首轮提取被推迟甚至判错。
+    assert scheduler._report_extract_due(0.5, interval) is True
+    assert scheduler._report_extract_due(time.monotonic(), interval) is True
+    # 刚跑过 → 未到期
+    scheduler._last_report_extract = time.monotonic()
+    assert scheduler._report_extract_due(time.monotonic(), interval) is False
 
 
 def test_report_extract_skips_when_lock_held(tmp_path):
@@ -732,7 +736,7 @@ def test_source_health_alert_low_success_rate():
     from app.scheduler import maybe_alert_source_health
 
     db = make_db()
-    db.add_kol("xueqiu", "A", "1")  # 默认 enabled
+    add_kol_subscribed(db, "xueqiu", "A", "1")
     # 24h 内 10 次尝试、3 次成功 → 成功率 30% < 70%
     for _ in range(3):
         db.add_source_event("xueqiu", "ok", "ok=1", ok_count=1)
@@ -757,10 +761,9 @@ def test_source_health_alert_silent_platform():
     )
 
     db = make_db()
-    db.add_kol("weibo", "A", "1")  # 默认 enabled
-    db.set_setting(
-        "source_ok_weibo", str(int(time.time()) - (SOURCE_HEALTH_SILENT_HOURS + 1) * 3600)
-    )
+    kid = add_kol_subscribed(db, "weibo", "A", "1")
+    old = int(time.time()) - (SOURCE_HEALTH_SILENT_HOURS + 1) * 3600
+    db.record_kol_fetch(kid, at=old, error="", streak=0, next_at=old)
     notifier = FakeNotifier()
     maybe_alert_source_health(db, [notifier])
     assert len(notifier.texts) == 1
@@ -773,16 +776,77 @@ def test_source_health_alert_skips_healthy_and_no_kol():
     from app.scheduler import maybe_alert_source_health
 
     db = make_db()
-    # xueqiu：有启用大V且健康（100% 成功率 + source_ok 新鲜）
-    db.add_kol("xueqiu", "A", "1")
+    kid = add_kol_subscribed(db, "xueqiu", "A", "1")
+    now = int(time.time())
+    db.record_kol_fetch(kid, at=now, error="", streak=0, next_at=now + 600)
     db.add_source_event("xueqiu", "ok", "ok=1", ok_count=10)
-    db.set_setting("source_ok_xueqiu", str(int(time.time())))
     # weibo：无启用大V（加一个后停用）
     db.add_kol("weibo", "B", "1")
     db.update_kol(db.list_kols()[1]["id"], enabled=False)
     notifier = FakeNotifier()
     maybe_alert_source_health(db, [notifier])
     assert notifier.texts == []
+
+
+def test_fetch_health_keeps_sibling_failure():
+    """同平台另一个大V后来成功，不能把还在失败的那个洗成正常。"""
+    from app.scheduler import kol_fetch_state, platform_fetch_health
+
+    now = 1_800_000_000
+    ok = {
+        "name": "OK",
+        "last_fetch_at": str(now),
+        "last_fetch_error": "",
+        "fetch_fail_streak": 0,
+        "next_fetch_at": str(now + 100),
+    }
+    bad = {
+        "name": "FAIL",
+        "last_fetch_at": str(now),
+        "last_fetch_error": "boom",
+        "fetch_fail_streak": 1,
+        "next_fetch_at": str(now + 30),
+    }
+    summary = platform_fetch_health([ok, bad], now, 60, 0)
+    assert summary["health"] == "fail"
+    assert summary["ok"] is False
+    assert "boom" in summary["last_error"]
+    paused = {
+        "last_fetch_at": str(now - 100),
+        "last_fetch_error": "",
+        "fetch_fail_streak": 0,
+        "next_fetch_at": str(now - 100),
+    }
+    assert kol_fetch_state(paused, now, 60, 0) == "overdue"
+    assert kol_fetch_state(paused, now, 60, now + 30) == "ok"
+
+
+def test_later_success_does_not_clear_other_kol_failure(monkeypatch):
+    monkeypatch.setattr("app.scheduler.random.uniform", lambda _a, _b: 0)
+    db = make_db()
+    ok_kid = add_kol_subscribed(db, "xueqiu", "OK", "1")
+    fail_kid = add_kol_subscribed(db, "xueqiu", "FAIL", "2")
+    states = {}
+    poll_once(
+        db,
+        {"xueqiu": SelectiveFetcher({fail_kid}, [make_post(ok_kid)])},
+        [],
+        states=states,
+        interval_seconds=180,
+    )
+    assert "boom" in (db.get_kol(fail_kid)["last_fetch_error"] or "")
+    states["xueqiu"].last_fetched[ok_kid] = time.monotonic() - 10_000
+    poll_once(
+        db,
+        {"xueqiu": FakeFetcher([make_post(ok_kid)])},
+        [],
+        states=states,
+        interval_seconds=180,
+    )
+    failed = db.get_kol(fail_kid)
+    assert "boom" in (failed["last_fetch_error"] or "")
+    assert int(failed["fetch_fail_streak"]) >= 1
+    assert db.get_kol(ok_kid)["last_fetch_error"] == ""
 
 
 def test_poll_once_fetches_platforms_concurrently(monkeypatch):
@@ -1308,6 +1372,18 @@ def test_twitter_429_platform_backoff_at_least_15_minutes(monkeypatch):
         poll_once(db, {"twitter": FakeFetcherError(err)}, [], states, interval_seconds=0)
         remaining = states["twitter"].skip_until - time.monotonic()
         assert remaining >= 890, err
+
+
+def test_xueqiu_rate_limit_platform_backoff_at_least_30_minutes(monkeypatch):
+    """雪球 110017 窗口更长且撞限会重置：要给整平台 30 分钟冷却，不能 30s 后接着撞。"""
+    monkeypatch.setattr("app.scheduler.random.uniform", lambda *_: 0)
+    db = make_db()
+    add_kol_subscribed(db, "xueqiu", "伯言-A股", "ZH3623878")
+    states = {"xueqiu": PlatformState()}
+    fetcher = FakeFetcherError("雪球限流 110017：ZH3623878 调仓接口，稍后重试")
+    poll_once(db, {"xueqiu": fetcher}, [], states, interval_seconds=0)
+    remaining = states["xueqiu"].skip_until - time.monotonic()
+    assert remaining >= 1790
 
 
 def test_generic_failures_do_not_auto_disable_at_alert_threshold(monkeypatch):
@@ -3767,11 +3843,7 @@ def test_xueqiu_cookie_keepalive():
 
     def handler(request):
         seen.append((request.url.host, request.headers.get("Cookie", "")))
-        if request.url.host == "xueqiu.com":
-            return httpx.Response(
-                302, headers={"location": str(request.url.copy_with(host="www.xueqiu.com"))}
-            )
-        # 保活探测 timeline JSON 接口：200 + 合法 JSON + 下发新 cookie
+        # 保活探测 timeline JSON 接口：200 + 合法 JSON（身份固定走 App 通道）
         return httpx.Response(
             200,
             json={"count": 1, "statuses": []},
@@ -3782,8 +3854,8 @@ def test_xueqiu_cookie_keepalive():
     keepalive_xueqiu_cookie(
         db, [notifier], SimpleNamespace(cookie=""), client=client
     )
-    assert seen == [("xueqiu.com", "xq_a_token=old; u=1"), ("www.xueqiu.com", "xq_a_token=old; u=1")]
-    assert db.get_setting("xueqiu_cookie") == "xq_a_token=new; u=1"
+    assert seen and seen[0][0] == "api.xueqiu.com"
+    assert seen[0][1].startswith("xq_a_token=")
     assert db.get_setting("xueqiu_cookie_updated_at")
     assert db.get_setting("source_ok_xueqiu")  # 保活成功刷新「正常」状态
     assert db.get_setting("source_err_xueqiu") in (None, "")
@@ -3887,15 +3959,12 @@ def test_probe_xueqiu_ok_timeline(monkeypatch):
 
     def handler(request):
         seen.append((request.url.host, request.headers.get("Cookie", "")))
-        if request.url.host == "xueqiu.com":
-            return httpx.Response(
-                302, headers={"location": str(request.url.copy_with(host="www.xueqiu.com"))}
-            )
         return httpx.Response(200, json={"statuses": []})
 
     _probe_client(monkeypatch, handler)
     probe_xueqiu(db, [notifier], SimpleNamespace(cookie=""))
-    assert seen == [("xueqiu.com", "xq_a_token=ok"), ("www.xueqiu.com", "xq_a_token=ok")]
+    assert seen and seen[0][0] == "api.xueqiu.com"
+    assert seen[0][1].startswith("xq_a_token=")
     assert db.get_setting("source_ok_xueqiu")
     assert db.get_setting("source_err_xueqiu") in (None, "")
     assert notifier.texts == []

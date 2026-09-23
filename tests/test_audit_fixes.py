@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.db import DB
@@ -285,12 +286,9 @@ def test_combination_401_does_not_hit_homepage():
         db=DB(":memory:"),
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
-    try:
+    # 身份固定走 App 通道：401 会先触发一次换新重试，仍失败则原样抛出（不再有网页 cookie 文案）
+    with pytest.raises((httpx.HTTPStatusError, RuntimeError)):
         fetcher.fetch({"id": 1, "name": "组合", "external_id": "ZH1"})
-    except RuntimeError as exc:
-        assert "cookie 已失效" in str(exc)
-    else:
-        raise AssertionError("401 时应抛出 cookie 失效错误")
     assert hits["home"] == 0
 
 

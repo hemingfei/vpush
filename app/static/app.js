@@ -54,7 +54,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.241";
+const APP_VERSION = "1.12.256";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -5158,11 +5158,28 @@ function cookieRepairItems(s) {
     items.push({ key: "wb-bad", label: "微博登录态失效，可扫码续期" });
   }
   const tw = s.twitter_cookie || {};
+  const twCh = src.twitter?.channels || {};
   const twReason = src.twitter?.direct_fallback_reason || src.twitter?.last_error || "";
-  if (hasTw && src.twitter?.direct_mode === "fallback" && /cookie|401|403|89|32|未配置|twitter/i.test(twReason)) {
-    items.push({ key: "x-bad", label: "X Cookie 可能失效" });
-  } else if (hasTw && !tw.set) {
-    items.push({ key: "x-missing", label: "X Cookie 未写入" });
+  // 双通道：错误消息带通道标识（X GraphQL(app) / X GraphQL(cookie)），据此分辨到底
+  // 是哪条通道失效后再提示——两条通道的凭证与续期方式完全不同，混在一起会指错方向。
+  //
+  // 判据只能用 HTTP 状态码与鉴权关键词：通道标识本身含 "app"/"cookie" 字样，
+  // 把它们当特征词会恒真（曾因此把 429 限流误报成「X Cookie 可能失效」）。
+  // 429（限流）也不提示：通道级失败转移 + 平台退避会自愈，提示只会让人误以为要换 Cookie。
+  const xCredBad =
+    /HTTP (401|403)|unauthorized|forbidden|could not authenticate|code (89|32)\b/i.test(twReason);
+  const xAppReady = !!(twCh.app_ready || twCh.mode === "app_only" || twCh.mode === "split");
+  if (hasTw && src.twitter?.direct_mode === "fallback" && xCredBad) {
+    if (/GraphQL\(app\)/i.test(twReason)) {
+      items.push({ key: "x-app-bad", label: "X App 通道凭证可能失效" });
+    } else if (/GraphQL\(cookie\)/i.test(twReason)) {
+      items.push({ key: "x-bad", label: "X Cookie 可能失效" });
+    } else {
+      items.push({ key: "x-bad", label: "X 抓取异常，检查凭证" });
+    }
+  }
+  if (hasTw && !tw.set && !xAppReady) {
+    items.push({ key: "x-missing", label: "X 凭证未写入" });
   }
   const hasZq = live.some((k) => k.platform === "zsxq");
   const zqCookie = s.zsxq_cookie || {};
