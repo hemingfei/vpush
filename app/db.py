@@ -1557,6 +1557,22 @@ class DB:
                 "UPDATE kols SET last_post_at = COALESCE(("
                 "SELECT MAX(fetched_at) FROM posts WHERE posts.kol_id = kols.id), '')"
             )
+        if "last_fetch_at" not in kol_cols:
+            self._conn.execute(
+                "ALTER TABLE kols ADD COLUMN last_fetch_at TEXT NOT NULL DEFAULT ''"
+            )
+        if "last_fetch_error" not in kol_cols:
+            self._conn.execute(
+                "ALTER TABLE kols ADD COLUMN last_fetch_error TEXT NOT NULL DEFAULT ''"
+            )
+        if "fetch_fail_streak" not in kol_cols:
+            self._conn.execute(
+                "ALTER TABLE kols ADD COLUMN fetch_fail_streak INTEGER NOT NULL DEFAULT 0"
+            )
+        if "next_fetch_at" not in kol_cols:
+            self._conn.execute(
+                "ALTER TABLE kols ADD COLUMN next_fetch_at TEXT NOT NULL DEFAULT ''"
+            )
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_posts_kol_id_id ON posts(kol_id, id DESC)"
         )
@@ -2064,6 +2080,16 @@ class DB:
         self._execute(
             "UPDATE kols SET avatar_source = ? WHERE id = ?",
             (source or "", kol_id),
+        )
+
+    def record_kol_fetch(
+        self, kol_id: int, *, at: int, error: str, streak: int, next_at: int
+    ) -> None:
+        """记下这个大V最后一次真正发出的抓取。空 error 表示成功。"""
+        self._execute(
+            "UPDATE kols SET last_fetch_at = ?, last_fetch_error = ?, "
+            "fetch_fail_streak = ?, next_fetch_at = ? WHERE id = ?",
+            (str(int(at)), (error or "")[:300], int(streak), str(int(next_at)), kol_id),
         )
 
     def _kol_filters(

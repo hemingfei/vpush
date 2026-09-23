@@ -2875,26 +2875,31 @@ def test_stats_include_source_health():
     import time as _time
 
     now = int(_time.time())
-    # 有启用的雪球大V：source_ok 新 → 正常；source_ok 旧 → 状态降为「近期无成功」
-    db.add_kol("xueqiu", "A", "1")
-    db.set_setting("source_ok_xueqiu", str(now - 60))
-    db.set_setting("source_err_weibo", "登录失败")
-    db.set_setting("source_fails_weibo", "3")
+    xq = db.add_kol("xueqiu", "A", "1")
+    uid = db.add_user("sub_stats", "h", telegram_chat_id="tgstats")
+    db.add_subscription(uid, xq)
+    db.record_kol_fetch(xq, at=now - 60, error="", streak=0, next_at=now + 600)
+    wb = db.add_kol("weibo", "B", "1")
+    db.add_subscription(db.add_user("sub_wb", "h", telegram_chat_id="tgwb"), wb)
+    db.record_kol_fetch(wb, at=now - 30, error="登录失败", streak=3, next_at=now + 600)
     stats = client.get("/api/stats", headers=headers).json()
     sources = {s["platform"]: s for s in stats["sources"]}
-    assert sources["xueqiu"]["ok"] is True
-    assert sources["weibo"]["ok"] is False and sources["weibo"]["consecutive_fails"] == 3
-    assert sources["weibo"]["last_error"] == "登录失败"
+    assert sources["xueqiu"]["ok"] is True and sources["xueqiu"]["health"] == "ok"
+    assert sources["weibo"]["ok"] is False and sources["weibo"]["health"] == "down"
+    assert sources["weibo"]["consecutive_fails"] == 3
+    assert "登录失败" in sources["weibo"]["last_error"]
+    states = {h["id"]: h["fetch_state"] for h in stats["kol_health"]}
+    assert states[xq] == "ok" and states[wb] == "down"
 
-    # source_ok 超出新鲜度窗口（2×轮询间隔，至少 5 分钟）→ 状态转 false
-    db.set_setting("source_ok_xueqiu", str(now - 3600))
+    db.record_kol_fetch(xq, at=now - 3600, error="", streak=0, next_at=now - 3600)
     stats = client.get("/api/stats", headers=headers).json()
     sources = {s["platform"]: s for s in stats["sources"]}
     assert sources["xueqiu"]["ok"] is False
+    assert sources["xueqiu"]["health"] == "overdue"
 
 
 def test_stats_no_enabled_kol_not_stale():
-    """平台没有启用大V时，source_ok 即使陈旧也不判「近期无成功」。"""
+    """没有该抓的大V时，不把陈旧 source_ok 当成故障。"""
     client = make_client()
     headers = auth_headers(client)
     db = client.app.state.db
@@ -2904,7 +2909,9 @@ def test_stats_no_enabled_kol_not_stale():
     db.set_setting("source_ok_weibo", str(now - 3600))
     stats = client.get("/api/stats", headers=headers).json()
     sources = {s["platform"]: s for s in stats["sources"]}
-    assert sources["weibo"]["ok"] is True
+    assert sources["weibo"]["health"] == "idle"
+    assert sources["weibo"]["ok"] is False
+    assert sources["weibo"]["last_error"] == ""
 
 
 def test_polling_config_get_and_update():

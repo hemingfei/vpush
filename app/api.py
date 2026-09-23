@@ -5915,41 +5915,49 @@ def create_api_router(
 
     @router.get("/stats", dependencies=[Depends(require_admin)])
     def stats():
+        from .scheduler import health_grace_seconds, kol_fetch_state, platform_fetch_health
+
         kols = db.list_kols(with_subscriber_count=True)
-        # 「正常」状态有新鲜度窗口：source_ok 太久没更新视为近期无成功，
-        # 避免平台曾成功过一次就永远显示正常（连续失败被掩盖）。
-        # 窗口取 2× 全局轮询间隔，至少 5 分钟；无启用大V的平台不判定。
-        try:
-            poll_interval = int(db.get_setting("config_interval_seconds") or 0)
-        except (TypeError, ValueError):
-            poll_interval = 0
-        ok_window = max(poll_interval * 2, 300)
+        # 灯看每个该抓大V自己的上次抓取，不看 source_ok（本轮没抽到的失败会把它洗成正常）。
+        subscribed = db.kol_ids_with_subscribers()
+        grace = health_grace_seconds(db)
         now = int(time.time())
-        enabled_by_platform: dict[str, int] = {}
+        tracked_by_platform: dict[str, list] = {}
         for k in kols:
-            if k["enabled"]:
-                enabled_by_platform[k["platform"]] = enabled_by_platform.get(k["platform"], 0) + 1
+            if k["enabled"] and k["id"] in subscribed:
+                tracked_by_platform.setdefault(k["platform"], []).append(k)
+        skip_until: dict[str, int] = {}
+
+        def _skip_until(platform: str) -> int:
+            if platform not in skip_until:
+                raw = db.get_setting(f"source_skip_until_{platform}") or ""
+                try:
+                    skip_until[platform] = int(raw or 0)
+                except (TypeError, ValueError):
+                    skip_until[platform] = 0
+            return skip_until[platform]
+
         sources = []
         for platform in sorted(ALLOWED_PLATFORMS):
-            ok_at = db.get_setting(f"source_ok_{platform}")
-            err = db.get_setting(f"source_err_{platform}") or ""
-            fails = db.get_setting(f"source_fails_{platform}") or "0"
+            summary = platform_fetch_health(
+                tracked_by_platform.get(platform) or [],
+                now,
+                grace,
+                _skip_until(platform),
+            )
             ev = db.source_event_stats(platform, 24)
             total = ev["ok"] + ev["fail"]
-            fresh = False
-            if ok_at:
-                try:
-                    fresh = now - int(ok_at) <= ok_window
-                except (TypeError, ValueError):
-                    fresh = True  # 时间戳格式异常时按有效处理，不阻断展示
-            if enabled_by_platform.get(platform, 0) == 0:
-                fresh = bool(ok_at)  # 无启用大V：不判过期，保留原语义
             src = {
                 "platform": platform,
-                "ok": fresh,
-                "last_ok_at": ok_at,
-                "last_error": err,
-                "consecutive_fails": int(fails),
+                "ok": summary["ok"],
+                "health": summary["health"],
+                "last_ok_at": summary["last_ok_at"],
+                "last_error": summary["last_error"],
+                "consecutive_fails": summary["streak"],
+                "fail_kols": summary["fail_kols"],
+                "overdue_kols": summary["overdue_kols"],
+                "never_kols": summary["never_kols"],
+                "tracked_kols": summary["tracked"],
                 "ok_24h": ev["ok"],
                 "fail_24h": ev["fail"],
                 "warn_24h": ev["warn"],
@@ -6007,17 +6015,24 @@ def create_api_router(
                     "from_env": True,
                 }
         last_post_at = db.last_post_time_by_kol()
-        kol_health = [
-            {
-                "id": k["id"],
-                "name": k["name"],
-                "platform": k["platform"],
-                "enabled": bool(k["enabled"]),
-                "last_post_at": last_post_at.get(k["id"]) or "",
-                "subscriber_count": int(k.get("subscriber_count") or 0),
-            }
-            for k in kols
-        ]
+        kol_health = []
+        for k in kols:
+            tracked = bool(k["enabled"]) and k["id"] in subscribed
+            kol_health.append(
+                {
+                    "id": k["id"],
+                    "name": k["name"],
+                    "platform": k["platform"],
+                    "enabled": bool(k["enabled"]),
+                    "last_post_at": last_post_at.get(k["id"]) or "",
+                    "subscriber_count": int(k.get("subscriber_count") or 0),
+                    "fetch_state": (
+                        kol_fetch_state(k, now, grace, _skip_until(k["platform"]))
+                        if tracked
+                        else ""
+                    ),
+                }
+            )
         kol_health.sort(key=lambda h: h["last_post_at"])
         return {
             "polling_interval_seconds": int(db.get_setting("stats_polling_interval") or 0),

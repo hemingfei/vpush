@@ -733,7 +733,7 @@ def test_source_health_alert_low_success_rate():
     from app.scheduler import maybe_alert_source_health
 
     db = make_db()
-    db.add_kol("xueqiu", "A", "1")  # 默认 enabled
+    add_kol_subscribed(db, "xueqiu", "A", "1")
     # 24h 内 10 次尝试、3 次成功 → 成功率 30% < 70%
     for _ in range(3):
         db.add_source_event("xueqiu", "ok", "ok=1", ok_count=1)
@@ -758,10 +758,9 @@ def test_source_health_alert_silent_platform():
     )
 
     db = make_db()
-    db.add_kol("weibo", "A", "1")  # 默认 enabled
-    db.set_setting(
-        "source_ok_weibo", str(int(time.time()) - (SOURCE_HEALTH_SILENT_HOURS + 1) * 3600)
-    )
+    kid = add_kol_subscribed(db, "weibo", "A", "1")
+    old = int(time.time()) - (SOURCE_HEALTH_SILENT_HOURS + 1) * 3600
+    db.record_kol_fetch(kid, at=old, error="", streak=0, next_at=old)
     notifier = FakeNotifier()
     maybe_alert_source_health(db, [notifier])
     assert len(notifier.texts) == 1
@@ -774,16 +773,77 @@ def test_source_health_alert_skips_healthy_and_no_kol():
     from app.scheduler import maybe_alert_source_health
 
     db = make_db()
-    # xueqiu：有启用大V且健康（100% 成功率 + source_ok 新鲜）
-    db.add_kol("xueqiu", "A", "1")
+    kid = add_kol_subscribed(db, "xueqiu", "A", "1")
+    now = int(time.time())
+    db.record_kol_fetch(kid, at=now, error="", streak=0, next_at=now + 600)
     db.add_source_event("xueqiu", "ok", "ok=1", ok_count=10)
-    db.set_setting("source_ok_xueqiu", str(int(time.time())))
     # weibo：无启用大V（加一个后停用）
     db.add_kol("weibo", "B", "1")
     db.update_kol(db.list_kols()[1]["id"], enabled=False)
     notifier = FakeNotifier()
     maybe_alert_source_health(db, [notifier])
     assert notifier.texts == []
+
+
+def test_fetch_health_keeps_sibling_failure():
+    """同平台另一个大V后来成功，不能把还在失败的那个洗成正常。"""
+    from app.scheduler import kol_fetch_state, platform_fetch_health
+
+    now = 1_800_000_000
+    ok = {
+        "name": "OK",
+        "last_fetch_at": str(now),
+        "last_fetch_error": "",
+        "fetch_fail_streak": 0,
+        "next_fetch_at": str(now + 100),
+    }
+    bad = {
+        "name": "FAIL",
+        "last_fetch_at": str(now),
+        "last_fetch_error": "boom",
+        "fetch_fail_streak": 1,
+        "next_fetch_at": str(now + 30),
+    }
+    summary = platform_fetch_health([ok, bad], now, 60, 0)
+    assert summary["health"] == "fail"
+    assert summary["ok"] is False
+    assert "boom" in summary["last_error"]
+    paused = {
+        "last_fetch_at": str(now - 100),
+        "last_fetch_error": "",
+        "fetch_fail_streak": 0,
+        "next_fetch_at": str(now - 100),
+    }
+    assert kol_fetch_state(paused, now, 60, 0) == "overdue"
+    assert kol_fetch_state(paused, now, 60, now + 30) == "ok"
+
+
+def test_later_success_does_not_clear_other_kol_failure(monkeypatch):
+    monkeypatch.setattr("app.scheduler.random.uniform", lambda _a, _b: 0)
+    db = make_db()
+    ok_kid = add_kol_subscribed(db, "xueqiu", "OK", "1")
+    fail_kid = add_kol_subscribed(db, "xueqiu", "FAIL", "2")
+    states = {}
+    poll_once(
+        db,
+        {"xueqiu": SelectiveFetcher({fail_kid}, [make_post(ok_kid)])},
+        [],
+        states=states,
+        interval_seconds=180,
+    )
+    assert "boom" in (db.get_kol(fail_kid)["last_fetch_error"] or "")
+    states["xueqiu"].last_fetched[ok_kid] = time.monotonic() - 10_000
+    poll_once(
+        db,
+        {"xueqiu": FakeFetcher([make_post(ok_kid)])},
+        [],
+        states=states,
+        interval_seconds=180,
+    )
+    failed = db.get_kol(fail_kid)
+    assert "boom" in (failed["last_fetch_error"] or "")
+    assert int(failed["fetch_fail_streak"]) >= 1
+    assert db.get_kol(ok_kid)["last_fetch_error"] == ""
 
 
 def test_poll_once_fetches_platforms_concurrently(monkeypatch):

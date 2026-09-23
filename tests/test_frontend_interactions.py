@@ -1511,7 +1511,9 @@ def test_source_status_splits_cold_start_and_credentials():
     assert "未开始" in cell
     assert "凭据缺失" in cell
     assert "持续失败" in cell
-    assert "暂无成功" in cell
+    assert "逾期" in cell
+    assert "失败" in cell
+    assert "暂无成功" not in cell
     assert "无成功记录" not in cell
     assert "status-warn" in cell
     assert "sourceNeverStarted" in cell
