@@ -12,6 +12,7 @@ import time
 import httpx
 from curl_cffi import requests as cffi
 
+from .. import xq_identity
 from .base import (
     Fetcher,
     Post,
@@ -24,16 +25,19 @@ from .xueqiu import (
     XUEQIU_COOKIE_KEY,
     apply_xueqiu_cookie,
     merge_waf_cookie,
+    resolve_xueqiu_identity,
 )
 
 logger = logging.getLogger(__name__)
 
 HOME_URL = "https://xueqiu.com/"
-REBALANCING_URL = "https://xueqiu.com/cubes/rebalancing/history.json"
-CUBE_QUOTE_URL = "https://xueqiu.com/cubes/quote.json"
-CUBE_CURRENT_URL = "https://xueqiu.com/cubes/rebalancing/current.json"
-CUBE_NAV_URL = "https://xueqiu.com/cubes/nav_daily/all.json"
-CUBE_SEARCH_URL = "https://xueqiu.com/query/v1/cube/search.json"
+# cube 接口统一打 api 域：网页域 xueqiu.com/cubes/* 对本服务出口 IP 直接 400016/110017（限流/风控），
+# 同一 IP、同一 cookie 打 api 域 200 正常，App token 与网页 cookie 都吃（2026-09-23 实测）。
+REBALANCING_URL = "https://api.xueqiu.com/cubes/rebalancing/history.json"
+CUBE_QUOTE_URL = "https://api.xueqiu.com/cubes/quote.json"
+CUBE_CURRENT_URL = "https://api.xueqiu.com/cubes/rebalancing/current.json"
+CUBE_NAV_URL = "https://api.xueqiu.com/cubes/nav_daily/all.json"
+CUBE_SEARCH_URL = "https://api.xueqiu.com/query/v1/cube/search.json"
 PROFILE_CACHE_TTL = 300
 # 快照 TTL：quote 随轮次刷新（30s 级），持仓 5 分钟，净值序列 1 小时
 SNAPSHOT_TTL = {"quote": 60, "holdings": 300, "nav": 3600}
@@ -352,6 +356,8 @@ class CombinationFetcher(Fetcher):
             lambda: _cube_client(cookie, db=self.db),
             injected=client,
         )
+        # 身份在 _apply_cookie 里逐次判定（App 隐式账号 / 网页 cookie），此处只给安全默认
+        self._app_identity = False
 
     @property
     def client(self):
@@ -362,18 +368,24 @@ class CombinationFetcher(Fetcher):
         self._http.set(value)
 
     def _apply_cookie(self, force_warm: bool = False) -> None:
-        cookie = self.db.get_setting(XUEQIU_COOKIE_KEY) or self.source_config.cookie
-        merged = merge_waf_cookie(cookie)
+        """应用当前身份：App 隐式账号（主路径），登记失败则退回网页 cookie。"""
+        cookie, ua, _, self._app_identity = resolve_xueqiu_identity(
+            self.db, self.source_config.cookie
+        )
         client = self.client
+        if ua:
+            client.headers["User-Agent"] = ua  # 仅 App 身份需要显式 UA（必须与 token 成对）
         # 首页下发的 EdgeOne cookie 必须留在同一会话里。每次 clear 再打 history.json 会重新碰到挑战页。
         if getattr(client, "impersonate", None):
-            if getattr(client, "_vpush_cookie", None) != merged:
-                apply_xueqiu_cookie(client, merged)
-                client._vpush_cookie = merged
+            if getattr(client, "_vpush_cookie", None) != cookie:
+                apply_xueqiu_cookie(client, cookie)
+                client._vpush_cookie = cookie
                 client._vpush_warm = None
-            self._warm_session(client, merged, force=force_warm)
+            if not self._app_identity:
+                # App 域名路径无 EdgeOne 挑战，只有网页路径需要首页预热
+                self._warm_session(client, cookie, force=force_warm)
             return
-        apply_xueqiu_cookie(client, merged)
+        apply_xueqiu_cookie(client, cookie)
 
     def _warm_session(self, client, cookie: str, force: bool = False) -> bool:
         """同一会话先打开首页拿 EdgeOne cookie。首页自己被挑战时不置位，下次仍会重试预热。"""
@@ -398,11 +410,17 @@ class CombinationFetcher(Fetcher):
         return True
 
     def _refresh_cookie(self) -> None:
-        """雪球 cookie 失效时直接抛错（与雪球帖抓取共用，无法自动续期）。"""
-        raise RuntimeError(
-            "雪球 cookie 已失效（接口返回 401/403），"
-            "请到后台「数据源 → Cookie 管理」手动更新后重试"
-        )
+        """身份失效后自动续期：App 通道换新设备指纹重注册；网页 cookie 无法自动续期。"""
+        if not self._app_identity:
+            raise RuntimeError(
+                "雪球 cookie 已失效（接口返回 401/403），"
+                "请到后台「数据源 → Cookie 管理」手动更新后重试"
+            )
+        try:
+            xq_identity.rotate_identity()
+        except Exception as exc:  # noqa: BLE001 - 节流/注册失败时把错误交给调用方退避
+            logger.warning("雪球 App 身份续期失败（%s）", exc)
+        self._apply_cookie()
 
     def _snapshot(self, kol_id: int, cube_symbol: str, kind: str, url: str, params: dict, force: bool = False) -> None:
         """抓取并写入一种组合快照；TTL 内跳过，失败仅记日志（不阻断调仓推送）。"""

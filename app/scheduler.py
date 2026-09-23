@@ -1613,13 +1613,15 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
 
     from .fetchers.xueqiu import (
         XUEQIU_COOKIE_KEY,
-        XUEQIU_TIMELINE_URL,
         apply_xueqiu_cookie,
         normalize_xueqiu_id,
+        resolve_xueqiu_identity,
         xueqiu_session_dead,
     )
 
-    cookie = db.get_setting(XUEQIU_COOKIE_KEY) or source_config.cookie
+    cookie, ua, timeline_url, _ = resolve_xueqiu_identity(db, source_config.cookie)
+    if not cookie and not ua:
+        return  # 两条身份路径都拿不到凭据
     target = next((k for k in db.list_kols(platform="xueqiu") if k["enabled"]), None)
     if target is None:
         return  # 没有启用的雪球大V，无从探测
@@ -1643,9 +1645,11 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
         },
     )
     apply_xueqiu_cookie(client, cookie)
+    if ua:
+        client.headers["User-Agent"] = ua  # App 身份与 UA 成对
     try:
         resp = client.get(
-            XUEQIU_TIMELINE_URL,
+            timeline_url,
             params={"user_id": xueqiu_uid, "page": 1, "count": 1},
         )
         if xueqiu_session_dead(resp):
@@ -1694,23 +1698,23 @@ def _alert_cookie_keepalive(db: DB, notifiers: list[Notifier], label: str, detai
 def keepalive_xueqiu_cookie(
     db: DB, notifiers: list[Notifier], source_config, client=None
 ) -> None:
-    """定时探测雪球 cookie 是否仍有效，失效时告警（与抓取同路径）。
+    """定时探测雪球抓取身份是否仍有效，失效时告警（与抓取同路径）。
 
-    请求 timeline JSON：有效 cookie 返回 200，失效返回 400。无法自动续期，需手动更新。
+    App 隐式账号下会换新设备指纹重注册，网页 cookie 则无法自动续期，需手动更新。
     """
     from .fetchers.xueqiu import (
         XUEQIU_COOKIE_KEY,
         XUEQIU_COOKIE_TIME_KEY,
-        XUEQIU_TIMELINE_URL,
         apply_xueqiu_cookie,
         merge_cookie_strings,
         normalize_xueqiu_id,
+        resolve_xueqiu_identity,
         xueqiu_session_dead,
     )
 
-    cookie = db.get_setting(XUEQIU_COOKIE_KEY) or source_config.cookie
-    if not cookie:
-        return
+    cookie, ua, timeline_url, _ = resolve_xueqiu_identity(db, source_config.cookie)
+    if not cookie and not ua:
+        return  # 两条身份路径都拿不到凭据
     # 没有启用的雪球大V则无从探测（与 probe_xueqiu 一致）
     target = next((k for k in db.list_kols(platform="xueqiu") if k["enabled"]), None)
     if target is None:
@@ -1740,9 +1744,11 @@ def keepalive_xueqiu_cookie(
             },
         )
     apply_xueqiu_cookie(client, cookie)
+    if ua:
+        client.headers["User-Agent"] = ua  # App 身份与 UA 成对
     try:
         resp = client.get(
-            XUEQIU_TIMELINE_URL,
+            timeline_url,
             params={"user_id": xueqiu_uid, "page": 1, "count": 1},
         )
         if xueqiu_session_dead(resp):

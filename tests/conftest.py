@@ -29,3 +29,12 @@ def cicc_archive(tmp_path):
     (ctrl / "commands").mkdir(parents=True)
     (ctrl / "results").mkdir(parents=True)
     return archive, ctrl
+
+
+@pytest.fixture(autouse=True)
+def _disable_xueqiu_app_identity(monkeypatch):
+    """雪球 App 隐式账号默认关闭：否则每个用例都会去向雪球真机注册、请求也会跑到 api.xueqiu.com。
+
+    测 App 通道的用例自己 `monkeypatch.setenv("XUEQIU_APP_IDENTITY", "1")` 并 stub `xq_identity.identity`。
+    """
+    monkeypatch.setenv("XUEQIU_APP_IDENTITY", "0")

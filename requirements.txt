@@ -12,3 +12,4 @@ python-multipart==0.0.20
 feedparser==6.0.11
 bleach==6.2.0
 zhconv==1.4.3
+gmssl==3.2.2  # 雪球 App 身份通道的国密原语（cryptography 不支持 SM2/SM3/SM4）

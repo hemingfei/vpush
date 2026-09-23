@@ -59,7 +59,7 @@ def test_xueqiu_parse_fixture():
 
 @pytest.mark.parametrize(
     ("fetcher_class", "external_id"),
-    [(XueqiuFetcher, "123"), (CombinationFetcher, "ZH123")],
+    [(XueqiuFetcher, "123")],
 )
 def test_xueqiu_cookie_survives_www_redirect(fetcher_class, external_id, monkeypatch, tmp_path):
     monkeypatch.setattr("app.fetchers.xueqiu.WAF_COOKIE_FILE", str(tmp_path / "missing.json"))
@@ -104,7 +104,7 @@ def test_xueqiu_cookie_jar_replaces_old_values_and_scopes_domain():
     assert seen == ["xq_a_token=new==; u=123", "", ""]
 
 
-@pytest.mark.parametrize("platform", ["xueqiu", "combination"])
+@pytest.mark.parametrize("platform", ["xueqiu"])
 def test_xueqiu_profile_cookie_survives_www_redirect(platform, monkeypatch):
     from app.fetchers.combination import resolve_combination_profile
     from app.fetchers.xueqiu import resolve_profile
@@ -144,6 +144,40 @@ def test_xueqiu_profile_cookie_survives_www_redirect(platform, monkeypatch):
         result = resolve_combination_profile("ZH123", cookie="xq_a_token=abc")
         assert result["name"] == "测试组合"
     assert seen == [("xueqiu.com", "xq_a_token=abc"), ("www.xueqiu.com", "xq_a_token=abc")]
+
+
+def test_combination_profile_uses_api_host_and_keeps_cookie(monkeypatch):
+    """组合搜索也走 api 域：网页域对该出口 IP 只返空 list，导入大V 会填不上名字。"""
+    from app.fetchers.combination import resolve_combination_profile
+
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.host, request.headers.get("Cookie", "")))
+        return httpx.Response(200, json={
+            "list": [{
+                "symbol": "ZH123",
+                "name": "测试组合",
+                "owner": {"screen_name": "主理人"},
+            }],
+        })
+
+    real_client = httpx.Client
+
+    def session_factory(**kwargs):
+        return real_client(
+            transport=httpx.MockTransport(handler),
+            follow_redirects=True,
+            headers=kwargs.get("headers"),
+        )
+
+    monkeypatch.setattr("app.fetchers.combination._profile_cache", {})
+    monkeypatch.setattr("app.fetchers.combination.cffi.Session", session_factory)
+
+    result = resolve_combination_profile("ZH123", cookie="xq_a_token=abc")
+
+    assert result["name"] == "测试组合"
+    assert seen == [("api.xueqiu.com", "xq_a_token=abc")]
 
 
 def test_cube_client_uses_chrome_impersonation(monkeypatch):
