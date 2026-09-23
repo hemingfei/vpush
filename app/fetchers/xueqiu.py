@@ -38,6 +38,14 @@ XUEQIU_SEED_COOKIE_FILE = os.environ.get(
     "XUEQIU_SEED_COOKIE_FILE", "/data/xueqiu_seed_cookie.txt"
 )
 
+# 探测式轮询：先用 count=1 轻量探测（约 11.7KB），最新帖已入库则跳过本轮全量拉取（约 207KB）。
+# 判定不依赖本地水位，而是拿探测到的帖子 ID 回查 DB —— 天然免疫「水位写错导致静默漏帖」：
+# 帖子只要没真正入库，探测就一定判定为「有更新」，全量拉取照常发生。
+XUEQIU_PROBE_ENABLED = os.environ.get("XUEQIU_PROBE", "1") != "0"
+# 连续跳过的轮次上限：到点强制全量一次，兜住「探测接口返回陈旧数据」这类反常情况。
+XUEQIU_PROBE_FORCE_FULL_EVERY = max(1, int(os.environ.get("XUEQIU_PROBE_FORCE_FULL", "10")))
+_probe_skip_streak: dict[int, int] = {}  # kol_id -> 连续跳过次数；进程内即可，重启归零无害
+
 
 def _cookie_sha256(cookie: str) -> str:
     return hashlib.sha256((cookie or "").strip().encode()).hexdigest()
@@ -385,8 +393,8 @@ class XueqiuFetcher(Fetcher):
             }
         )
 
-        def get_page(page: int) -> dict:
-            params = {"user_id": uid, "page": page, "count": 20}
+        def get_page(page: int, count: int = 20) -> dict:
+            params = {"user_id": uid, "page": page, "count": count}
             resp = self.client.get(url, params=params)
             if xueqiu_session_dead(resp) or _is_waf_html(resp):
                 # 身份失效：续期一次后重打（只重试一次，仍失败就把错误交给调用方退避）
@@ -399,6 +407,26 @@ class XueqiuFetcher(Fetcher):
                 raise RuntimeError(
                     "雪球接口返回异常，请检查 xueqiu cookie 配置后重试"
                 ) from None
+
+        def probe_no_update() -> bool:
+            """count=1 轻量探测：最新帖已入库 → 本轮判定无新帖。
+
+            任何异常或不确定都返回 False（退回全量）—— 宁可多拉一次，不能漏帖。
+            """
+            if self.db is None:  # 无 DB 时无法佐证「已入库」，一律走全量
+                return False
+            try:
+                data = get_page(1, count=1)
+            except Exception as exc:  # noqa: BLE001 - 探测失败不阻断，退回全量
+                logger.debug("雪球探测失败，退回全量拉取: %s", exc)
+                return False
+            statuses = (data or {}).get("statuses") or []
+            newest_id = str((statuses[0] if statuses else {}).get("id") or "")
+            if not newest_id:
+                return False
+            return (self.platform, newest_id) in self.db.existing_post_keys(
+                [(self.platform, newest_id)]
+            )
 
         def build(statuses: list) -> list[Post]:
             posts = []
@@ -430,6 +458,20 @@ class XueqiuFetcher(Fetcher):
                     )
                 )
             return posts
+
+        # 探测式轮询：先用 count=1（约 11.7KB）判断有没有新帖，避免为「无更新」付出全量 207KB。
+        # 到上限后强制全量一次，防止探测长期返回陈旧数据而一直走不到全量路径。
+        if XUEQIU_PROBE_ENABLED:
+            streak = _probe_skip_streak.get(kol["id"], 0)
+            if streak >= XUEQIU_PROBE_FORCE_FULL_EVERY:
+                _probe_skip_streak[kol["id"]] = 0
+                logger.debug("雪球 KOL %s 已连续跳过 %d 轮，本轮强制全量校验", kol["id"], streak)
+            elif probe_no_update():
+                _probe_skip_streak[kol["id"]] = streak + 1
+                logger.debug("雪球 KOL %s 无新帖（探测命中已入库帖），跳过全量", kol["id"])
+                return []
+            else:
+                _probe_skip_streak[kol["id"]] = 0
 
         first_statuses = (get_page(1) or {}).get("statuses") or []
         posts = build(first_statuses)
