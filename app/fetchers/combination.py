@@ -24,7 +24,6 @@ from .base import (
 from .xueqiu import (
     XUEQIU_COOKIE_KEY,
     apply_xueqiu_cookie,
-    merge_waf_cookie,
     resolve_xueqiu_identity,
 )
 
