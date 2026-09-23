@@ -1732,6 +1732,12 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE news_sources ADD COLUMN group_name TEXT NOT NULL DEFAULT ''"
             )
+        if "internal" not in source_cols:
+            # internal=1：内容由外部 webhook 推入（不是本机出网拉取的 Feed）。
+            # 对普通用户不可见，且它的占位 feed 不参与轮询。
+            self._conn.execute(
+                "ALTER TABLE news_sources ADD COLUMN internal INTEGER NOT NULL DEFAULT 0"
+            )
         article_cols = {row["name"] for row in self._rows("PRAGMA table_info(news_articles)")}
         if "topics" not in article_cols:
             self._conn.execute(
@@ -2819,6 +2825,13 @@ class DB:
             "WHERE built_in = 1 AND default_selected = 1 AND archived_at IS NULL",
             (user_id,),
         )
+        if self.get_setting("news_select_new_sources_v1") == "1":
+            self._conn.execute(
+                "INSERT OR IGNORE INTO user_news_sources (user_id, source_id) "
+                "SELECT ?, id FROM news_sources "
+                "WHERE archived_at IS NULL AND enabled = 1 AND internal = 1",
+                (user_id,),
+            )
 
     def add_user(
         self,
@@ -2967,6 +2980,17 @@ class DB:
                         ).fetchall()
                         if {row["id"] for row in valid} != set(ids):
                             raise ValueError("来源不存在或已归档")
+                    if self.get_setting("news_select_new_sources_v1") == "1":
+                        kept = self._conn.execute(
+                            "SELECT u.source_id FROM user_news_sources u "
+                            "JOIN news_sources s ON s.id = u.source_id "
+                            "WHERE u.user_id = ? AND s.enabled = 0 AND s.archived_at IS NULL",
+                            (user_id,),
+                        ).fetchall()
+                        for row in kept:
+                            source_id = int(row["source_id"])
+                            if source_id not in ids:
+                                ids.append(source_id)
                     self._conn.execute(
                         "DELETE FROM user_news_sources WHERE user_id = ?", (user_id,)
                     )
@@ -3278,10 +3302,15 @@ class DB:
                 raise
 
     # ---- Financial news ----
-    def list_news_sources(self, include_archived: bool = False) -> list[dict]:
+    def list_news_sources(
+        self, include_archived: bool = False, *, exclude_internal: bool = False
+    ) -> list[dict]:
+        conds = [] if include_archived else ["archived_at IS NULL"]
+        if exclude_internal:
+            conds.append("internal = 0")
         sql = "SELECT * FROM news_sources"
-        if not include_archived:
-            sql += " WHERE archived_at IS NULL"
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
         sql += " ORDER BY id"
         return self._rows(sql)
 
@@ -3423,6 +3452,103 @@ class DB:
             if "normalized_url" in str(exc):
                 raise ValueError("Feed URL 已存在") from None
             raise ValueError("该媒体下的 Feed 名称已存在") from None
+
+    def get_or_create_internal_news_source(
+        self, name: str, group_name: str = "", external_key: str = ""
+    ) -> int:
+        """按外部稳定键找（或建）一个内部媒体源：internal=1。
+
+        一次性回填完成前，普通用户看不到；完成后新建的源默认勾给全部用户。
+
+        external_key 是对端的来源 id（如 ``xincai-source-si35``）。**身份不能跟着显示名走**：
+        管理员在后台改一次名，下次推送就会找不到、新建一个重复源，同一批文章挂两个媒体。
+        找不到稳定键时才退回按名字匹配（老数据首次迁移用），并顺手把 slug 补上。
+        """
+        name = (name or "").strip()
+        if not name or len(name) > 60:
+            raise ValueError("媒体名称长度必须为 1-60 个字符")
+        slug = (external_key or "").strip()[:80]
+
+        row = None
+        if slug:
+            row = self._conn.execute(
+                "SELECT id, internal FROM news_sources WHERE slug = ?", (slug,)
+            ).fetchone()
+        if row is None:
+            by_name = self._conn.execute(
+                "SELECT id, internal FROM news_sources WHERE name = ? COLLATE NOCASE", (name,)
+            ).fetchone()
+            if by_name is not None:
+                if not int(by_name["internal"] or 0):
+                    # 名字被公开源占用：报错而不是复用，否则会把公开源变成只有管理员能看的
+                    raise ValueError(f"媒体名称已被公开源占用：{name}")
+                row = by_name
+                if slug:
+                    self._execute(
+                        "UPDATE news_sources SET slug = ?, updated_at = datetime('now') WHERE id = ?",
+                        (slug, row["id"]),
+                    )
+        if row is not None:
+            return int(row["id"])
+        source_id = self._execute(
+            "INSERT INTO news_sources (slug, name, built_in, default_selected, group_name, internal) "
+            "VALUES (?, ?, 0, 1, ?, 1)",
+            (slug or f"internal-{uuid.uuid4().hex}", name, (group_name or "").strip()[:40]),
+        )
+        self._grant_new_source_to_users(source_id)
+        return source_id
+
+    def _grant_new_source_to_users(self, source_id: int) -> None:
+        if self.get_setting("news_select_new_sources_v1") != "1":
+            return
+        self._execute(
+            "INSERT OR IGNORE INTO user_news_sources (user_id, source_id) "
+            "SELECT id, ? FROM users",
+            (source_id,),
+        )
+
+    def backfill_new_news_sources(self, now: datetime | None = None) -> int:
+        """把已有的新内部源勾给全部用户。只跑一次。"""
+        del now
+        if self.get_setting("news_select_new_sources_v1") == "1":
+            return 0
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                cur = self._conn.execute(
+                    "INSERT OR IGNORE INTO user_news_sources (user_id, source_id) "
+                    "SELECT u.id, s.id FROM users u JOIN news_sources s "
+                    "WHERE s.archived_at IS NULL AND s.enabled = 1 AND s.internal = 1"
+                )
+                self._conn.execute(
+                    "UPDATE news_sources SET default_selected = 1 "
+                    "WHERE internal = 1 AND enabled = 1 AND archived_at IS NULL"
+                )
+                self._conn.execute(
+                    "INSERT INTO settings (key, value) VALUES ('news_select_new_sources_v1', '1') "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                )
+                self._conn.commit()
+                return int(cur.rowcount)
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def get_or_create_internal_news_feed(self, source_id: int, name: str = "推送") -> int:
+        """内部源的占位 feed：只为满足 news_articles.feed_id 的外键。
+
+        enabled=0 —— list_due_news_feeds 只挑 enabled=1，所以它永远不会被轮询。
+        """
+        row = self._conn.execute(
+            "SELECT id FROM news_feeds WHERE source_id = ? AND name = ?", (source_id, name)
+        ).fetchone()
+        if row is not None:
+            return int(row["id"])
+        return self._execute(
+            "INSERT INTO news_feeds (source_id, name, url, normalized_url, enabled) "
+            "VALUES (?, ?, '', ?, 0)",
+            (source_id, name, f"internal://{source_id}/{uuid.uuid4().hex[:12]}"),
+        )
 
     def update_news_feed(
         self,
@@ -3762,18 +3888,21 @@ class DB:
 
     def _news_article_filter(
         self, user_id: int, source_id: int | None, q: str, *, unread: bool = False,
-        topic: str = "",
+        topic: str = "", exclude_internal: bool = False,
     ) -> tuple[str, list[object]]:
         """source_id 给定时按源浏览（启用且未归档），否则限定用户订阅圈内的启用源。
 
         unread：published_at 晚于 news_last_seen_at 且无 news_article_reads。
         topic 匹配 topics JSON 数组里的标签值（带引号防子串误配）。
+        exclude_internal：把 webhook 推入的内部源整体排除（普通用户视角）。
         """
         conds = [
             "s.id = a.source_id",
             "s.archived_at IS NULL",
             "s.enabled = 1",
         ]
+        if exclude_internal:
+            conds.append("s.internal = 0")
         params: list[object] = []
         if source_id is not None:
             conds.append("a.source_id = ?")
@@ -3803,9 +3932,11 @@ class DB:
         offset: int,
         unread: bool = False,
         topic: str = "",
+        exclude_internal: bool = False,
     ) -> list[dict]:
         where, params = self._news_article_filter(
-            user_id, source_id, (q or "").strip(), unread=unread, topic=topic
+            user_id, source_id, (q or "").strip(), unread=unread, topic=topic,
+            exclude_internal=exclude_internal,
         )
         params = [user_id, user_id, user_id, *params, max(1, min(int(limit), 100)), max(0, int(offset))]
         rows = self._rows(
@@ -3838,10 +3969,11 @@ class DB:
 
     def count_news_articles(
         self, user_id: int, *, source_id: int | None, q: str, unread: bool = False,
-        topic: str = "",
+        topic: str = "", exclude_internal: bool = False,
     ) -> int:
         where, params = self._news_article_filter(
-            user_id, source_id, (q or "").strip(), unread=unread, topic=topic
+            user_id, source_id, (q or "").strip(), unread=unread, topic=topic,
+            exclude_internal=exclude_internal,
         )
         params = [user_id, *params]
         rows = self._rows(
@@ -3885,12 +4017,15 @@ class DB:
     )
 
     def get_news_article(
-        self, article_id: int, user_id: int | None = None
+        self, article_id: int, user_id: int | None = None, *, exclude_internal: bool = False
     ) -> dict | None:
         sql = self._NEWS_ARTICLE_VISIBLE + " AND a.id = ?"
         params: list[object] = [article_id]
         if user_id is not None:
             sql += " AND s.enabled = 1"
+        # article_id 是自增的、可枚举，不挡住就等于把内部源的文章公开出去
+        if exclude_internal:
+            sql += " AND s.internal = 0"
         rows = self._rows(sql, params)
         return self._normalize_news_article(rows[0]) if rows else None
 
@@ -3965,10 +4100,16 @@ class DB:
             self._conn.commit()
             return cur.rowcount > 0
 
+    # 内部源超过这么久没有新内容就认为推送停了（推送端是每 30 分钟一轮）
+    _INTERNAL_FRESH_HOURS = 6
+
     def news_source_statuses(self, user_id: int) -> list[dict]:
         statuses = []
         for source_id in self.list_user_news_source_ids(user_id):
             source = self.get_news_source(source_id)
+            if int(source.get("internal") or 0):
+                statuses.append(self._internal_source_status(source))
+                continue
             feeds = self.list_news_feeds(source_id)
             enabled_feeds = [feed for feed in feeds if feed["enabled"]]
             successes = [feed["last_success_at"] for feed in enabled_feeds if feed["last_success_at"]]
@@ -3986,6 +4127,28 @@ class DB:
                 "last_success_at": max(successes) if successes else None,
             })
         return statuses
+
+    def _internal_source_status(self, source: dict) -> dict:
+        """内部源的占位 feed 不参与轮询，但它的 last_success_at 会被 webhook 更新成到达时间。
+
+        按 feed 的 enabled 判会让它永远显示「已暂停」，这里只看那个时间戳。
+        不拿文章时间判是刻意的：栏目当天没更新 ≠ 推送链路断了。
+        """
+        feeds = self.list_news_feeds(source["id"])
+        last = max((f["last_success_at"] for f in feeds if f["last_success_at"]), default=None)
+        fresh = False
+        if last:
+            try:
+                fresh = (
+                    datetime.now(UTC) - datetime.fromisoformat(last)
+                ) < timedelta(hours=self._INTERNAL_FRESH_HOURS)
+            except (TypeError, ValueError):
+                fresh = False
+        return {
+            "id": source["id"],
+            "code": "ok" if (source["enabled"] and fresh) else "paused",
+            "last_success_at": last,
+        }
 
     # ---- Subscription ----
     def add_subscription(self, user_id: int, kol_id: int, type: str = "post") -> bool:
@@ -4271,6 +4434,7 @@ class DB:
             "s.name AS source_name FROM news_articles a "
             "JOIN news_sources s ON s.id = a.source_id "
             "WHERE a.fetched_at >= ? AND s.archived_at IS NULL "
+            "AND s.internal = 0 "  # 内部源的内容不进关键词通知
             "ORDER BY a.fetched_at DESC, a.id DESC LIMIT ?",
             (since, max(1, min(int(limit), 800))),
         )

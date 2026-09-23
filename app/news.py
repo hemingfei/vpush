@@ -467,8 +467,12 @@ class NewsService:
                 accepted.append(feed["id"])
         return accepted
 
-    def fetch_image(self, article_id: int, index: int, user_id: int) -> tuple[bytes, str]:
-        article = self.db.get_news_article(article_id, user_id=user_id)
+    def fetch_image(
+        self, article_id: int, index: int, user_id: int, *, exclude_internal: bool = False
+    ) -> tuple[bytes, str]:
+        article = self.db.get_news_article(
+            article_id, user_id=user_id, exclude_internal=exclude_internal
+        )
         if not article:
             raise NewsNotFound("文章不存在")
         try:

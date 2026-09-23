@@ -369,6 +369,9 @@ def test_news_disabled_cache_archived_detail_and_image_headers(monkeypatch):
     sources = client.get("/api/news/sources", headers=headers).json()["items"]
     paused = next(row for row in sources if row["id"] == source_id)
     assert paused["enabled"] is False and paused["selected"] is True
+    db.set_setting("news_select_new_sources_v1", "1")
+    sources = client.get("/api/news/sources", headers=headers).json()["items"]
+    assert all(row["id"] != source_id for row in sources)
     assert client.get(f"/api/news/{article_id}", headers=headers).status_code == 404
     assert client.get(f"/api/news?source_id={source_id}", headers=headers).status_code == 400
     assert client.get(f"/api/news/{article_id}/images/0", headers=headers).status_code == 404

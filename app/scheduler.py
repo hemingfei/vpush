@@ -2315,6 +2315,12 @@ class Scheduler:
 
     async def _maintenance_pass(self) -> None:
         try:
+            added = await asyncio.to_thread(self.db.backfill_new_news_sources)
+            if added:
+                logger.info("已为全部用户勾选新资讯源 count=%s", added)
+        except Exception:  # noqa: BLE001
+            logger.exception("新资讯源回填失败")
+        try:
             await asyncio.to_thread(self._submit_news_due)
         except Exception:  # noqa: BLE001
             logger.exception("财经新闻调度异常")

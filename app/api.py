@@ -60,7 +60,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import auth, kol_requests, user_quota, wechat
+from . import auth, kol_requests, user_quota, wechat, xincai
 from .avatar_cache import cache_avatar
 from .bot_core import BIND_CODE_TTL, new_bind_code
 from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge, user_plain_secret
@@ -2459,13 +2459,20 @@ def create_api_router(
             raise HTTPException(status_code=400, detail="时间不能晚于当前时间")
         return value.astimezone(UTC).isoformat()
 
+    def _exclude_internal_news(user: dict) -> bool:
+        # 回填完成前普通用户仍看不到内部源。
+        return not user.get("is_admin") and db.get_setting("news_select_new_sources_v1") != "1"
+
     @router.get("/news/sources")
     def news_sources(user: dict = Depends(get_current_user)):
         selected_ids = set(db.list_user_news_source_ids(user["id"]))
         statuses = {row["id"]: row for row in db.news_source_statuses(user["id"])}
         unread_by_source = db.unread_news_counts_by_source(user["id"])
         items = []
-        for source in db.list_news_sources():
+        hide_paused = db.get_setting("news_select_new_sources_v1") == "1"
+        for source in db.list_news_sources(exclude_internal=_exclude_internal_news(user)):
+            if hide_paused and not source["enabled"]:
+                continue
             status = statuses.get(source["id"], {"code": "paused", "last_success_at": None})
             items.append({
                 "id": source["id"],
@@ -2494,14 +2501,17 @@ def create_api_router(
         topic: str = Query("", max_length=20),
         user: dict = Depends(get_current_user),
     ):
+        hide_internal = _exclude_internal_news(user)
         if source_id is not None:
             browse = db.get_news_source(source_id)
             if browse is None or browse["archived_at"] or not browse["enabled"]:
                 raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
+            if int(browse["internal"] or 0) and hide_internal:
+                raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
         view_started_at = datetime.now(UTC).isoformat()
         rows = db.list_news_articles(
             user["id"], source_id=source_id, q=q, limit=limit, offset=offset,
-            unread=unread, topic=topic.strip(),
+            unread=unread, topic=topic.strip(), exclude_internal=hide_internal,
         )
         items = []
         for row in rows:
@@ -2509,7 +2519,8 @@ def create_api_router(
             row["is_new"] = not row["is_read"]
             items.append(row)
         total = db.count_news_articles(
-            user["id"], source_id=source_id, q=q, unread=unread, topic=topic.strip()
+            user["id"], source_id=source_id, q=q, unread=unread, topic=topic.strip(),
+            exclude_internal=hide_internal,
         )
         return {
             "items": items,
@@ -2549,14 +2560,18 @@ def create_api_router(
 
     @router.post("/news/{article_id}/read")
     def mark_news_article_read(article_id: int, user: dict = Depends(get_current_user)):
-        if db.get_news_article(article_id, user_id=user["id"]) is None:
+        if db.get_news_article(
+            article_id, user_id=user["id"], exclude_internal=_exclude_internal_news(user)
+        ) is None:
             raise HTTPException(status_code=404, detail="文章不存在")
         db.mark_news_article_read(user["id"], article_id)
         return {"ok": True}
 
     @router.get("/news/{article_id}")
     def news_article(article_id: int, user: dict = Depends(get_current_user)):
-        article = db.get_news_article(article_id, user_id=user["id"])
+        article = db.get_news_article(
+            article_id, user_id=user["id"], exclude_internal=_exclude_internal_news(user)
+        )
         if article is None:
             raise HTTPException(status_code=404, detail="文章不存在")
         article.pop("images", None)
@@ -2575,7 +2590,7 @@ def create_api_router(
     ):
         try:
             body, content_type = _news_service_or_503().fetch_image(
-                article_id, index, user["id"]
+                article_id, index, user["id"], exclude_internal=_exclude_internal_news(user)
             )
         except NewsNotFound:
             raise HTTPException(status_code=404, detail="图片不存在") from None
@@ -2592,6 +2607,24 @@ def create_api_router(
         if if_none_match and if_none_match.strip() == etag:
             return Response(status_code=304, headers=headers)
         return Response(content=body, media_type=content_type, headers=headers)
+
+    # ---- 心裁阅读器 webhook ----
+    # 机器对机器：共享令牌鉴权，不走用户会话，也不经 url_safety——
+    # 内容是阅读器主动送来的，本服务不需要出网去取，因此没有 SSRF 面。
+    @router.post("/xincai/ingest")
+    def xincai_ingest(body: dict, authorization: str | None = Header(None)):
+        expected = os.environ.get("XINCAI_INGEST_TOKEN", "").strip()
+        if not expected:
+            raise HTTPException(status_code=503, detail="未配置 XINCAI_INGEST_TOKEN")
+        token = ""
+        if authorization and authorization.startswith("Bearer "):
+            token = authorization[7:]
+        if not token or not secrets.compare_digest(token, expected):
+            raise HTTPException(status_code=401, detail="令牌无效")
+        try:
+            return xincai.ingest_articles(db, body)
+        except xincai.XincaiIngestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
     # ---- 管理员财经新闻 ----
     def _admin_news_source_row(source: dict, include_archived: bool = True) -> dict:
