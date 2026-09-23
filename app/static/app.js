@@ -3524,11 +3524,26 @@ function cookieRepairItems(s) {
     items.push({ key: "wb-bad", label: "微博登录态失效，可扫码续期" });
   }
   const tw = s.twitter_cookie || {};
+  const twCh = src.twitter?.channels || {};
   const twReason = src.twitter?.direct_fallback_reason || src.twitter?.last_error || "";
-  if (hasTw && src.twitter?.direct_mode === "fallback" && /cookie|401|403|89|32|未配置|twitter/i.test(twReason)) {
-    items.push({ key: "x-bad", label: "X Cookie 可能失效" });
-  } else if (hasTw && !tw.set) {
-    items.push({ key: "x-missing", label: "X Cookie 未写入" });
+  // 双通道：错误消息带通道标识（X GraphQL(app) / X GraphQL(cookie)），据此分辨到底
+  // 是哪条通道失效后再提示——两条通道的凭证与续期方式完全不同，混在一起会指错方向。
+  const xAppReady = !!(twCh.app_ready || twCh.mode === "app_only" || twCh.mode === "split");
+  if (hasTw && src.twitter?.direct_mode === "fallback") {
+    if (/GraphQL\(app\)/i.test(twReason) && /401|403|89|32|invalid|cookie/i.test(twReason)) {
+      items.push({ key: "x-app-bad", label: "X App 通道凭证可能失效" });
+    } else if (
+      /GraphQL\(cookie\)/i.test(twReason) &&
+      /401|403|89|32|未配置|cookie/i.test(twReason)
+    ) {
+      items.push({ key: "x-bad", label: "X Cookie 可能失效" });
+    } else if (!/GraphQL\((app|cookie)\)/i.test(twReason) && /cookie|401|403|89|32|未配置|twitter/i.test(twReason)) {
+      // 旧格式消息（无通道标识）或平台级错误：保留原有提示但不再断言是 Cookie
+      items.push({ key: "x-bad", label: "X 抓取异常，检查凭证与限流" });
+    }
+  }
+  if (hasTw && !tw.set && !xAppReady) {
+    items.push({ key: "x-missing", label: "X 凭证未写入" });
   }
   const hasZq = live.some((k) => k.platform === "zsxq");
   const zqCookie = s.zsxq_cookie || {};

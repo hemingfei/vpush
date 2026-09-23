@@ -286,6 +286,10 @@ export function createAdminDashboardView(dependencies) {
         </section>
         <section class="section-panel">
           <header class="section-head">
+            <div><h2 class="section-title">X 抓取通道</h2>
+            <p class="section-meta">${xChannelSummary(s.x_channels || {})}</p></div>
+          </header>
+          <header class="section-head">
             <div><h2 class="section-title">X Cookie</h2>
             <p class="section-meta">${cookieUpdatedLabel(tw)}${tw.preview ? ` · 预览 ${escapeHtml(tw.preview)}` : ""}。登录 x.com → F12 → Application → Cookies，复制整串（需含 auth_token 与 ct0），保存即时生效。</p></div>
           </header>
@@ -311,6 +315,36 @@ export function createAdminDashboardView(dependencies) {
     }
     switchStatsTab(statsTabFromHash());
     return true;
+  }
+
+  // X 抓取通道总览文案：模式 / 分流覆盖 / 429 冷却 / 凭证就位情况。
+  // 两条通道的凭证来源与续期方式不同，后台必须分得清，否则排查会指错方向。
+  function xChannelSummary(ch) {
+    if (!ch || !ch.mode) return "正在加载通道状态…";
+    const split = ch.split || {};
+    const cs = ch.channels || {};
+    const cool = [];
+    if (cs.app?.cooling) {
+      cool.push(`App 通道 429 冷却 ${Math.round((cs.app.cooling_left_seconds || 0) / 60)} 分钟`);
+    }
+    if (cs.cookie?.cooling) {
+      cool.push(`Cookie 通道 429 冷却 ${Math.round((cs.cookie.cooling_left_seconds || 0) / 60)} 分钟`);
+    }
+    let mode;
+    if (ch.mode === "split") {
+      mode = `双通道分流 —— App ${split.app || 0} 个 / Cookie ${split.cookie || 0} 个`
+        + "（两侧配额在服务端独立计数，容量约翻倍）";
+    } else if (ch.mode === "app_only") {
+      mode = `仅 App 通道 —— 全部 ${ch.kol_total || 0} 个大V（Cookie 未配置）`;
+    } else {
+      mode = `仅 Cookie 通道 —— 全部 ${ch.kol_total || 0} 个大V（App 凭证未配置）`;
+    }
+    const creds = [];
+    if (ch.app_ready) creds.push(`App 凭证已配置（${ch.app_token_len || 0} 字符）`);
+    if (ch.cookie_ready) creds.push(`Cookie 已配置（${ch.cookie_len || 0} 字符）`);
+    const coolTail = cool.length ? `　·　${cool.join("；")}` : "";
+    const credTail = creds.length ? `　·　${creds.join("　·　")}` : "";
+    return `${mode}${coolTail}${credTail}`;
   }
 
   function imgbedSettingsHtml(info) {

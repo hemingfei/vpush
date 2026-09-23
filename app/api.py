@@ -81,6 +81,7 @@ from .fetchers.twitter import (
     TWITTER_COOKIE_KEY,
     TWITTER_COOKIE_TIME_KEY,
     resolve_x_profile,
+    x_channel_overview,
 )
 from .fetchers.weibo import WEIBO_COOKIE_KEY, resolve_weibo_profile
 from .fetchers.xueqiu import (
@@ -5979,6 +5980,8 @@ def create_api_router(
                 src["direct_fallback_reason"] = (
                     db.get_setting("x_direct_fallback_reason") or ""
                 )
+                # 双通道总览：模式 / 两侧凭证 / 分流覆盖 / 429 冷却，供后台展示与健康判据
+                src["channels"] = x_channel_overview(db)
             sources.append(src)
         xueqiu_cookie = db.get_setting("xueqiu_cookie") or ""
         xueqiu_updated = db.get_setting("xueqiu_cookie_updated_at") or ""
@@ -6060,6 +6063,7 @@ def create_api_router(
                 "preview": "已配置" if weibo_cookie else "",
             },
             "twitter_cookie": twitter_status,
+            "x_channels": x_channel_overview(db),
             "zsxq_cookie": zsxq_status,
             "ima_credentials": {
                 "mode": ("openapi" if (db.get_setting(IMA_CLIENT_ID_KEY) or os.environ.get("IMA_OPENAPI_CLIENTID", "")) and (db.get_setting(IMA_API_KEY_KEY) or os.environ.get("IMA_OPENAPI_APIKEY", "")) else ("cookie" if db.get_setting(IMA_COOKIE_KEY) or os.environ.get("IMA_COOKIE", "") else "none")),

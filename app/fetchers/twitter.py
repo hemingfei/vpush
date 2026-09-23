@@ -146,6 +146,62 @@ def _mark_channel_cooling(channel: str) -> None:
         _channel_until[channel] = time.time() + CHANNEL_COOLDOWN
 
 
+def channel_runtime_status() -> dict:
+    """两条通道的运行时状态（供后台展示）：是否处于 429 冷却、还剩多久。"""
+    now = time.time()
+    with _channel_lock:
+        snapshot = dict(_channel_until)
+    out: dict[str, dict] = {}
+    for ch in ("app", "cookie"):
+        until = snapshot.get(ch, 0.0)
+        out[ch] = {
+            "cooling": now < until,
+            "cooling_left_seconds": max(0, int(until - now)),
+        }
+    return out
+
+
+def x_channel_overview(db) -> dict:
+    """后台用：X 抓取通道总览（模式 / 凭证 / 分流覆盖 / 冷却）。
+
+    模式与 `_channel_for` 的退化逻辑保持一致——凭证不全时不分流，
+    否则后台显示的分布会和实际抓取对不上。
+    """
+    app_auth = configured_x_app_auth(db)
+    cookie = configured_twitter_cookie(db)
+    kols: list[dict] = []
+    if db is not None:
+        with contextlib.suppress(Exception):  # noqa: BLE001 - 总览失败不影响状态接口
+            kols = db.list_kols("twitter") or []
+
+    if app_auth and cookie:
+        mode = "split"
+    elif app_auth:
+        mode = "app_only"
+    else:
+        mode = "cookie_only"
+
+    split = {"app": 0, "cookie": 0}
+    for k in kols:
+        if mode == "split":
+            split["app" if int(k.get("id") or 0) % 2 else "cookie"] += 1
+        elif mode == "app_only":
+            split["app"] += 1
+        else:
+            split["cookie"] += 1
+
+    return {
+        "mode": mode,
+        "app_ready": bool(app_auth),
+        "cookie_ready": bool(cookie),
+        "app_token_len": len(app_auth[0]) if app_auth else 0,
+        "cookie_len": len(cookie),
+        "kol_total": len(kols),
+        "split": split,
+        "channels": channel_runtime_status(),
+    }
+
+
 # ---------------------------------------------------------------- App 身份通道（OAuth1）
 # 走 X Android 客户端的 api.x.com/graphql：不需要浏览器 TLS 指纹，不需要
 # x-client-transaction-id，凭证是 OAuth1（不随 web session 回收而失效）。
@@ -662,7 +718,7 @@ class TwitterFetcher(Fetcher):
             json={"variables": variables, "features": FEATURES},
             headers=_app_headers("POST", url, params, app_auth),
         )
-        return self._parse_graphql(operation, resp)
+        return self._parse_graphql(operation, resp, channel="app")
 
     def _graphql_web(self, operation: str, variables: dict, cookie: str) -> dict:
         """Cookie 通道：x.com/i/api/graphql + 浏览器指纹。"""
@@ -677,11 +733,17 @@ class TwitterFetcher(Fetcher):
             json={"variables": variables, "features": FEATURES},
             headers=_auth_headers(cookie),
         )
-        return self._parse_graphql(operation, resp)
+        return self._parse_graphql(operation, resp, channel="cookie")
 
     @staticmethod
-    def _parse_graphql(operation: str, resp) -> dict:
-        """两通道共用的响应校验：非 200 与 GraphQL errors 的分流提示。"""
+    def _parse_graphql(operation: str, resp, channel: str = "") -> dict:
+        """两通道共用的响应校验：非 200 与 GraphQL errors 的分流提示。
+
+        channel 会写进异常消息（形如 `X GraphQL(app) UserTweets HTTP 401`），
+        便于从 source_events / 后台一眼看出是哪条通道失败——两条通道的凭证
+        与失效原因完全不同，不区分就会指错排查方向。
+        """
+        tag = f"({channel})" if channel else ""
         if resp.status_code != 200:
             detail = ""
             with contextlib.suppress(Exception):  # noqa: BLE001 - 非 JSON 响应体忽略
@@ -700,19 +762,21 @@ class TwitterFetcher(Fetcher):
                         detail = f" {str(msg)[:80]}"
             if resp.status_code in (400, 404):
                 raise QueryIdExpiredError(
-                    f"X GraphQL {operation} HTTP {resp.status_code}{detail}"
+                    f"X GraphQL{tag} {operation} HTTP {resp.status_code}{detail}"
                     "（可能 X 轮换了 GraphQL queryId，需更新 DEFAULT_QUERY_IDS）"
                 )
-            raise RuntimeError(f"X GraphQL {operation} HTTP {resp.status_code}{detail}")
+            raise RuntimeError(
+                f"X GraphQL{tag} {operation} HTTP {resp.status_code}{detail}"
+            )
         data = resp.json()
         if data.get("errors"):
             msg = str(data["errors"][0].get("message", data["errors"]))
             if "queryid" in msg.lower() or "invalidrequest" in msg.lower():
                 raise QueryIdExpiredError(
-                    f"X GraphQL {operation} 错误: {msg}"
+                    f"X GraphQL{tag} {operation} 错误: {msg}"
                     "（可能 X 轮换了 GraphQL queryId，需更新 DEFAULT_QUERY_IDS）"
                 )
-            raise RuntimeError(f"X GraphQL {operation} 错误: {msg}")
+            raise RuntimeError(f"X GraphQL{tag} {operation} 错误: {msg}")
         return data
 
     def _maybe_probe_query_id(self, cookie: str) -> None:
