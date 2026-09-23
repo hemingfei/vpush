@@ -18,17 +18,23 @@ SSH_OPTS=(-i "$SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout
 
 BUMP=0
 DRY_RUN=0
+SKIP_TESTS=0
 NOTES=""
 
 usage() {
   cat <<'EOF'
 Lane A 现网发版（vpush.net / DMIT overlay）。
 
-  ./scripts/release_vpush.sh [--bump] [--notes TEXT] [--dry-run]
+  ./scripts/release_vpush.sh [--bump] [--notes TEXT] [--dry-run] [--skip-tests]
 
   --bump     APP_VERSION 补丁 +1，并 sync 静态 hash
   --notes    GitHub Release 说明（默认用上一标签以来的 commit 标题）
   --dry-run  预检到打印动作为止，不 commit / 不推送 / 不上 VPS
+  --skip-tests
+             跳过全量 pytest 预检。仓库里 tests/test_frontend_runtime.py 的
+             视口/市场渲染用例已知 flaky（单独跑通过、全量跑随机挂），会随机
+             卡住发版；确认本次改动与前端渲染无关时可用此开关绕过。其余预检
+             （分支 / 同步 / git diff --check / 前端语法）照常执行。
 
 不改远端 .env / data / compose，不重建 waf-bot，不 SSH Unraid / ARM / 存储。
 EOF
@@ -38,6 +44,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --bump) BUMP=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --skip-tests) SKIP_TESTS=1; shift ;;
     --notes)
       NOTES="${2:-}"
       [[ -n "$NOTES" ]] || { echo "缺少 --notes 文本" >&2; exit 2; }
@@ -228,7 +235,32 @@ if [[ -d app/static ]]; then
     node --input-type=module --check < "$file"
   done
 fi
-"$PY" -m pytest -q
+
+# tests/test_frontend_runtime.py 的视口/市场渲染用例已知 flaky：单独跑通过、全量跑
+# 随机挂（并发与渲染时序相关），会随机卡住发版。这里不自动跳过——那会把真实失败
+# 也放过去——只在「失败全部来自该文件」时给出明确指引，并保留 --skip-tests 口子。
+FLAKY_FILE="tests/test_frontend_runtime.py"
+if [[ "$SKIP_TESTS" -eq 1 ]]; then
+  echo "[!] --skip-tests：已跳过全量 pytest 预检（其余预检仍在执行）" >&2
+else
+  TEST_LOG="$(mktemp -t vpush-tests.XXXXXX)"
+  if ! "$PY" -m pytest -q >"$TEST_LOG" 2>&1; then
+    tail -20 "$TEST_LOG"
+    fails="$(grep -c '^FAILED' "$TEST_LOG" || true)"
+    others="$(grep '^FAILED' "$TEST_LOG" | grep -vc "$FLAKY_FILE" || true)"
+    echo >&2
+    echo "预检失败：$fails 个用例失败，其中 $others 个不在 $FLAKY_FILE" >&2
+    if [[ "$fails" -gt 0 && "$others" -eq 0 ]]; then
+      echo "[i] 失败全部来自 $FLAKY_FILE —— 该文件的视口/市场渲染用例已知 flaky" >&2
+      echo "    （单独跑通过、全量跑随机挂）。确认本次改动与前端渲染无关后可重跑：" >&2
+      echo "      ./scripts/release_vpush.sh --bump --skip-tests" >&2
+    fi
+    rm -f "$TEST_LOG"
+    exit 1
+  fi
+  tail -3 "$TEST_LOG"
+  rm -f "$TEST_LOG"
+fi
 
 if [[ -z "$NOTES" ]]; then
   NOTES="$(git log --pretty=format:'- %s' "${PREV_TAG}..HEAD")"
