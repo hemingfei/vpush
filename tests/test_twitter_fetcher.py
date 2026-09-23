@@ -1,3 +1,5 @@
+import time
+
 import httpx
 import pytest
 
@@ -1171,3 +1173,576 @@ def test_twitter_fetch_retweet_of_quote_includes_quoted(monkeypatch):
     assert "I resigned from Anthropic today." in posts[0].content
     assert "RT @hilbertspaess:" in posts[0].content
     assert posts[0].images == ["https://pbs.twimg.com/q.jpg"]
+
+
+# ---------------------------------------------------------------- App 身份通道（OAuth1）
+
+
+def _enable_app_channel(db, token="tok", secret="sec"):
+    db.set_setting("x_auth_mode", "oauth1")
+    db.set_setting("x_oauth_token", token)
+    db.set_setting("x_oauth_token_secret", secret)
+
+
+def test_configured_x_app_auth_requires_mode_and_creds(monkeypatch):
+    """默认走 Cookie 通道；只有 oauth1 模式且凭证齐全才启用 App 通道。"""
+    from app.fetchers.twitter import configured_x_app_auth
+
+    for var in ("X_AUTH_MODE", "X_OAUTH_TOKEN", "X_OAUTH_TOKEN_SECRET"):
+        monkeypatch.delenv(var, raising=False)
+    db = DB(":memory:")
+
+    assert configured_x_app_auth(db) is None  # 未启用
+    db.set_setting("x_auth_mode", "oauth1")
+    assert configured_x_app_auth(db) is None  # 启用但无凭证
+    db.set_setting("x_oauth_token", "tok")
+    assert configured_x_app_auth(db) is None  # 仍缺 secret
+    db.set_setting("x_oauth_token_secret", "sec")
+    assert configured_x_app_auth(db) == ("tok", "sec")
+
+
+def test_configured_x_app_auth_env_fallback(monkeypatch):
+    """db 无配置时回退环境变量。"""
+    from app.fetchers.twitter import configured_x_app_auth
+
+    monkeypatch.setenv("X_AUTH_MODE", "oauth1")
+    monkeypatch.setenv("X_OAUTH_TOKEN", "envtok")
+    monkeypatch.setenv("X_OAUTH_TOKEN_SECRET", "envsec")
+    assert configured_x_app_auth(DB(":memory:")) == ("envtok", "envsec")
+
+
+def test_oauth1_signature_is_spec_conformant():
+    """签名可被独立按 OAuth1 HMAC-SHA1 规范复算出来。"""
+    import base64
+    import hashlib
+    import hmac
+    from urllib.parse import quote
+
+    from app.fetchers.twitter import (
+        APP_CONSUMER_KEY,
+        APP_CONSUMER_SECRET,
+        _oauth1_sign,
+    )
+
+    url = "https://api.x.com/graphql/abc/UserTweets"
+    params = {"variables": '{"userId":"1"}', "features": "{}"}
+    header = _oauth1_sign("POST", url, params, "tok", "sec")
+    assert header.startswith("OAuth ")
+
+    fields = {}
+    for chunk in header[len("OAuth ") :].split(","):
+        key, _, value = chunk.strip().partition("=")
+        fields[key] = value.strip('"')
+
+    assert fields["oauth_consumer_key"] == APP_CONSUMER_KEY
+    assert fields["oauth_token"] == "tok"
+    assert fields["oauth_signature_method"] == "HMAC-SHA1"
+    assert fields["oauth_version"] == "1.0"
+
+    oauth_params = {k: v for k, v in fields.items() if k != "oauth_signature"}
+    signing = "&".join(
+        f"{quote(str(k), safe='')}={quote(str(v), safe='')}"
+        for k, v in sorted({**params, **oauth_params}.items())
+    )
+    base = f"POST&{quote(url, safe='')}&{quote(signing, safe='')}"
+    key = f"{quote(APP_CONSUMER_SECRET, safe='')}&{quote('sec', safe='')}"
+    expected = base64.b64encode(
+        hmac.new(key.encode(), base.encode(), hashlib.sha1).digest()
+    ).decode()
+    # header 里所有 oauth_* 值按 RFC 3986 百分号编码（+ → %2B，= → %3D），
+    # 服务端接受该形态（实测 2026-09：api.x.com 返回 200）。
+    assert fields["oauth_signature"] == quote(expected, safe="")
+
+
+def test_app_channel_graphql_targets_api_x_com(monkeypatch):
+    """启用 App 通道后请求打 api.x.com，并携带 OAuth1 Authorization。"""
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    seen = {}
+
+    def handler(request):
+        seen["host"] = request.url.host
+        seen["auth"] = request.headers.get("authorization", "")
+        seen["ua"] = request.headers.get("user-agent", "")
+        return httpx.Response(200, json=_timeline_response())
+
+    db = DB(":memory:")
+    _enable_app_channel(db)
+    fetcher = _make_fetcher(handler, db)
+    fetcher._graphql("UserTweets", {"userId": "1", "count": 20}, "")
+
+    assert seen["host"] == "api.x.com"
+    assert seen["auth"].startswith("OAuth ")
+    assert seen["ua"].startswith("TwitterAndroid/")
+
+
+def test_app_channel_fetch_without_cookie(monkeypatch):
+    """App 通道下没有 Cookie 也能完成抓取（不再报「未配置 X Cookie」）。"""
+    monkeypatch.delenv("TWITTER_COOKIE", raising=False)
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+
+    def handler(request):
+        if "UserByScreenName" in str(request.url):
+            return httpx.Response(200, json=_user_response())
+        if "UserTweets" in str(request.url):
+            return httpx.Response(200, json=_timeline_response())
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    _enable_app_channel(db)
+    kid = db.add_kol("twitter", "SemiAnalysis", "https://x.com/SemiAnalysis_")
+    fetcher = _make_fetcher(handler, db)
+    posts = fetcher.fetch(db.get_kol(kid))
+
+    assert [p.external_id for p in posts] == ["111", "222", "333"]
+
+
+def test_cookie_channel_unchanged_when_app_channel_off(monkeypatch):
+    """未启用 App 通道时仍走 x.com + Bearer，行为与改造前一致。"""
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    seen = {}
+
+    def handler(request):
+        seen["host"] = request.url.host
+        seen["auth"] = request.headers.get("authorization", "")
+        return httpx.Response(200, json=_timeline_response())
+
+    db = DB(":memory:")
+    fetcher = _make_fetcher(handler, db)
+    fetcher._graphql("UserTweets", {"userId": "1", "count": 20}, "auth_token=a; ct0=b")
+
+    assert seen["host"] == "x.com"
+    assert seen["auth"].startswith("Bearer ")
+
+
+# ------------------------------------------------- 空 timeline（服务端降级）防护
+
+
+def _empty_timeline_response():
+    """实测 2026-09 捕获的降级响应形态。
+
+    特征：HTTP 200、result 只有 __typename + timeline（缺 legacy/core）、
+    TimelineAddEntries 里只有一个 cursor 条目，没有任何推文。
+    """
+    return {
+        "data": {
+            "user": {
+                "result": {
+                    "__typename": "User",
+                    "timeline": {
+                        "timeline": {
+                            "instructions": [
+                                {"type": "TimelineClearCache", "entries": []},
+                                {
+                                    "type": "TimelineAddEntries",
+                                    "entries": [
+                                        {
+                                            "entryId": "cursor-bottom-0",
+                                            "content": {
+                                                "__typename": "TimelineTimelineCursor",
+                                                "entryType": "TimelineTimelineCursor",
+                                                "cursorType": "Bottom",
+                                                "value": "x",
+                                            },
+                                        }
+                                    ],
+                                },
+                            ],
+                            "metadata": {},
+                        }
+                    },
+                }
+            }
+        }
+    }
+
+
+def _noop_sleep(monkeypatch):
+    from app.fetchers import twitter as tw_mod
+
+    monkeypatch.setattr(tw_mod.time, "sleep", lambda _s: None)
+
+
+def test_empty_timeline_retries_once_then_succeeds(monkeypatch):
+    """首次空 timeline 应重试一次，而不是当作「没有新帖」静默丢数据。"""
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    _noop_sleep(monkeypatch)
+    calls = {"timeline": 0}
+
+    def handler(request):
+        if "UserByScreenName" in str(request.url):
+            return httpx.Response(200, json=_user_response())
+        if "UserTweets" in str(request.url):
+            calls["timeline"] += 1
+            if calls["timeline"] == 1:
+                return httpx.Response(200, json=_empty_timeline_response())
+            return httpx.Response(200, json=_timeline_response())
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    kid = db.add_kol("twitter", "SemiAnalysis", "https://x.com/SemiAnalysis_")
+    fetcher = _make_fetcher(handler, db)
+    posts = fetcher.fetch(db.get_kol(kid))
+
+    assert calls["timeline"] == 2
+    assert [p.external_id for p in posts] == ["111", "222", "333"]
+
+
+def test_empty_timeline_twice_raises_instead_of_marking_ok(monkeypatch):
+    """连续两次空 timeline 必须抛错——否则会写 x_direct_last_ok_at 掩盖故障。"""
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    _noop_sleep(monkeypatch)
+
+    def handler(request):
+        if "UserByScreenName" in str(request.url):
+            return httpx.Response(200, json=_user_response())
+        if "UserTweets" in str(request.url):
+            return httpx.Response(200, json=_empty_timeline_response())
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    kid = db.add_kol("twitter", "SemiAnalysis", "https://x.com/SemiAnalysis_")
+    fetcher = _make_fetcher(handler, db)
+
+    with pytest.raises(RuntimeError, match="空时间线"):
+        fetcher.fetch(db.get_kol(kid))
+    assert not db.get_setting("x_direct_last_ok_at")
+
+
+def test_collect_timeline_tweets_raises_on_unavailable_user():
+    """UserUnavailable 仍按「用户不存在/停用」报错，不进入重试路径。"""
+    from app.fetchers.twitter import _collect_timeline_tweets
+
+    data = {"data": {"user": {"result": {"__typename": "UserUnavailable"}}}}
+    with pytest.raises(RuntimeError, match="不存在或已停用"):
+        _collect_timeline_tweets(data, "ghost")
+
+
+# ------------------------------------------------- queryId 主动探测
+
+
+def _reset_probe(monkeypatch):
+    from app.fetchers import twitter as tw_mod
+
+    monkeypatch.setattr(tw_mod, "_probe_at", 0.0)
+    monkeypatch.setattr(tw_mod, "_probe_error_until", 0.0)
+
+
+def test_query_id_probe_alerts_when_expired(monkeypatch):
+    """探测到 400（queryId 失效）时写 source_event 告警，并进入冷却。"""
+    from app.fetchers import twitter as tw_mod
+
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    _reset_probe(monkeypatch)
+
+    db = DB(":memory:")
+    fetcher = _make_fetcher(lambda _r: httpx.Response(400, json={"errors": []}), db)
+    fetcher._maybe_probe_query_id("auth_token=a; ct0=b")
+
+    assert any("queryId" in str(e) for e in db.recent_source_events(10))
+    assert tw_mod._probe_at == 0.0  # 失败不更新「上次成功」
+    assert tw_mod._probe_error_until > 0  # 已进入冷却
+
+
+def test_query_id_probe_ignores_429(monkeypatch):
+    """429 只是限流，不代表 queryId 失效——不得写 queryId 告警。"""
+    from app.fetchers import twitter as tw_mod
+
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    _reset_probe(monkeypatch)
+
+    db = DB(":memory:")
+    fetcher = _make_fetcher(
+        lambda _r: httpx.Response(429, json={"errors": [{"message": "Rate limit"}]}), db
+    )
+    fetcher._maybe_probe_query_id("auth_token=a; ct0=b")
+
+    assert not any("queryId" in str(e) for e in db.recent_source_events(10))
+    assert tw_mod._probe_error_until > 0  # 仍然节流，避免每次抓取都探
+
+
+def test_query_id_probe_success_then_skips_within_ttl(monkeypatch):
+    """探测通过后记录时间戳，TTL 内不再重复请求。"""
+    from app.fetchers import twitter as tw_mod
+
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    _reset_probe(monkeypatch)
+    calls = {"n": 0}
+
+    def handler(_r):
+        calls["n"] += 1
+        return httpx.Response(200, json=_user_response())
+
+    db = DB(":memory:")
+    fetcher = _make_fetcher(handler, db)
+    fetcher._maybe_probe_query_id("auth_token=a; ct0=b")
+    assert calls["n"] == 1
+    assert tw_mod._probe_at > 0
+
+    _reset_probe(monkeypatch)
+    tw_mod._probe_at = time.time()  # 模拟 TTL 内
+    fetcher._maybe_probe_query_id("auth_token=a; ct0=b")
+    assert calls["n"] == 1  # 未再发请求
+
+
+def test_fetch_triggers_probe_without_breaking_crawl(monkeypatch):
+    """探测即使失败也不影响本轮抓取（不能因为探测把抓取拖挂）。"""
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    _reset_probe(monkeypatch)
+    probe_broken = {"on": True}
+
+    def handler(request):
+        url = str(request.url)
+        if "UserByScreenName" in url and "Twitter" in url and probe_broken["on"]:
+            return httpx.Response(400, json={"errors": [{"message": "Bad Request"}]})
+        if "UserByScreenName" in url:
+            return httpx.Response(200, json=_user_response())
+        if "UserTweets" in url:
+            return httpx.Response(200, json=_timeline_response())
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    kid = db.add_kol("twitter", "SemiAnalysis", "https://x.com/SemiAnalysis_")
+    fetcher = _make_fetcher(handler, db)
+    posts = fetcher.fetch(db.get_kol(kid))
+
+    assert [p.external_id for p in posts] == ["111", "222", "333"]
+    assert db.get_setting("x_direct_last_ok_at")  # 抓取照常成功
+
+
+# ------------------------------------------------- 按大V 分流两条通道
+
+
+def test_channel_for_splits_by_kol_id(monkeypatch):
+    """启用 App 通道后：奇数 id 走 app、偶数走 cookie；未启用时全走 cookie。"""
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    db = DB(":memory:")
+    fetcher = _make_fetcher(lambda _r: httpx.Response(404), db)
+
+    assert fetcher._channel_for({"id": 1}) == "cookie"  # 未启用 App → 全 cookie
+    assert fetcher._channel_for({"id": 2}) == "cookie"
+
+    _enable_app_channel(db)
+    assert fetcher._channel_for({"id": 1}) == "app"  # 奇数 → app
+    assert fetcher._channel_for({"id": 2}) == "cookie"  # 偶数 → cookie
+    assert fetcher._channel_for({"id": 3}) == "app"
+
+
+def test_split_routes_each_kol_to_its_own_host(monkeypatch):
+    """分流后：不同大V 的 UserTweets 打到不同 host，且各自稳定。"""
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    hits = []
+
+    def handler(request):
+        url = str(request.url)
+        if "UserByScreenName" in url:
+            hits.append(("UserByScreenName", request.url.host))
+            return httpx.Response(200, json=_user_response())
+        if "UserTweets" in url:
+            hits.append(("UserTweets", request.url.host))
+            return httpx.Response(200, json=_timeline_response())
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    _enable_app_channel(db)
+    kid_a = db.add_kol("twitter", "kol_odd", "https://x.com/SemiAnalysis_")
+    kid_b = db.add_kol("twitter", "kol_even", "https://x.com/elonmusk")
+    assert kid_a % 2 == 1 and kid_b % 2 == 0  # 前提：id 一奇一偶
+
+    fetcher = _make_fetcher(handler, db)
+    for kid in (kid_a, kid_b):
+        hits.clear()
+        fetcher.fetch(db.get_kol(kid))
+        tweets_hosts = {h for op, h in hits if op == "UserTweets"}
+        expect = "api.x.com" if kid % 2 else "x.com"
+        assert tweets_hosts == {expect}, f"kol {kid} → {tweets_hosts}"
+
+
+def test_prefer_cookie_overrides_app_channel(monkeypatch):
+    """prefer="cookie" 且 Cookie 可用时，即使 App 凭证就绪也走 Cookie 通道。"""
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    seen = {}
+
+    def handler(request):
+        seen["host"] = request.url.host
+        return httpx.Response(200, json=_timeline_response())
+
+    db = DB(":memory:")
+    _enable_app_channel(db)
+    fetcher = _make_fetcher(handler, db)
+    fetcher._graphql(
+        "UserTweets", {"userId": "1", "count": 20}, "auth_token=a; ct0=b", prefer="cookie"
+    )
+    assert seen["host"] == "x.com"
+
+
+def test_empty_cookie_never_uses_web_channel(monkeypatch):
+    """Cookie 为空时不得走 web 通道。
+
+    空 Cookie 打 x.com/i/api 会返回 200 但内容是陈旧推文（实测 2026-09 拿到
+    2020~2022 年的旧帖），静默给错数据比直接报错更危险，所以强制改走 App。
+    """
+    monkeypatch.delenv("TWITTER_COOKIE", raising=False)
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    seen = {}
+
+    def handler(request):
+        seen["host"] = request.url.host
+        return httpx.Response(200, json=_timeline_response())
+
+    db = DB(":memory:")
+    _enable_app_channel(db)
+    fetcher = _make_fetcher(handler, db)
+    # 显式 prefer="cookie" 但没给 cookie —— 也必须改走 App
+    fetcher._graphql("UserTweets", {"userId": "1", "count": 20}, "", prefer="cookie")
+    assert seen["host"] == "api.x.com"
+
+
+def test_channel_for_avoids_cookie_when_creds_missing(monkeypatch):
+    """没有 Cookie 凭证时，偶数 id 也不得分流到 web 通道。"""
+    monkeypatch.delenv("TWITTER_COOKIE", raising=False)
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    db = DB(":memory:")
+    _enable_app_channel(db)
+    fetcher = _make_fetcher(lambda _r: httpx.Response(404), db)
+
+    assert fetcher._channel_for({"id": 1}) == "app"
+    assert fetcher._channel_for({"id": 2}) == "app"  # 本该 cookie，但 cookie 缺失
+
+
+def test_prefer_app_falls_back_when_creds_missing(monkeypatch):
+    """prefer="app" 但 App 凭证缺失时静默回退 Cookie，不报错。"""
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    monkeypatch.delenv("X_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("X_OAUTH_TOKEN_SECRET", raising=False)
+    seen = {}
+
+    def handler(request):
+        seen["host"] = request.url.host
+        return httpx.Response(200, json=_timeline_response())
+
+    db = DB(":memory:")
+    fetcher = _make_fetcher(handler, db)
+    fetcher._graphql("UserTweets", {"userId": "1", "count": 20}, "", prefer="app")
+    assert seen["host"] == "x.com"  # 回退成功，未抛错
+
+
+# ------------------------------------------------- 通道间失败转移（解退避耦合）
+
+
+def _reset_channel_cooling(monkeypatch):
+    from app.fetchers import twitter as tw_mod
+
+    monkeypatch.setattr(tw_mod, "_channel_until", {})
+
+
+def _setup_split(monkeypatch):
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    _reset_channel_cooling(monkeypatch)
+    db = DB(":memory:")
+    _enable_app_channel(db)
+    return db
+
+
+def test_429_fails_over_to_other_channel(monkeypatch):
+    """一侧 429 时在 fetcher 内部换另一条通道，不把 429 抛给调度器。
+
+    否则 _is_platform_wide_error 会让整个 X 平台退避 15 分钟，
+    双通道的 2 倍容量就等于白买。
+    """
+    db = _setup_split(monkeypatch)
+    hosts = []
+
+    def handler(request):
+        hosts.append(request.url.host)
+        if request.url.host == "api.x.com":
+            return httpx.Response(429, json={"errors": [{"message": "Rate limit"}]})
+        return httpx.Response(200, json=_timeline_response())
+
+    fetcher = _make_fetcher(handler, db)
+    data = fetcher._graphql(
+        "UserTweets", {"userId": "1", "count": 20}, "auth_token=a; ct0=b", prefer="app"
+    )
+
+    assert hosts == ["api.x.com", "x.com"]  # 先 app，429 后转 cookie
+    assert "data" in data  # 最终拿到了数据，未上抛
+
+
+def test_429_on_both_channels_raises_for_platform_backoff(monkeypatch):
+    """两条通道都 429 才算平台级，此时抛出让调度器退避。"""
+    db = _setup_split(monkeypatch)
+
+    def handler(_request):
+        return httpx.Response(429, json={"errors": [{"message": "Rate limit"}]})
+
+    fetcher = _make_fetcher(handler, db)
+    with pytest.raises(RuntimeError, match="429"):
+        fetcher._graphql(
+            "UserTweets", {"userId": "1", "count": 20}, "auth_token=a; ct0=b", prefer="app"
+        )
+
+
+def test_single_channel_429_raises_unchanged(monkeypatch):
+    """只有一条通道时 429 原样抛出——单通道行为与改造前一致。"""
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    monkeypatch.delenv("X_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("X_OAUTH_TOKEN_SECRET", raising=False)
+    _reset_channel_cooling(monkeypatch)
+    hosts = []
+
+    def handler(request):
+        hosts.append(request.url.host)
+        return httpx.Response(429, json={"errors": [{"message": "Rate limit"}]})
+
+    db = DB(":memory:")
+    fetcher = _make_fetcher(handler, db)
+    with pytest.raises(RuntimeError, match="429"):
+        fetcher._graphql("UserTweets", {"userId": "1", "count": 20}, "auth_token=a; ct0=b")
+    assert hosts == ["x.com"]  # 没有备选通道，不会重复请求
+
+
+def test_non_429_error_does_not_failover(monkeypatch):
+    """401 等非限流错误不做通道切换（换通道也救不了鉴权失败）。"""
+    db = _setup_split(monkeypatch)
+    hosts = []
+
+    def handler(request):
+        hosts.append(request.url.host)
+        return httpx.Response(401, json={"errors": [{"message": "Unauthorized"}]})
+
+    fetcher = _make_fetcher(handler, db)
+    with pytest.raises(RuntimeError):
+        fetcher._graphql(
+            "UserTweets", {"userId": "1", "count": 20}, "auth_token=a; ct0=b", prefer="app"
+        )
+    assert hosts == ["api.x.com"]  # 只试了一条
+
+
+def test_cooling_channel_yields_to_the_other(monkeypatch):
+    """首选通道处于 429 冷却期时，_channel_for 临时让给另一条。"""
+    from app.fetchers import twitter as tw_mod
+
+    db = _setup_split(monkeypatch)
+    fetcher = _make_fetcher(lambda _r: httpx.Response(404), db)
+
+    assert fetcher._channel_for({"id": 1}) == "app"  # 奇数默认走 app
+    tw_mod._mark_channel_cooling("app")
+    assert fetcher._channel_for({"id": 1}) == "cookie"  # app 冷却 → 让给 cookie
+    assert fetcher._channel_for({"id": 2}) == "cookie"  # 偶数本来就走 cookie
+
+    tw_mod._mark_channel_cooling("cookie")
+    # 两条都冷却时保持原分流——切过去也一样是限流，没有意义
+    assert fetcher._channel_for({"id": 2}) == "cookie"
+    assert fetcher._channel_for({"id": 1}) == "app"

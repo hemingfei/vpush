@@ -1,24 +1,37 @@
 """X/Twitter 官方 GraphQL 直抓。
 
-直抓依赖登录 Cookie（TWITTER_COOKIE 里的 auth_token / ct0），调用 X 网页端同源
-GraphQL 接口：UserByScreenName（拿 userId/头像）+ UserTweets（拿时间线）。
-queryId 由 X 前端轮换，启动后每 6 小时自动从前端 main bundle 提取一次，
-提取失败时用内置默认值兜底；接口失败则抛出，由调度器告警并放慢采集。
+两条通道，由设置 `x_auth_mode` 选择：
 
-HTTP 客户端用 curl_cffi.Session；该对象非线程安全，生产同平台 2 并发共享
-fetcher，用 ThreadLocalClient 每线程懒建一个 session；外部注入的 client
-（测试 mock / 解析头像）直接复用。
+1. **Cookie 通道（默认）**——依赖登录 Cookie（TWITTER_COOKIE 里的 auth_token /
+   ct0），调用 X 网页端同源 GraphQL（x.com/i/api），配 curl_cffi 浏览器指纹。
+   queryId 由 X 前端轮换，每 6 小时自动从前端 main bundle 提取一次，失败时用
+   内置默认值兜底。
+
+2. **App 身份通道（`x_auth_mode=oauth1`）**——走 X Android 客户端的
+   api.x.com/graphql，用 OAuth1 签名（凭据 x_oauth_token / x_oauth_token_secret）。
+   不需要浏览器指纹、不需要 x-client-transaction-id，凭证也不随 web session
+   回收而失效；UserByScreenName 对第三方账号可直接解析，无需 typeahead 兜底。
+
+接口失败则抛出，由调度器告警并放慢采集。HTTP 客户端用 curl_cffi.Session；
+该对象非线程安全，生产同平台 2 并发共享 fetcher，用 ThreadLocalClient 每线程
+懒建一个 session；外部注入的 client（测试 mock / 解析头像）直接复用。
 """
 
 from __future__ import annotations
 
+import base64
 import contextlib
+import hashlib
+import hmac
 import json
 import logging
 import os
+import random
 import re
+import string
 import threading
 import time
+from urllib.parse import quote
 
 import httpx
 from curl_cffi import requests as cffi
@@ -35,6 +48,15 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class QueryIdExpiredError(RuntimeError):
+    """X 轮换了 GraphQL queryId（接口返回 400/404，或错误信息里点名 queryid）。
+
+    单独成类是为了能和 429/网络/鉴权失败区分开：只有它才需要更新
+    DEFAULT_QUERY_IDS，也只有它值得写 queryId 相关告警。
+    """
+
 
 TWITTER_COOKIE_KEY = "twitter_cookie"
 TWITTER_COOKIE_TIME_KEY = "twitter_cookie_updated_at"
@@ -62,6 +84,10 @@ DEFAULT_QUERY_IDS = {
 }
 QUERY_ID_TTL = 6 * 3600  # 每 6 小时重新从前端提取一次 queryId
 QUERY_ID_RETRY_COOLDOWN = 300  # 提取失败后 5 分钟重试，避免每次轮询都打前端
+PROBE_TTL = 6 * 3600  # queryId 主动探测间隔（进程内计时，重启即重新探测）
+PROBE_COOLDOWN = 600  # 探测失败后的冷却，避免反复打
+PROBE_SCREEN_NAME = "Twitter"  # 探测目标：官方账号，长期稳定存在
+CHANNEL_COOLDOWN = 900  # 单通道撞 429 后的冷却，对齐 X 的 15 分钟窗口
 FETCH_COUNT = 20
 
 # UserTweets 时间线所需的标准 feature switches（X 网页端常用集合）
@@ -97,6 +123,109 @@ _query_ids: dict[str, str] = dict(DEFAULT_QUERY_IDS)
 _query_ids_loaded = 0.0
 _query_ids_error_until = 0.0
 _query_ids_lock = threading.Lock()
+
+# queryId 主动探测状态：UserByScreenName 只在新增大V 时用到，平时抓取不经过它，
+# queryId 轮换后可能长期无人察觉——所以按 TTL 主动探一次，失效立刻告警。
+_probe_at = 0.0
+_probe_error_until = 0.0
+_probe_lock = threading.Lock()
+
+# 通道级冷却：两条通道的 GraphQL 配额在服务端独立计数，一侧撞 429 时换另一侧
+# 重试即可——不让整个平台退避，否则 2 倍容量买不到 2 倍可用性。
+_channel_until: dict[str, float] = {}
+_channel_lock = threading.Lock()
+
+
+def _channel_cooling(channel: str) -> bool:
+    with _channel_lock:
+        return time.time() < _channel_until.get(channel, 0.0)
+
+
+def _mark_channel_cooling(channel: str) -> None:
+    with _channel_lock:
+        _channel_until[channel] = time.time() + CHANNEL_COOLDOWN
+
+
+# ---------------------------------------------------------------- App 身份通道（OAuth1）
+# 走 X Android 客户端的 api.x.com/graphql：不需要浏览器 TLS 指纹，不需要
+# x-client-transaction-id，凭证是 OAuth1（不随 web session 回收而失效）。
+#
+# 实测（2026-09）：同一凭证打 x.com/i/api 一律 403（无论 POST/GET、无论配
+# Chrome UA + curl_cffi 浏览器指纹），打 api.x.com 正常返回；且 App 通道下
+# UserByScreenName 对第三方账号也能正常解析（web 通道自 2026-08 起返回空壳，
+# 需靠 typeahead 兜底）。
+
+X_AUTH_MODE_KEY = "x_auth_mode"  # "cookie"（默认）| "oauth1"
+X_OAUTH_TOKEN_KEY = "x_oauth_token"
+X_OAUTH_SECRET_KEY = "x_oauth_token_secret"
+
+# Twitter for Android 官方 OAuth 凭据（明文存在于 APK 中）
+APP_CONSUMER_KEY = "3nVuSoBZnx6U4vzUxf5w"
+APP_CONSUMER_SECRET = "Bcs59EFbbsdF6Sl9Ng71smgStWEGwXXKSjYvPVt7qys"
+APP_UA = "TwitterAndroid/12.27.1 (Android 14; com.twitter.android)"
+APP_GRAPHQL_BASE = "https://api.x.com/graphql"
+
+
+def configured_x_app_auth(db=None) -> tuple[str, str] | None:
+    """读取 App 身份通道凭证 (token, secret)；未启用或凭证缺失返回 None。"""
+    mode = ""
+    if db is not None:
+        mode = db.get_setting(X_AUTH_MODE_KEY) or ""
+    mode = mode or os.environ.get("X_AUTH_MODE", "cookie")
+    if mode != "oauth1":
+        return None
+
+    token = secret = ""
+    if db is not None:
+        token = db.get_setting(X_OAUTH_TOKEN_KEY) or ""
+        secret = db.get_setting(X_OAUTH_SECRET_KEY) or ""
+    token = token or os.environ.get("X_OAUTH_TOKEN", "")
+    secret = secret or os.environ.get("X_OAUTH_TOKEN_SECRET", "")
+    return (token, secret) if token and secret else None
+
+
+def _oauth1_sign(method: str, url: str, params: dict, token: str, secret: str) -> str:
+    """OAuth1 HMAC-SHA1 签名。
+
+    body 为 JSON（非 form-encoded）时不参与签名，只签 URL query 参数——
+    与 X Android 客户端行为一致。
+    """
+    oauth = {
+        "oauth_consumer_key": APP_CONSUMER_KEY,
+        "oauth_nonce": "".join(
+            random.choices(string.ascii_letters + string.digits, k=32)
+        ),
+        "oauth_signature_method": "HMAC-SHA1",
+        "oauth_timestamp": str(int(time.time())),
+        "oauth_token": token,
+        "oauth_version": "1.0",
+    }
+    signing = "&".join(
+        f"{quote(str(k), safe='')}={quote(str(v), safe='')}"
+        for k, v in sorted({**params, **oauth}.items())
+    )
+    base = f"{method.upper()}&{quote(url, safe='')}&{quote(signing, safe='')}"
+    key = f"{quote(APP_CONSUMER_SECRET, safe='')}&{quote(secret, safe='')}"
+    oauth["oauth_signature"] = base64.b64encode(
+        hmac.new(key.encode(), base.encode(), hashlib.sha1).digest()
+    ).decode()
+    return "OAuth " + ", ".join(
+        f'{quote(str(k), safe="")}="{quote(str(v), safe="")}"'
+        for k, v in sorted(oauth.items())
+    )
+
+
+def _app_headers(
+    method: str, url: str, params: dict, app_auth: tuple[str, str]
+) -> dict[str, str]:
+    token, secret = app_auth
+    return {
+        "Authorization": _oauth1_sign(method, url, params, token, secret),
+        "User-Agent": APP_UA,
+        "x-twitter-active-user": "yes",
+        "x-twitter-client-language": "zh-CN",
+        "Content-Type": "application/json",
+    }
 
 
 def _cookie_parts(cookie: str) -> dict[str, str]:
@@ -286,13 +415,15 @@ def extract_twitter_images(legacy: dict) -> list[str]:
 
 
 def resolve_x_profile(external_id: str, cookie: str = "", db=None) -> dict:
-    """按 X 用户名/主页链接解析昵称与头像（UserByScreenName，需登录 Cookie）。
+    """按 X 用户名/主页链接解析昵称与头像。
 
-    失败（cookie 失效/风控/未配置）时返回空 dict，调用方回退占位名。
+    优先 typeahead（web 通道）；App 身份通道下直接走 UserByScreenName。
+    失败（凭证失效/风控/未配置）时返回空 dict，调用方回退占位名。
     """
     cookie = cookie or configured_twitter_cookie(db)
     screen_name = extract_screen_name(external_id)
-    if not screen_name or not cookie:
+    app_auth = configured_x_app_auth(db)
+    if not screen_name or (not cookie and not app_auth):
         return {}
     from ..proxy import ProxyUnavailable, acquire_client_proxy, attach_proxy
 
@@ -303,8 +434,9 @@ def resolve_x_profile(external_id: str, cookie: str = "", db=None) -> dict:
     client = cffi.Session(impersonate="chrome124", timeout=20, proxy=proxy)
     attach_proxy(client, pid)
     try:
-        fetcher = TwitterFetcher(db=None, client=client)
-        picked = fetcher._typeahead_pick(screen_name, cookie)
+        fetcher = TwitterFetcher(db=db, client=client)
+        # App 通道没有 Cookie，typeahead（x.com/i/api）不可用，直接走 UserByScreenName
+        picked = None if app_auth else fetcher._typeahead_pick(screen_name, cookie)
         if picked:
             avatar = (
                 picked.get("profile_image_url_https")
@@ -365,6 +497,28 @@ def _append_tweet(node, out: list[dict]) -> None:
         _append_tweet(item_content, out)
 
 
+def _collect_timeline_tweets(data: dict, screen_name: str) -> list[dict]:
+    """从 UserTweets 响应里取出推文节点；用户不存在/停用时抛错。
+
+    注意空返回是合法结果——X 在服务端降级时也会返回一个只有 cursor 的
+    TimelineAddEntries（实测 2026-09 约 1/9），是否重试由调用方决定。
+    """
+    result = ((data.get("data") or {}).get("user") or {}).get("result", {})
+    if not result or result.get("__typename") == "UserUnavailable":
+        raise RuntimeError(f"X 用户不存在或已停用: {screen_name}")
+    instructions = ((result.get("timeline") or {}).get("timeline") or {}).get(
+        "instructions"
+    ) or []
+    tweets: list[dict] = []
+    for instruction in instructions:
+        if instruction.get("type") == "TimelineAddEntries":
+            for entry in instruction.get("entries") or []:
+                _walk_tweet_results(entry, tweets)
+        elif instruction.get("type") == "TimelinePinEntry":
+            _walk_tweet_results(instruction.get("entry") or {}, tweets)
+    return tweets
+
+
 class TwitterFetcher(Fetcher):
     platform = "twitter"
 
@@ -395,6 +549,7 @@ class TwitterFetcher(Fetcher):
           供告警和放慢采集，然后抛出。
         """
         cookie = configured_twitter_cookie(self.db)
+        self._maybe_probe_query_id(cookie)
         try:
             posts = self._fetch_direct(kol, cookie)
             if self.db is not None:
@@ -421,27 +576,113 @@ class TwitterFetcher(Fetcher):
             logger.warning("X 直抓失败 kol=%s err=%s", kol["name"], exc)
             raise
 
+    def _channel_for(self, kol: dict) -> str:
+        """按大V 稳定分流到两条通道（生产实测：两通道 GraphQL 配额独立计数）。
+
+        奇数 id 走 App 通道、偶数走 Cookie 通道；首选通道处于 429 冷却期时临时
+        让给另一条。凭证不全时退化：App 缺失走 Cookie，Cookie 缺失走 App。
+        """
+        app_auth = configured_x_app_auth(self.db)
+        if not app_auth:
+            return "cookie"
+        # Cookie 缺失时不能分流到 web 通道：空 Cookie 打 x.com/i/api 会返回 200
+        # 但内容是陈旧推文（实测拿到 2020~2022 年的旧帖），静默给错数据比报错更危险。
+        if not configured_twitter_cookie(self.db):
+            return "app"
+        preferred = "app" if int(kol.get("id") or 0) % 2 else "cookie"
+        other = "cookie" if preferred == "app" else "app"
+        if _channel_cooling(preferred) and not _channel_cooling(other):
+            return other
+        return preferred
+
     def _graphql(
         self,
         operation: str,
         variables: dict,
         cookie: str,
+        prefer: str | None = None,
     ) -> dict:
+        """双通道分发，撞 429 时在通道之间失败转移。
+
+        为什么要转移：两条通道的配额在服务端独立计数（生产实测），但调度器的
+        `_is_platform_wide_error` 会把任意 `X GraphQL ... 429` 判为平台级故障并让
+        整个 X 平台退避 15 分钟。若把 429 原样抛上去，一侧撞限会把另一侧一起拖停，
+        双通道的 2 倍容量就白买了。所以在 fetcher 内部消化：一侧 429 → 标记该通道
+        冷却 → 换另一条重试；两条都失败才抛给调度器做平台级退避。
+
+        单通道场景行为不变：没有备选通道时 429 原样抛出。
+        """
+        app_auth = configured_x_app_auth(self.db)
+        prefer_app = bool(app_auth) and prefer != "cookie"
+        # Cookie 为空时不能走 web 通道：空 Cookie 打 x.com/i/api 会返回 200，但内容
+        # 是陈旧推文（实测拿到 2020~2022 年的旧帖），静默给错数据比直接报错更危险。
+        # 有 App 凭证就改走 App；都没有时保持原样，由下层抛出「未配置凭证」。
+        if not prefer_app and not cookie and app_auth:
+            prefer_app = True
+        order = ["app"] if prefer_app else ["cookie"]
+        # 备选通道只在凭证齐备时加入；prefer="cookie" 是显式要求，不做转移。
+        if prefer_app and cookie:
+            order.append("cookie")
+        elif not prefer_app and app_auth and prefer is None:
+            order.append("app")
+
+        last_exc: Exception | None = None
+        for channel in order:
+            try:
+                if channel == "app" and app_auth:
+                    return self._graphql_app(operation, variables, app_auth)
+                return self._graphql_web(operation, variables, cookie)
+            except QueryIdExpiredError:
+                raise  # queryId 轮换与通道无关，换通道救不了
+            except RuntimeError as exc:
+                if len(order) == 1 or "429" not in str(exc):
+                    raise
+                _mark_channel_cooling(channel)
+                logger.info(
+                    "X %s 通道撞 429，切换另一条通道重试（operation=%s）", channel, operation
+                )
+                last_exc = exc
+        raise last_exc if last_exc else RuntimeError(f"X GraphQL {operation} 无可用通道")
+
+    def _graphql_app(
+        self, operation: str, variables: dict, app_auth: tuple[str, str]
+    ) -> dict:
+        """App 身份通道：api.x.com/graphql + OAuth1。"""
+        # 不做 queryId 前端提取——提取需要登录态 HTML，而该通道没有 Cookie；
+        # 实测 web 通道的 queryId 在 App 通道同样有效。
+        query_id = _query_ids.get(operation) or DEFAULT_QUERY_IDS[operation]
+        url = f"{APP_GRAPHQL_BASE}/{query_id}/{operation}"
+        params = {
+            "variables": json.dumps(variables, separators=(",", ":")),
+            "features": json.dumps(FEATURES, separators=(",", ":")),
+        }
+        resp = self._client_for().post(
+            url,
+            params=params,
+            json={"variables": variables, "features": FEATURES},
+            headers=_app_headers("POST", url, params, app_auth),
+        )
+        return self._parse_graphql(operation, resp)
+
+    def _graphql_web(self, operation: str, variables: dict, cookie: str) -> dict:
+        """Cookie 通道：x.com/i/api/graphql + 浏览器指纹。"""
         _refresh_query_ids(self._client_for(), cookie)
         query_id = _query_ids.get(operation) or DEFAULT_QUERY_IDS[operation]
-        payload = {"variables": variables, "features": FEATURES}
-        headers = _auth_headers(cookie)
         resp = self._client_for().post(
             f"https://x.com/i/api/graphql/{query_id}/{operation}",
             params={
                 "variables": json.dumps(variables, separators=(",", ":")),
                 "features": json.dumps(FEATURES, separators=(",", ":")),
             },
-            json=payload,
-            headers=headers,
+            json={"variables": variables, "features": FEATURES},
+            headers=_auth_headers(cookie),
         )
+        return self._parse_graphql(operation, resp)
+
+    @staticmethod
+    def _parse_graphql(operation: str, resp) -> dict:
+        """两通道共用的响应校验：非 200 与 GraphQL errors 的分流提示。"""
         if resp.status_code != 200:
-            hint = ""
             detail = ""
             with contextlib.suppress(Exception):  # noqa: BLE001 - 非 JSON 响应体忽略
                 err = resp.json()
@@ -458,15 +699,68 @@ class TwitterFetcher(Fetcher):
                     if msg:
                         detail = f" {str(msg)[:80]}"
             if resp.status_code in (400, 404):
-                hint = "（可能是 X 轮换了 GraphQL queryId，需更新 DEFAULT_QUERY_IDS）"
-            raise RuntimeError(f"X GraphQL {operation} HTTP {resp.status_code}{detail}{hint}")
+                raise QueryIdExpiredError(
+                    f"X GraphQL {operation} HTTP {resp.status_code}{detail}"
+                    "（可能 X 轮换了 GraphQL queryId，需更新 DEFAULT_QUERY_IDS）"
+                )
+            raise RuntimeError(f"X GraphQL {operation} HTTP {resp.status_code}{detail}")
         data = resp.json()
         if data.get("errors"):
             msg = str(data["errors"][0].get("message", data["errors"]))
             if "queryid" in msg.lower() or "invalidrequest" in msg.lower():
-                msg += "（可能是 X 轮换了 GraphQL queryId，需更新 DEFAULT_QUERY_IDS）"
+                raise QueryIdExpiredError(
+                    f"X GraphQL {operation} 错误: {msg}"
+                    "（可能 X 轮换了 GraphQL queryId，需更新 DEFAULT_QUERY_IDS）"
+                )
             raise RuntimeError(f"X GraphQL {operation} 错误: {msg}")
         return data
+
+    def _maybe_probe_query_id(self, cookie: str) -> None:
+        """按 TTL 主动探测 UserByScreenName 的 queryId 是否仍然有效。
+
+        为什么只探它：UserTweets 每轮抓取都在用，一旦失效立刻暴露；而
+        UserByScreenName 只在新增大V 时用到，queryId 轮换后可能很久没人发现。
+
+        判据严格：只认 QueryIdExpiredError（400/404 或错误信息点名 queryid）。
+        429 / 网络 / 鉴权失败一律不算——它们在探测里出现不代表 queryId 有问题。
+        探测失败不影响本轮抓取。
+        """
+        global _probe_at, _probe_error_until
+        with _probe_lock:
+            now = time.time()
+            if now - _probe_at < PROBE_TTL or now < _probe_error_until:
+                return
+
+        try:
+            data = self._graphql(
+                "UserByScreenName",
+                {"screen_name": PROBE_SCREEN_NAME, "withSafetyModeUserFields": True},
+                cookie,
+            )
+            result = ((data.get("data") or {}).get("user") or {}).get("result") or {}
+            if not result.get("rest_id"):
+                # 官方账号都解析不出 rest_id，说明该 queryId 已不适用于当前接口
+                raise QueryIdExpiredError(
+                    f"探测目标无 rest_id（__typename={result.get('__typename')}）"
+                )
+        except QueryIdExpiredError as exc:
+            with _probe_lock:
+                _probe_error_until = time.time() + PROBE_COOLDOWN
+            logger.warning("X queryId 探测失败：%s", exc)
+            if self.db is not None:
+                self.db.add_source_event(
+                    "twitter",
+                    "warn",
+                    f"X queryId 疑似失效，需更新 DEFAULT_QUERY_IDS: {str(exc)[:140]}",
+                )
+        except Exception as exc:  # noqa: BLE001 - 探测不得影响抓取
+            with _probe_lock:
+                _probe_error_until = time.time() + PROBE_COOLDOWN
+            logger.debug("X queryId 探测未完成（非 queryId 问题，忽略）：%s", exc)
+        else:
+            with _probe_lock:
+                _probe_at = time.time()
+            logger.debug("X queryId 探测通过：%s", _query_ids)
 
     def _typeahead_pick(self, screen_name: str, cookie: str) -> dict | None:
         """typeahead 解析：只认精确匹配 screen_name 的结果。
@@ -505,16 +799,26 @@ class TwitterFetcher(Fetcher):
         img = picked.get("profile_image_url_https") or picked.get("profile_image_url") or ""
         return user_id, img.replace("_normal", "_400x400") if img else ""
 
-    def _resolve_user(self, screen_name: str, cookie: str) -> dict:
+    def _resolve_user(
+        self, screen_name: str, cookie: str, prefer: str | None = None
+    ) -> dict:
         if screen_name in self._user_ids:
             return {"user_id": self._user_ids[screen_name], "avatar": ""}
-        user_id, avatar = self._typeahead_users(screen_name, cookie)
+        # typeahead 打 x.com/i/api，只有 Cookie 通道能用；App 通道直接走
+        # UserByScreenName（该通道对第三方账号可直接解析，无需兜底）。
+        use_app = bool(configured_x_app_auth(self.db)) and prefer != "cookie"
+        if use_app:
+            user_id, avatar = "", ""
+        else:
+            user_id, avatar = self._typeahead_users(screen_name, cookie)
         if not user_id:
-            # 回退 UserByScreenName（目前仅账号本人可解析）
+            # 回退 UserByScreenName（web 通道自 2026-08 起对第三方账号返回空壳，
+            # 仅 typeahead 无精确匹配时才走到这里；App 通道则直接可用）
             data = self._graphql(
                 "UserByScreenName",
                 {"screen_name": screen_name, "withSafetyModeUserFields": True},
                 cookie,
+                prefer=prefer,
             )
             result = ((data.get("data") or {}).get("user") or {}).get("result") or {}
             user_id = result.get("rest_id") or ""
@@ -527,42 +831,40 @@ class TwitterFetcher(Fetcher):
         return {"user_id": user_id, "avatar": avatar}
 
     def _fetch_direct(self, kol: dict, cookie: str) -> list[Post]:
-        if not cookie:
-            raise RuntimeError("未配置 X Cookie（后台「数据源 → Cookie 管理」或 TWITTER_COOKIE）")
+        if not cookie and not configured_x_app_auth(self.db):
+            raise RuntimeError(
+                "未配置 X 凭证（后台「数据源 → Cookie 管理」填写 Cookie，"
+                "或设置 x_auth_mode=oauth1 启用 App 身份通道）"
+            )
         screen_name = extract_screen_name(kol["external_id"])
         if not screen_name:
             raise RuntimeError(f"无法识别 X 用户名: {kol['external_id']}")
-        user = self._resolve_user(screen_name, cookie)
-        data = self._graphql(
-            "UserTweets",
-            {
-                "userId": user["user_id"],
-                "count": FETCH_COUNT,
-                "includePromotedContent": True,
-                "withQuickPromoteEligibilityTweetFields": True,
-                "withVoice": True,
-                "withV2Timeline": True,
-            },
-            cookie,
-        )
-        instructions = ((data.get("data") or {}).get("user") or {}).get(
-            "result", {}
-        )
-        if (
-            not instructions
-            or instructions.get("__typename") == "UserUnavailable"
-        ):
-            raise RuntimeError(f"X 用户不存在或已停用: {screen_name}")
-        instructions = (
-            (instructions.get("timeline") or {}).get("timeline") or {}
-        ).get("instructions") or []
+        channel = self._channel_for(kol)
+        user = self._resolve_user(screen_name, cookie, prefer=channel)
+        variables = {
+            "userId": user["user_id"],
+            "count": FETCH_COUNT,
+            "includePromotedContent": True,
+            "withQuickPromoteEligibilityTweetFields": True,
+            "withVoice": True,
+            "withV2Timeline": True,
+        }
+        # X 偶发返回 200 + 空 timeline：服务端降级时秒回（0.3s vs 正常 0.7~1.8s）
+        # 一个只有 cursor 的 TimelineAddEntries，且 result 里缺 legacy/core 字段。
+        # 若直接当作「没有新帖」，会静默丢数据且 x_direct_last_ok_at 仍被标成功。
+        # 实测 2026-09 约 1/9 命中，故重试一次再判定失败。
         tweets: list[dict] = []
-        for instruction in instructions:
-            if instruction.get("type") == "TimelineAddEntries":
-                for entry in instruction.get("entries") or []:
-                    _walk_tweet_results(entry, tweets)
-            elif instruction.get("type") == "TimelinePinEntry":
-                _walk_tweet_results(instruction.get("entry") or {}, tweets)
+        for attempt in (1, 2):
+            data = self._graphql("UserTweets", variables, cookie, prefer=channel)
+            tweets = _collect_timeline_tweets(data, screen_name)
+            if tweets or attempt == 2:
+                break
+            logger.info("X 空时间线，重试一次 kol=%s", kol["name"])
+            time.sleep(0.8)
+        if not tweets:
+            raise RuntimeError(
+                f"X 连续返回空时间线（疑似服务端降级，非「没有新帖」）: {screen_name}"
+            )
         posts = []
         for tweet in tweets:
             legacy = tweet.get("legacy") or {}
