@@ -2321,10 +2321,7 @@ class Scheduler:
             logger.exception("未激活用户清理失败")
         # 研报结构化抽取（每小时一批，LLM 离线批处理；失败不影响主流程）
         extract_interval = int(self.db.get_setting("report_extract_interval_seconds") or 3600)
-        if (
-            now_mono - self._last_report_extract > extract_interval
-            and not self._report_extract_running
-        ):
+        if self._report_extract_due(now_mono, extract_interval) and not self._report_extract_running:
             # 大批次单轮可达 20-30 分钟：后台任务化，主循环的采集/推送不被阻塞
             self._last_report_extract = now_mono
             self._report_extract_running = True
@@ -2753,6 +2750,17 @@ class Scheduler:
         if done:
             db.set_setting(done_key, str(done_today + done))
         return done
+
+    def _report_extract_due(self, now_mono: float, interval: int) -> bool:
+        """研报提取是否到期：哨兵 0.0（本进程从未跑过）直接算到期。
+
+        不能只比 `now_mono - last > interval`：monotonic 是宿主开机计时，
+        宿主刚重启（uptime < interval）时会把首轮提取白等最多一小时。
+        """
+        return (
+            self._last_report_extract == 0.0
+            or now_mono - self._last_report_extract > interval
+        )
 
     def _run_report_extraction_task(self) -> int:
         """研报结构化抽取入口：与 IMA/CICC kick 共用，忙则跳过。"""

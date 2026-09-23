@@ -291,7 +291,13 @@ def test_report_extract_due_immediately_after_start(tmp_path):
     )
     assert scheduler._last_report_extract == 0.0
     interval = int(db.get_setting("report_extract_interval_seconds") or 3600)
-    assert time.monotonic() - scheduler._last_report_extract > interval
+    # 哨兵语义：与宿主 uptime 无关。monotonic 是开机计时，CI/刚重启的宿主上
+    # 可能只有几百秒（< interval），旧写法会让首轮提取被推迟甚至判错。
+    assert scheduler._report_extract_due(0.5, interval) is True
+    assert scheduler._report_extract_due(time.monotonic(), interval) is True
+    # 刚跑过 → 未到期
+    scheduler._last_report_extract = time.monotonic()
+    assert scheduler._report_extract_due(time.monotonic(), interval) is False
 
 
 def test_report_extract_skips_when_lock_held(tmp_path):
