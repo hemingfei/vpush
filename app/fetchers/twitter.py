@@ -58,6 +58,16 @@ class QueryIdExpiredError(RuntimeError):
     """
 
 
+class TransientEmptyTimelineError(RuntimeError):
+    """X 返回 200 但时间线为空（服务端降级），重试若干次仍空。
+
+    这是**暂时性、会自愈**的错误，不该像凭证失效那样触发管理员告警——
+    Reuters 这类高频账号会反复命中，告警会被刷成噪音，真正的故障反而被淹没。
+    `fetch()` 据此跳过 x_direct_last_fallback_at，但仍写原因与 source_events
+    供后台查看。
+    """
+
+
 TWITTER_COOKIE_KEY = "twitter_cookie"
 TWITTER_COOKIE_TIME_KEY = "twitter_cookie_updated_at"
 
@@ -622,7 +632,14 @@ class TwitterFetcher(Fetcher):
             raise
         except Exception as exc:
             if self.db is not None:
-                self.db.set_setting("x_direct_last_fallback_at", str(int(time.time())))
+                # 空时间线是服务端暂时性降级（会自愈），不计入 direct 失败标记，
+                # 否则 Reuters 这类高频账号会反复触发「X 直抓失败」管理员告警，
+                # 把真正的故障（cookie 失效 / 持续 429）淹没。原因与事件照记，
+                # 后台仍可见。
+                if not isinstance(exc, TransientEmptyTimelineError):
+                    self.db.set_setting(
+                        "x_direct_last_fallback_at", str(int(time.time()))
+                    )
                 self.db.set_setting("x_direct_fallback_reason", str(exc)[:300])
                 self.db.add_source_event(
                     "twitter",
@@ -916,17 +933,20 @@ class TwitterFetcher(Fetcher):
         # X 偶发返回 200 + 空 timeline：服务端降级时秒回（0.3s vs 正常 0.7~1.8s）
         # 一个只有 cursor 的 TimelineAddEntries，且 result 里缺 legacy/core 字段。
         # 若直接当作「没有新帖」，会静默丢数据且 x_direct_last_ok_at 仍被标成功。
-        # 实测 2026-09 约 1/9 命中，故重试一次再判定失败。
+        # 生产实测（2026-09）：Reuters 这类高频账号约每 2 小时命中一次，0.8s 间隔
+        # 重试可救回约 86%。故重试升到 3 次、间隔递增，给服务端留恢复时间。
         tweets: list[dict] = []
-        for attempt in (1, 2):
+        for attempt, backoff in ((1, 0.8), (2, 2.5), (3, None)):
             data = self._graphql("UserTweets", variables, cookie, prefer=channel)
             tweets = _collect_timeline_tweets(data, screen_name)
-            if tweets or attempt == 2:
+            if tweets or backoff is None:
                 break
-            logger.info("X 空时间线，重试一次 kol=%s", kol["name"])
-            time.sleep(0.8)
+            logger.info(
+                "X 空时间线，%.1fs 后重试（第 %d 次）kol=%s", backoff, attempt, kol["name"]
+            )
+            time.sleep(backoff)
         if not tweets:
-            raise RuntimeError(
+            raise TransientEmptyTimelineError(
                 f"X 连续返回空时间线（疑似服务端降级，非「没有新帖」）: {screen_name}"
             )
         posts = []

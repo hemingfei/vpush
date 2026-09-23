@@ -1746,3 +1746,82 @@ def test_cooling_channel_yields_to_the_other(monkeypatch):
     # 两条都冷却时保持原分流——切过去也一样是限流，没有意义
     assert fetcher._channel_for({"id": 2}) == "cookie"
     assert fetcher._channel_for({"id": 1}) == "app"
+
+
+# ------------------------------------------------- 空时间线不触发管理员告警
+
+
+def test_empty_timeline_does_not_trigger_admin_alert(monkeypatch):
+    """空时间线（服务端降级、会自愈）不得写 x_direct_last_fallback_at。
+
+    该标记是告警开关（scheduler._maybe_alert_x_direct_failure 只看它）。高频账号
+    会反复命中空时间线，若照写会把告警刷成噪音，真正的故障反而被淹没。
+    原因与 source_events 仍要记录，后台可见。
+    """
+    from app.fetchers.twitter import TransientEmptyTimelineError
+
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    _noop_sleep(monkeypatch)
+
+    def handler(request):
+        if "UserByScreenName" in str(request.url):
+            return httpx.Response(200, json=_user_response())
+        if "UserTweets" in str(request.url):
+            return httpx.Response(200, json=_empty_timeline_response())
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    kid = db.add_kol("twitter", "SemiAnalysis", "https://x.com/SemiAnalysis_")
+    fetcher = _make_fetcher(handler, db)
+
+    with pytest.raises(TransientEmptyTimelineError, match="空时间线"):
+        fetcher.fetch(db.get_kol(kid))
+
+    assert not db.get_setting("x_direct_last_fallback_at")  # 不触发告警
+    assert not db.get_setting("x_direct_last_ok_at")  # 也不标成功
+    assert "空时间线" in (db.get_setting("x_direct_fallback_reason") or "")
+    assert any("空时间线" in str(e) for e in db.recent_source_events(10))
+
+
+def test_non_transient_failure_still_triggers_alert(monkeypatch):
+    """401 这类需要人工干预的失败，仍要写 fallback_at 保留告警能力。"""
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+
+    def handler(_request):
+        return httpx.Response(401, json={"errors": [{"message": "Unauthorized"}]})
+
+    db = DB(":memory:")
+    kid = db.add_kol("twitter", "SemiAnalysis", "https://x.com/SemiAnalysis_")
+    fetcher = _make_fetcher(handler, db)
+
+    with pytest.raises(RuntimeError):
+        fetcher.fetch(db.get_kol(kid))
+    assert db.get_setting("x_direct_last_fallback_at")  # 告警链路完好
+
+
+def test_empty_timeline_retries_up_to_three_attempts(monkeypatch):
+    """重试升到 3 次：前两次空、第三次有数据时应当成功。"""
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    monkeypatch.delenv("X_AUTH_MODE", raising=False)
+    _noop_sleep(monkeypatch)
+    calls = {"n": 0}
+
+    def handler(request):
+        if "UserByScreenName" in str(request.url):
+            return httpx.Response(200, json=_user_response())
+        if "UserTweets" in str(request.url):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                return httpx.Response(200, json=_empty_timeline_response())
+            return httpx.Response(200, json=_timeline_response())
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    kid = db.add_kol("twitter", "SemiAnalysis", "https://x.com/SemiAnalysis_")
+    fetcher = _make_fetcher(handler, db)
+    posts = fetcher.fetch(db.get_kol(kid))
+
+    assert calls["n"] == 3
+    assert [p.external_id for p in posts] == ["111", "222", "333"]
