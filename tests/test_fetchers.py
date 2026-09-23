@@ -1724,10 +1724,12 @@ def test_shared_fetchers_use_thread_local_http_clients():
         CombinationFetcher(cfg, db=None),
     ]
     for fetcher in fetchers:
-        ids = []
+        # 持对象强引用：线程结束后 thread-local 会被清理，只存 id 时对象可能被回收，
+        # 新对象复用同一地址就会让断言偶发误报（全量跑复现、单跑不复现）
+        clients = []
 
-        def grab(f=fetcher, acc=ids):
-            acc.append(id(f.client))
+        def grab(f=fetcher, acc=clients):
+            acc.append(f.client)
 
         t1 = threading.Thread(target=grab)
         t2 = threading.Thread(target=grab)
@@ -1735,7 +1737,7 @@ def test_shared_fetchers_use_thread_local_http_clients():
         t2.start()
         t1.join()
         t2.join()
-        assert len(set(ids)) == 2, type(fetcher).__name__
+        assert len({id(c) for c in clients}) == 2, type(fetcher).__name__
 
 
 def test_xueqiu_factory_uses_assigned_proxy(tmp_path, monkeypatch):
