@@ -1,8 +1,8 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-9f73ca0db2c1";
+const CACHE = "dav-shell-b472cfaf500d";
 const SHELL = [
   "/",
-  "/app.a0d33242413e.js",
+  "/app.b4efe849ee21.js",
   // asset-modules:start
   "/core/dialog.9c1fa70ae93e.js",
   "/core/html.817ab2339b89.js",
@@ -16,16 +16,16 @@ const SHELL = [
   "/views/admin/infra.e13cdf4ab5b3.js",
   "/views/admin/knowledge.42883ccab396.js",
   "/views/admin/kol.9fb9705ffce4.js",
-  "/views/admin/news.5decd4cba0cc.js",
+  "/views/admin/news.269a9edcf5f0.js",
   "/views/admin/users.171b6837216e.js",
-  "/views/feishu-personal.d34f03bb7da2.js",
+  "/views/feishu-personal.d74ec140be8a.js",
   "/views/ima.4ee73e107acf.js",
   "/views/market.0a97a470169d.js",
-  "/views/news.385dc5ac26bb.js",
+  "/views/news.4b3128e65e96.js",
   "/views/post-card-export.27dbd2f5c5fa.js",
-  "/views/push-settings.c6dcb9dee07b.js",
+  "/views/push-settings.43f099553f09.js",
   // asset-modules:end
-  "/style.30f397fa266a.css",
+  "/style.3f0354474543.css",
   "/vendor/design-tokens.965639a4e5c3.css",
   "/logo-mark.svg",
   "/icon-192.png",
