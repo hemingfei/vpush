@@ -695,7 +695,7 @@ export function createFeishuPersonalView(dependencies) {
       if (!routeStillActive(routeSeq) || token !== state.token
         || sessionGeneration !== imaMountState.sessionGeneration) return;
       if (state.user) state.user.keywords_match_news = !!(data && data.keywords_match_news);
-      flash(on ? "已开启财经新闻匹配" : "已关闭财经新闻匹配");
+      flash(on ? "已开启财经资讯匹配" : "已关闭财经资讯匹配");
     } catch (err) {
       if (!routeStillActive(routeSeq) || token !== state.token
         || sessionGeneration !== imaMountState.sessionGeneration) return;

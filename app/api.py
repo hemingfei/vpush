@@ -2445,7 +2445,7 @@ def create_api_router(
     # ---- 财经新闻 ----
     def _news_service_or_503() -> NewsService:
         if news_service is None:
-            raise HTTPException(status_code=503, detail="财经新闻服务不可用")
+            raise HTTPException(status_code=503, detail="财经资讯服务不可用")
         return news_service
 
     def _news_timestamp(raw: str, *, allow_future: bool = False) -> str:
@@ -2661,7 +2661,7 @@ def create_api_router(
 
     def _news_refresh_ids(feed_ids: list[int], response: Response) -> dict:
         if db.get_setting("news_enabled") != "1":
-            raise HTTPException(status_code=409, detail="财经新闻采集已关闭")
+            raise HTTPException(status_code=409, detail="财经资讯采集已关闭")
         accepted, busy = [], []
         service = _news_service_or_503()
         for feed_id in feed_ids:

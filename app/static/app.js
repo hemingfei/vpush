@@ -378,7 +378,7 @@ function avatarHtml(name, url, platform) {
 const NAV = [
   { group: "订阅", items: [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
-    { route: "news", icon: NEWS_ICON, label: "财经新闻", badge: "news" },
+    { route: "news", icon: NEWS_ICON, label: "财经资讯", badge: "news" },
     { route: "knowledge", icon: BOOK_ICON, label: "研报中心" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
     { route: "settings", icon: GEAR_ICON, label: "个人设置" },
@@ -451,7 +451,7 @@ function renderSidebar(user) {
 
 const MOBILE_NAV = [
   { route: "timeline", icon: HOME_ICON, label: "动态" },
-  { route: "news", icon: NEWS_ICON, label: "财经新闻", badge: "news" },
+  { route: "news", icon: NEWS_ICON, label: "财经资讯", badge: "news" },
   { route: "home", icon: GRID_ICON, label: "广场" },
   { route: "settings", icon: USER_ICON, label: "个人设置" },
 ];
@@ -2113,7 +2113,7 @@ async function renderTimeline(seq) {
     <div class="tl-ima-entry">
       <button type="button" class="tl-ima-entry-btn" onclick="go('news')">
         <span class="tl-ima-entry-icon">${NEWS_ICON}</span>
-        <span><strong>财经新闻</strong><small>打开财经新闻</small></span>
+        <span><strong>财经资讯</strong><small>打开财经资讯</small></span>
         <span class="nav-badge" data-news-badge hidden></span>
       </button>
       <button type="button" class="tl-ima-entry-btn" onclick="go('knowledge')">

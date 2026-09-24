@@ -160,8 +160,8 @@ export function createAdminNewsView(dependencies) {
         <section class="section-panel news-admin-settings">
           <div><h2 class="section-title">财经资讯</h2><p class="section-meta">共享采集所有启用 Feed；用户按媒体主动选择来源。「心裁」这类内部源由外部阅读器推送，不进 Feed 轮询。</p></div>
           <div class="news-admin-settings-controls">
-            <label class="switch"><input id="news-global-enabled" type="checkbox" ${settings.enabled ? "checked" : ""} onchange="saveAdminNewsSettings()"><span class="track"></span><span>启用财经新闻采集</span></label>
-            <label class="switch"><input id="news-global-visible" type="checkbox" ${settings.visible ? "checked" : ""} onchange="saveAdminNewsSettings()"><span class="track"></span><span>向用户显示财经新闻</span></label>
+            <label class="switch"><input id="news-global-enabled" type="checkbox" ${settings.enabled ? "checked" : ""} onchange="saveAdminNewsSettings()"><span class="track"></span><span>启用财经资讯采集</span></label>
+            <label class="switch"><input id="news-global-visible" type="checkbox" ${settings.visible ? "checked" : ""} onchange="saveAdminNewsSettings()"><span class="track"></span><span>向用户显示财经资讯</span></label>
             <label class="news-admin-interval">刷新周期 <input id="news-global-interval" class="form-control" type="number" min="5" max="1440" value="${Number(settings.refresh_interval_minutes) || 10}"> 分钟</label>
             <button type="button" class="btn-ghost" onclick="saveAdminNewsSettings()">保存设置</button>
             <button type="button" class="btn-normal" onclick="refreshAllAdminNews()">${REFRESH_ICON} 刷新全部</button>
@@ -264,7 +264,7 @@ export function createAdminNewsView(dependencies) {
     try {
       await api("/api/admin/news/settings", { method: "PATCH", body: JSON.stringify({ enabled, visible, refresh_interval_minutes: interval }) });
       if (!routeStillActive(seq)) return;
-      flash("财经新闻设置已保存");
+      flash("财经资讯设置已保存");
       await loadAdminNews(seq);
     } catch (err) {
       flash(err.message, "error");

@@ -192,9 +192,8 @@ export function createNewsView(dependencies) {
       groups.get(label).push(source);
     }
     const allOn = !state.newsFilterSourceId;
-    const selectedId = String(state.newsFilterSourceId || "");
     const rows = [...groups.entries()].map(([label, sources]) => `
-    <details class="news-source-group"${selectedId && sources.some((source) => String(source.id) === selectedId) ? " open" : ""}>
+    <details class="news-source-group" open>
       <summary>${CHEVRON_DOWN_ICON}<span>${escapeHtml(label)}</span></summary>
       ${sources.map((source) => `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')"><span>${escapeHtml(source.name)}</span><b>${Number(source.unread_count) || ""}</b></button>`).join("")}
     </details>`).join("");
@@ -203,18 +202,6 @@ export function createNewsView(dependencies) {
     <button type="button" class="news-source-row news-source-all ${allOn ? "is-on" : ""}" onclick="selectNewsSource('')">${NEWS_ICON}<span>全部资讯</span><b>${Number(state.newsUnreadCount) || ""}</b></button>
     ${rows || '<p class="muted">尚未选择资讯来源</p>'}
   </nav>`;
-  }
-
-  function newsGroupedOptions() {
-    const groups = new Map();
-    for (const source of selectedNewsSources()) {
-      const label = source.group_name || "其他来源";
-      if (!groups.has(label)) groups.set(label, []);
-      groups.get(label).push(source);
-    }
-    const options = [...groups.entries()].map(([label, sources]) => `
-      <optgroup label="${escapeHtml(label)}">${sources.map((source) => `<option value="${source.id}" ${String(state.newsFilterSourceId) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}</optgroup>`).join("");
-    return `<option value="">全部资讯</option>${options}`;
   }
 
   function newsActiveFilterParts() {
@@ -253,12 +240,6 @@ export function createNewsView(dependencies) {
       const on = selected ? row.dataset.sourceId === selected : row.classList.contains("news-source-all");
       row.classList.toggle("is-on", on);
     });
-    document.querySelectorAll(".news-source-group").forEach((group) => {
-      const ids = [...group.querySelectorAll("[data-source-id]")].map((row) => row.dataset.sourceId);
-      group.open = !!(selected && ids.includes(selected));
-    });
-    const select = document.querySelector(".news-source-mobile select");
-    if (select && select.value !== selected) select.value = selected;
     const input = $("#news-query");
     if (input && input.value !== (state.newsQuery || "")) input.value = state.newsQuery || "";
     const summary = document.querySelector("#news-filter-summary");
@@ -284,8 +265,7 @@ export function createNewsView(dependencies) {
     const searching = !!(state.newsQuery || "").trim();
     main.innerHTML = `<section class="news-page${searching ? " is-searching" : ""}" id="news-page">
   <header class="news-stream-head">
-    <div class="news-stream-title"><h2 class="section-title">资讯流</h2><p class="section-meta">实时更新的财经资讯聚合</p></div>
-    <div class="news-source-mobile"><select aria-label="资讯来源" onchange="selectNewsSource(this.value)">${newsGroupedOptions()}</select>${CHEVRON_DOWN_ICON}</div>
+    <div class="news-stream-title"><p class="section-meta">实时更新的财经资讯聚合</p></div>
     <div class="news-stream-actions">
       <button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}" aria-label="未读">${EYE_ICON}<span>未读</span>${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</button>
       <button type="button" class="icon-btn news-search-toggle${searching ? " is-on" : ""}" onclick="toggleNewsSearch()" aria-expanded="${searching ? "true" : "false"}" aria-label="搜索资讯">${SEARCH_ICON}</button>
@@ -333,7 +313,7 @@ export function createNewsView(dependencies) {
   }
 
   async function renderFinancialNewsList(seq = currentRouteSeq()) {
-    setPageTitle("资讯流");
+    setPageTitle("财经资讯");
     // 文章返回且筛选未变：直接复用已加载列表并恢复滚动位置
     if (state.newsItems.length && state.newsListKey === newsListKey()) {
       renderNewsListShell(state.newsCollectionEnabled !== false);
@@ -455,7 +435,7 @@ export function createNewsView(dependencies) {
   }
 
   async function renderFinancialNewsArticle(articleId, seq = currentRouteSeq()) {
-    setPageTitle("资讯流", true, "news", "返回资讯流");
+    setPageTitle("财经资讯", true, "news", "返回财经资讯");
     const main = $("#main");
     if (!main) return;
     main.innerHTML = `<article class="news-article-page"><div class="admin-skeleton" aria-hidden="true"></div></article>`;

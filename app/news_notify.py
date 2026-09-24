@@ -52,7 +52,7 @@ def article_keyword_hit(keywords: list[str], article: dict) -> list[str]:
 
 
 def _display_title(article: dict) -> str:
-    title = str(article.get("title") or "").strip() or "财经新闻"
+    title = str(article.get("title") or "").strip() or "财经资讯"
     if len(title) > TITLE_MAX:
         return title[: TITLE_MAX - 1] + "…"
     return title
@@ -60,7 +60,7 @@ def _display_title(article: dict) -> str:
 
 def format_digest(articles: list[dict], *, extra: int = 0) -> str:
     n = len(articles) + extra
-    lines = [f"财经新闻 {n} 条命中关键词", ""]
+    lines = [f"财经资讯 {n} 条命中关键词", ""]
     for article in articles:
         title = _display_title(article)
         source = str(article.get("source_name") or "").strip()
@@ -69,7 +69,7 @@ def format_digest(articles: list[dict], *, extra: int = 0) -> str:
     if extra:
         lines.append(f"· 还有 {extra} 条")
     lines.append("")
-    lines.append(f"打开财经新闻查看 {NEWS_URL}")
+    lines.append(f"打开财经资讯查看 {NEWS_URL}")
     return "\n".join(lines)
 
 

@@ -4625,7 +4625,7 @@ def test_financial_news_navigation_keeps_quick_news_in_timeline():
     nav = src[src.index("const NAV ="):src.index("const SIDEBAR_SLIM_KEY")]
     mobile = src[src.index("const MOBILE_NAV ="):src.index("function renderBottomNav")]
     assert nav.index('route: "timeline"') < nav.index('route: "news"') < nav.index('route: "knowledge"')
-    assert 'label: "财经新闻"' in nav
+    assert 'label: "财经资讯"' in nav
     assert 'route: "news"' in mobile
     assert 'data-platform="live"' in _fn_body("tlPillsHtml")
 
@@ -4649,7 +4649,7 @@ def test_mobile_navigation_is_icon_only_and_accessible():
 
     for route, icon, label in (
         ("timeline", "HOME_ICON", "动态"),
-        ("news", "NEWS_ICON", "财经新闻"),
+        ("news", "NEWS_ICON", "财经资讯"),
         ("home", "GRID_ICON", "广场"),
         ("settings", "USER_ICON", "个人设置"),
     ):
@@ -4705,7 +4705,8 @@ def test_news_stream_layout_uses_responsive_source_navigation():
     src = NEWS_JS.read_text()
     assert "news-stream-layout" in src
     assert "news-source-rail" in src
-    assert "news-source-mobile" in src
+    assert "news-source-mobile" not in src
+    assert '<details class="news-source-group" open>' in src
     assert "news-source-filter" not in src
     assert 'id="news-source-filter"' not in src
     select = _fn_body("selectNewsSource", NEWS_JS)
@@ -4748,7 +4749,7 @@ def test_news_list_item_does_not_nest_button_in_link():
 
 def test_news_copy_uses_stream_name():
     src = NEWS_JS.read_text()
-    assert 'setPageTitle("资讯流"' in src
+    assert 'setPageTitle("财经资讯"' in src
     assert "财经新闻" not in src
 
 
@@ -4803,8 +4804,8 @@ def test_news_stream_css_has_two_column_and_mobile_contract():
     assert ".news-source-row .nav-svg" in css
     assert ".news-unread-toggle .eye-icon" in css
     mobile = _media_block(css, "@media (max-width: 768px)", last=False)
-    assert ".news-source-rail" in mobile and "display: none" in mobile
-    assert ".news-source-mobile" in mobile and "display:" in mobile
+    assert ".news-source-rail" in mobile and "max-height: 50vh" in mobile
+    assert "news-source-mobile" not in mobile
     assert "width: 96px" in mobile and "height: 64px" in mobile
     assert ".news-page.is-searching .news-stream-search" in mobile
 
@@ -4819,7 +4820,7 @@ def test_admin_news_tab_is_full_feed_manager():
     ):
         assert f"function {name}" in src or f"async function {name}" in src
     assert "财经资讯" in src
-    assert "向用户显示财经新闻" in src
+    assert "向用户显示财经资讯" in src
     assert "显示已归档" in src
     archived_toggle = _fn_body("updateAdminNewsArchived", ADMIN_NEWS_JS)
     assert "loadAdminNews()" in archived_toggle
@@ -4892,7 +4893,7 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     # 手机（≤768px）也显示入口：知识库已放开移动端；财经新闻与研报中心并排
     assert "grid-template-columns: 1fr 1fr" in css
     assert "go('news')" in timeline
-    assert "财经新闻" in timeline
+    assert "财经资讯" in timeline
 
 
 

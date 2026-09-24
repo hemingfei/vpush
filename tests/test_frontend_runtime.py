@@ -530,8 +530,8 @@ def _contrast_ratio(foreground: str, background: str) -> float:
     ("is_admin", "news_visible", "expected"),
     [
         (False, False, [("timeline", "动态"), ("home", "广场"), ("settings", "个人设置")]),
-        (False, True, [("timeline", "动态"), ("news", "财经新闻"), ("home", "广场"), ("settings", "个人设置")]),
-        (True, True, [("timeline", "动态"), ("news", "财经新闻"), ("home", "广场"), ("settings", "个人设置"), ("more", "更多")]),
+        (False, True, [("timeline", "动态"), ("news", "财经资讯"), ("home", "广场"), ("settings", "个人设置")]),
+        (True, True, [("timeline", "动态"), ("news", "财经资讯"), ("home", "广场"), ("settings", "个人设置"), ("more", "更多")]),
     ],
 )
 @pytest.mark.parametrize("width", [320, 768])
@@ -1158,25 +1158,25 @@ def test_news_stream_switches_source_navigation_by_viewport(page, static_origin,
     install_news_bootstrap(page)
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
-    expect(page.locator(".section-title")).to_have_text("资讯流")
+    expect(page.locator(".news-stream-title .section-title")).to_have_count(0)
+    expect(page.locator(".section-meta")).to_have_text("实时更新的财经资讯聚合")
     expect(page.locator(".news-item-unread-dot")).to_have_count(1)
     expect(page.locator(".news-item-topics button").first).to_have_text("宏观")
+    expect(page.locator(".news-source-group").first).to_have_attribute("open", "")
     box = page.locator(".news-list-item").first.bounding_box()
     assert box is not None
-    # 手机首屏工具条收成两行后，第一张卡片应落在 300px 以内
-    assert box["y"] < (300 if width <= 768 else 360)
+    rail = page.locator(".news-source-rail").bounding_box()
+    assert rail is not None
+    expect(page.locator(".news-source-rail")).to_be_visible()
     if width > 768:
         expect(page.locator(".news-stream-search input")).to_be_visible()
-        expect(page.locator(".news-source-rail")).to_be_visible()
-        expect(page.locator(".news-source-mobile")).to_be_hidden()
-        rail = page.locator(".news-source-rail").bounding_box()
-        assert rail is not None and rail["x"] > box["x"]
+        assert rail["x"] > box["x"]
+        assert box["y"] < 360
     else:
         expect(page.locator(".news-stream-search input")).to_be_hidden()
         page.get_by_role("button", name="搜索资讯").click()
         expect(page.locator(".news-stream-search input")).to_be_visible()
-        expect(page.locator(".news-source-rail")).to_be_hidden()
-        expect(page.locator(".news-source-mobile")).to_be_visible()
+        assert rail["y"] < box["y"]
 
 
 @pytest.mark.parametrize("width", [390, 768, 1280])
@@ -1184,7 +1184,7 @@ def test_news_stream_does_not_overflow_or_overlap(page, static_origin, width):
     install_news_bootstrap(page)
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
-    expect(page.locator(".section-title")).to_have_text("资讯流")
+    expect(page.locator(".news-stream-title .section-title")).to_have_count(0)
     assert page.evaluate("() => document.documentElement.scrollWidth <= document.documentElement.clientWidth")
     assert page.evaluate("""() => {
       const item = document.querySelector('.news-list-item');
