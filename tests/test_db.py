@@ -2,6 +2,7 @@
 import logging
 import sqlite3
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,36 @@ def test_news_migration_seeds_builtin_sources_and_feeds(tmp_path):
     assert [row["slug"] for row in sources] == ["bloomberg", "caixin", "ft", "morganstanley"]
     assert {row["slug"] for row in sources if row["default_selected"] == 1} == {"caixin"}
     assert len(feeds) == 5
+
+
+def test_paused_source_stays_selected_when_picker_omits_it(tmp_path):
+    db = DB(str(tmp_path / "paused-keep.db"))
+    uid = db.add_user("reader", "hash")
+    bloomberg = db._rows("SELECT id FROM news_sources WHERE slug = 'bloomberg'")[0]["id"]
+    caixin = db._rows("SELECT id FROM news_sources WHERE slug = 'caixin'")[0]["id"]
+    db.update_news_source(bloomberg, enabled=False)
+    db.set_user_news_sources(uid, [bloomberg, caixin])
+    db.set_setting("news_select_new_sources_v1", "1")
+    db.update_user_atomic(uid, {}, news_source_ids=[caixin])
+    assert set(db.list_user_news_source_ids(uid)) == {bloomberg, caixin}
+    db.update_news_source(bloomberg, enabled=True)
+    db.update_user_atomic(uid, {}, news_source_ids=[caixin])
+    assert set(db.list_user_news_source_ids(uid)) == {caixin}
+
+
+def test_new_internal_sources_select_everyone_immediately(tmp_path):
+    db = DB(str(tmp_path / "new-sources.db"))
+    early = db.add_user("early", "hash")
+    source_id = db.get_or_create_internal_news_source("财新 · 金融", "心裁", "xincai-source-si35")
+    assert source_id not in db.list_user_news_source_ids(early)
+    assert db.backfill_new_news_sources(datetime(2026, 9, 24, 2, 5)) == 1
+    assert source_id in db.list_user_news_source_ids(early)
+    later = db.add_user("later", "hash")
+    assert source_id in db.list_user_news_source_ids(later)
+    newer = db.get_or_create_internal_news_source("财新 · 观点", "心裁", "xincai-source-view")
+    assert newer in db.list_user_news_source_ids(early)
+    assert newer in db.list_user_news_source_ids(later)
+    assert db.backfill_new_news_sources(datetime(2026, 9, 24, 9, 0)) == 0
 
 
 def test_new_user_gets_only_builtin_news_sources(tmp_path):

@@ -156,6 +156,16 @@ def test_feishu_card_summary_for_notification():
     assert len(summary) <= 120
 
 
+def test_feishu_card_summary_strips_unicode16_emoji():
+    # U+1FAE9/U+1FAEA 会打崩飞书建卡接口（230099），摘要剔除、普通 emoji 保留
+    from app.notifiers.feishu import card_summary
+
+    summary = card_summary("李四：普京🫩讲话🔥🫡🫪")
+    assert "\U0001FAE9" not in summary and "\U0001FAEA" not in summary
+    assert "🔥" in summary and "🫡" in summary
+    assert "普京" in summary and "讲话" in summary
+
+
 def test_feishu_batch_cards_have_summary_and_schema():
     from app.notifiers.feishu import (
         build_feishu_combination_card,

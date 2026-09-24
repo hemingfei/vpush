@@ -33,7 +33,25 @@ export function createAdminNewsView(dependencies) {
   };
   let _adminNewsLoadSeq = 0;
 
+  // 内部源（webhook 推入）没有可轮询的 feed —— 占位 feed 是 enabled=0，
+  // 按 feed 判会永远显示「已暂停」。改看最近一次推送到达时间（每次 ingest 成功都会更新）。
+  const INTERNAL_FRESH_HOURS = 6;
+
+  function adminNewsLastIngestAt(source) {
+    return (source.feeds || [])
+      .map((feed) => feed.last_success_at)
+      .filter(Boolean)
+      .sort()
+      .pop() || "";
+  }
+
   function adminNewsSourceStatus(source) {
+    if (Number(source.internal || 0)) {
+      if (!source.enabled) return "paused";
+      const last = adminNewsLastIngestAt(source);
+      if (!last) return "paused";
+      return Date.now() - new Date(last).getTime() < INTERNAL_FRESH_HOURS * 3600 * 1000 ? "ok" : "paused";
+    }
     const feeds = (source.feeds || []).filter((feed) => !feed.archived_at && feed.enabled);
     if (!source.enabled || !feeds.length) return "paused";
     if (feeds.some((feed) => feed.consecutive_failures > 0 && !feed.last_success_at)) return "unavailable";
@@ -92,11 +110,14 @@ export function createAdminNewsView(dependencies) {
       || visible.find((source) => !source.archived_at)
       || visible[0];
     if (selected && selected.id !== adminNewsState.selectedId) adminNewsState.selectedId = selected.id;
+    const selInternal = Boolean(selected && Number(selected.internal || 0));
     const detail = selected ? `
       <section class="news-admin-detail-panel">
         <header class="news-admin-detail-head">
           <div><p class="section-kicker">媒体</p><h2 class="section-title">${escapeHtml(selected.name)}</h2>
-            <p class="section-meta">${selected.archived_at ? "已归档，用户暂不可读" : (selected.enabled ? "正在采集" : "已停用，仅保留历史文章")}</p></div>
+            <p class="section-meta">${selected.archived_at ? "已归档，用户暂不可读"
+              : selInternal ? (selected.enabled ? "由外部阅读器推送，不参与 Feed 轮询" : "已停用，仅保留历史文章")
+              : (selected.enabled ? "正在采集" : "已停用，仅保留历史文章")}</p></div>
           <div class="toolbar news-admin-actions">
             ${selected.archived_at ? `<button type="button" class="btn-normal" onclick="restoreAdminNewsSource(${selected.id})">恢复媒体</button>
               <button type="button" class="btn-ghost danger" onclick="deleteAdminNewsSource(${selected.id})">彻底删除</button>` : `
@@ -108,13 +129,27 @@ export function createAdminNewsView(dependencies) {
         </header>
         <div class="news-admin-metrics">
           <span>文章 <strong>${selected.article_count || 0}</strong></span>
-          <span>Feed <strong>${(selected.feeds || []).filter((feed) => !feed.archived_at).length}</strong></span>
+          ${selInternal
+            ? `<span>接收方式 <strong>Webhook 推送</strong></span>`
+            : `<span>Feed <strong>${(selected.feeds || []).filter((feed) => !feed.archived_at).length}</strong></span>`}
           <span>状态 <strong>${adminNewsStatusLabel(adminNewsSourceStatus(selected))}</strong></span>
         </div>
+        ${selInternal ? `
+        <div class="news-admin-feed-head"><div><h3>接收端点</h3><p class="section-meta">内容由外部程序主动推送过来，本服务不出网拉取，也不参与 Feed 轮询。</p></div></div>
+        <div class="news-admin-feeds">
+          <div class="news-admin-feed-row">
+            <div class="news-admin-feed-main">
+              <div class="news-admin-feed-title"><strong>Webhook 推送</strong><span class="news-admin-status news-admin-status-${adminNewsSourceStatus(selected)}">${adminNewsStatusLabel(adminNewsSourceStatus(selected))}</span></div>
+              <div class="news-admin-feed-url">POST ${escapeHtml(`${location.origin}/api/xincai/ingest`)}</div>
+              <div class="news-admin-feed-meta">鉴权：Authorization: Bearer &lt;XINCAI_INGEST_TOKEN&gt; · 单批上限 200 篇 · 按 externalId 幂等去重</div>
+              <div class="news-admin-feed-meta">最近接收：${escapeHtml(adminNewsLastIngestAt(selected) || "无记录")}</div>
+            </div>
+          </div>
+        </div>` : `
         <div class="news-admin-feed-head"><div><h3>Feed 地址</h3><p class="section-meta">一个媒体可以配置多个公网 RSS/Atom Feed。</p></div>
           ${selected.archived_at ? "" : `<button type="button" class="btn-normal" onclick="openNewsFeedModal(${selected.id})">${PLUS_ICON} 添加 Feed</button>`}
         </div>
-        <div class="news-admin-feeds">${(selected.feeds || []).length ? selected.feeds.map(adminNewsFeedRowHtml).join("") : emptyState("还没有配置 Feed")}</div>
+        <div class="news-admin-feeds">${(selected.feeds || []).length ? selected.feeds.map(adminNewsFeedRowHtml).join("") : emptyState("还没有配置 Feed")}</div>`}
         <div class="news-admin-feed-head" style="margin-top:18px"><div><h3>文章</h3><p class="section-meta">仅显示最近文章；删除单篇不可恢复。</p></div></div>
         <div id="admin-news-articles" class="news-admin-feeds">${emptyState("加载中…")}</div>
       </section>` : `<section class="news-admin-detail-panel">${emptyState("选择一个媒体开始管理")}</section>`;
@@ -123,7 +158,7 @@ export function createAdminNewsView(dependencies) {
     target.innerHTML = `${statsTabsHtml("news")}
       <div id="st-news" class="news-admin-page">
         <section class="section-panel news-admin-settings">
-          <div><h2 class="section-title">财经资讯</h2><p class="section-meta">共享采集所有启用 Feed；用户按媒体主动选择来源。</p></div>
+          <div><h2 class="section-title">财经资讯</h2><p class="section-meta">共享采集所有启用 Feed；用户按媒体主动选择来源。「心裁」这类内部源由外部阅读器推送，不进 Feed 轮询。</p></div>
           <div class="news-admin-settings-controls">
             <label class="switch"><input id="news-global-enabled" type="checkbox" ${settings.enabled ? "checked" : ""} onchange="saveAdminNewsSettings()"><span class="track"></span><span>启用财经新闻采集</span></label>
             <label class="switch"><input id="news-global-visible" type="checkbox" ${settings.visible ? "checked" : ""} onchange="saveAdminNewsSettings()"><span class="track"></span><span>向用户显示财经新闻</span></label>
