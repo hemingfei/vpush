@@ -755,9 +755,6 @@ export function createNewsView(dependencies) {
   function renderFinancialNewsShell(collectionEnabled = true) {
     const unreadOn = !!state.newsUnreadOnly;
     const unreadCount = Number(state.newsUnreadCount) || 0;
-  function renderFinancialNewsShell(collectionEnabled = true) {
-    const unreadOn = !!state.newsUnreadOnly;
-    const unreadCount = Number(state.newsUnreadCount) || 0;
     renderNewsShell(
       "articles",
       `${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}

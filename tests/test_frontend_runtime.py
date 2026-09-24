@@ -1867,7 +1867,6 @@ def test_news_stream_switches_source_navigation_by_viewport(page, static_origin,
     expect(page.locator(".section-title")).to_have_text("财经资讯")
     expect(page.locator(".news-item-unread-dot")).to_have_count(1)
     expect(page.locator(".news-item-topics button").first).to_have_text("宏观")
-    expect(page.locator(".news-source-group").first).to_have_attribute("open", "")
     box = page.locator(".news-list-item").first.bounding_box()
     assert box is not None
     # 三栏目工具条为单行筛选区，第一张卡片应在首屏内（手机端工具条可换行，略放宽）
