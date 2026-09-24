@@ -1160,7 +1160,7 @@ def test_news_stream_switches_source_navigation_by_viewport(page, static_origin,
     page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
     expect(page.locator(".section-title")).to_have_text("资讯流")
     expect(page.locator(".news-item-unread-dot")).to_have_count(1)
-    expect(page.locator(".news-item-topics i").first).to_have_text("宏观")
+    expect(page.locator(".news-item-topics button").first).to_have_text("宏观")
     box = page.locator(".news-list-item").first.bounding_box()
     assert box is not None
     # 手机首屏工具条收成两行后，第一张卡片应落在 300px 以内
@@ -1204,6 +1204,7 @@ def test_news_item_mark_read_updates_counts_without_navigation(page: Page, stati
     install_news_bootstrap(page)
     page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
     assert page.evaluate("() => { const btn = document.querySelector('.news-mark-read'); return !!btn && !btn.closest('a[href]'); }")
+    page.locator('[data-news-id="7"]').hover()
     page.get_by_role("button", name="标为已读").click()
     expect(page.locator('[data-news-id="7"]')).not_to_have_class(re.compile(r"is-unread"))
     expect(page.locator('[data-news-id="7"] .news-item-unread-dot')).to_have_count(0)

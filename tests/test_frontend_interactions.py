@@ -4708,7 +4708,14 @@ def test_news_stream_layout_uses_responsive_source_navigation():
     assert "news-source-mobile" in src
     assert "news-source-filter" not in src
     assert 'id="news-source-filter"' not in src
-    assert "renderNewsListShell" in _fn_body("selectNewsSource", NEWS_JS)
+    select = _fn_body("selectNewsSource", NEWS_JS)
+    assert "renderNewsListShell" not in select
+    assert "applyNewsListFilter" in select
+    apply = _fn_body("applyNewsListFilter", NEWS_JS)
+    assert "syncNewsFilterChrome" in apply
+    assert "loadFinancialNews" in apply
+    assert 'id="news-filter-summary"' in src
+    assert "news-item-topic" in _fn_body("newsListItemHtml", NEWS_JS)
 
 
 def test_news_mark_all_read_reattaches_images():

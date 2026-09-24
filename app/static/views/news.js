@@ -144,7 +144,7 @@ export function createNewsView(dependencies) {
       ? `<img class="news-list-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'%3E%3C/svg%3E" data-news-thumbnail="${item.id}" alt="" width="112" height="75" loading="lazy" onerror="this.closest('.news-list-thumb-link').style.display='none'">`
       : "";
     const topics = Array.isArray(item.topics) && item.topics.length
-      ? `<span class="news-item-topics">${item.topics.map((topic) => `<i>${escapeHtml(topic)}</i>`).join("")}</span>`
+      ? `<span class="news-item-topics">${item.topics.map((topic) => NEWS_TOPICS.includes(topic) ? `<button type="button" class="news-item-topic" onclick="selectNewsTopic('${topic}')">${escapeHtml(topic)}</button>` : `<i>${escapeHtml(topic)}</i>`).join("")}</span>`
       : "";
     return `<article class="news-list-item ${unread ? "is-unread" : "is-read"}" data-news-id="${item.id}">
     <div class="news-list-copy">
@@ -199,8 +199,9 @@ export function createNewsView(dependencies) {
       groups.get(label).push(source);
     }
     const allOn = !state.newsFilterSourceId;
+    const selectedId = String(state.newsFilterSourceId || "");
     const rows = [...groups.entries()].map(([label, sources]) => `
-    <details class="news-source-group" open>
+    <details class="news-source-group"${selectedId && sources.some((source) => String(source.id) === selectedId) ? " open" : ""}>
       <summary>${CHEVRON_DOWN_ICON}<span>${escapeHtml(label)}</span></summary>
       ${sources.map((source) => `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')"><span>${escapeHtml(source.name)}</span><b>${Number(source.unread_count) || ""}</b></button>`).join("")}
     </details>`).join("");
@@ -221,6 +222,60 @@ export function createNewsView(dependencies) {
     const options = [...groups.entries()].map(([label, sources]) => `
       <optgroup label="${escapeHtml(label)}">${sources.map((source) => `<option value="${source.id}" ${String(state.newsFilterSourceId) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}</optgroup>`).join("");
     return `<option value="">全部资讯</option>${options}`;
+  }
+
+  function newsActiveFilterParts() {
+    const parts = [];
+    if (state.newsFilterSourceId) {
+      const source = state.newsSources.find((item) => String(item.id) === String(state.newsFilterSourceId));
+      parts.push(source?.name || "指定来源");
+    }
+    if (state.newsTopic) parts.push(state.newsTopic);
+    if (state.newsUnreadOnly) parts.push("未读");
+    const query = (state.newsQuery || "").trim();
+    if (query) parts.push(`「${query}」`);
+    return parts;
+  }
+
+  function newsFilterSummaryHtml() {
+    const parts = newsActiveFilterParts();
+    const body = parts.length ? `<span>${parts.map((part) => escapeHtml(part)).join(" · ")}</span><button type="button" class="btn-ghost" onclick="clearNewsFilters()">清除</button>` : "";
+    return `<div id="news-filter-summary" class="news-filter-summary"${parts.length ? "" : " hidden"}>${body}</div>`;
+  }
+
+  function syncNewsFilterChrome() {
+    const topic = state.newsTopic || "";
+    const selected = String(state.newsFilterSourceId || "");
+    document.querySelectorAll(".news-topic-chip").forEach((button) => {
+      const on = (button.textContent || "").trim() === (topic || "全部");
+      button.classList.toggle("is-on", on);
+      button.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    const unread = document.querySelector(".news-unread-toggle");
+    if (unread) {
+      unread.classList.toggle("is-on", !!state.newsUnreadOnly);
+      unread.setAttribute("aria-pressed", state.newsUnreadOnly ? "true" : "false");
+    }
+    document.querySelectorAll(".news-source-row").forEach((row) => {
+      const on = selected ? row.dataset.sourceId === selected : row.classList.contains("news-source-all");
+      row.classList.toggle("is-on", on);
+    });
+    document.querySelectorAll(".news-source-group").forEach((group) => {
+      const ids = [...group.querySelectorAll("[data-source-id]")].map((row) => row.dataset.sourceId);
+      group.open = !!(selected && ids.includes(selected));
+    });
+    const select = document.querySelector(".news-source-mobile select");
+    if (select && select.value !== selected) select.value = selected;
+    const input = $("#news-query");
+    if (input && input.value !== (state.newsQuery || "")) input.value = state.newsQuery || "";
+    const summary = document.querySelector("#news-filter-summary");
+    if (summary) summary.outerHTML = newsFilterSummaryHtml();
+  }
+
+  function applyNewsListFilter() {
+    state.newsListKey = newsListKey();
+    syncNewsFilterChrome();
+    return loadFinancialNews(true, currentRouteSeq());
   }
 
   function newsListSkeletonHtml() {
@@ -252,6 +307,7 @@ export function createNewsView(dependencies) {
   </div>
   <div class="news-stream-layout">
     <main class="news-stream-main">
+      ${newsFilterSummaryHtml()}
       <div id="news-list" class="news-list">${newsListSkeletonHtml()}</div>
       <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
     </main>
@@ -326,9 +382,8 @@ export function createNewsView(dependencies) {
     const requestSeq = ++state.newsRequestSeq;
     if (reset) {
       stopNewsAutoLoad();
-      state.newsItems = [];
       state.newsOffset = 0;
-      list.innerHTML = newsListSkeletonHtml();
+      if (!list.querySelector(".news-list-item, .empty-state")) list.innerHTML = newsListSkeletonHtml();
     }
     const params = new URLSearchParams({ limit: "30", offset: String(state.newsOffset) });
     if (state.newsFilterSourceId) params.set("source_id", state.newsFilterSourceId);
@@ -546,10 +601,8 @@ export function createNewsView(dependencies) {
 
   async function toggleNewsUnreadOnly() {
     state.newsUnreadOnly = !state.newsUnreadOnly;
-    state.newsListKey = newsListKey();
     if (state.newsUnreadOnly) await refreshUnreadCount(currentRouteSeq());
-    renderNewsListShell(state.newsCollectionEnabled !== false);
-    await loadFinancialNews(true, currentRouteSeq());
+    return applyNewsListFilter();
   }
 
   async function markAllNewsRead() {
@@ -695,9 +748,7 @@ export function createNewsView(dependencies) {
 
   function selectNewsSource(sourceId) {
     state.newsFilterSourceId = sourceId;
-    state.newsListKey = newsListKey();
-    renderNewsListShell(state.newsCollectionEnabled !== false);
-    return loadFinancialNews(true, currentRouteSeq());
+    return applyNewsListFilter();
   }
 
   function toggleNewsSearch() {
@@ -717,16 +768,12 @@ export function createNewsView(dependencies) {
     state.newsQuery = "";
     state.newsTopic = "";
     state.newsFilterSourceId = "";
-    state.newsListKey = newsListKey();
-    renderNewsListShell(state.newsCollectionEnabled !== false);
-    return loadFinancialNews(true, currentRouteSeq());
+    return applyNewsListFilter();
   }
 
   function selectNewsTopic(topic) {
     state.newsTopic = topic || "";
-    state.newsListKey = newsListKey();
-    renderNewsListShell(state.newsCollectionEnabled !== false);
-    return loadFinancialNews(true, currentRouteSeq());
+    return applyNewsListFilter();
   }
 
   function queueNewsSearch(query) {
@@ -734,6 +781,7 @@ export function createNewsView(dependencies) {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
       state.newsListKey = newsListKey();
+      syncNewsFilterChrome();
       loadFinancialNews(true, currentRouteSeq());
     }, 250);
   }
