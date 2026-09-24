@@ -24,6 +24,11 @@ SUMMARY_LIMIT = 100
 logger = logging.getLogger(__name__)
 
 
+# Unicode 16.0 的 🫩/🫪（U+1FAE9/U+1FAEA）会让飞书建卡接口返回 230099，
+# 但正文 lark_md 不受影响，只在摘要里剔除
+_CARD_BROKEN_EMOJI = str.maketrans("", "", "\U0001FAE9\U0001FAEA")
+
+
 def card_summary(*parts: str, limit: int = SUMMARY_LIMIT) -> str:
     """拼接卡片通知摘要：parts 用「：」连接，超长在句尾截断补省略号。
 
@@ -31,7 +36,7 @@ def card_summary(*parts: str, limit: int = SUMMARY_LIMIT) -> str:
     聊天列表预览和手机推送通知的正文文案。
     """
     text = "：".join(p.strip() for p in parts if p and p.strip())
-    return truncate_text(text, limit)
+    return truncate_text(text.translate(_CARD_BROKEN_EMOJI), limit)
 
 
 def _open_url_button(text: str, url: str, *, button_type: str = "default") -> dict:
