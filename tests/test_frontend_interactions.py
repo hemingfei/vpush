@@ -4716,6 +4716,8 @@ def test_news_stream_layout_uses_responsive_source_navigation():
     assert "loadFinancialNews" in apply
     assert 'id="news-filter-summary"' in src
     assert "news-item-topic" in _fn_body("newsListItemHtml", NEWS_JS)
+    assert "news-topic-bar" not in src
+    assert "state.newsTopic === next" in _fn_body("selectNewsTopic", NEWS_JS)
 
 
 def test_news_mark_all_read_reattaches_images():

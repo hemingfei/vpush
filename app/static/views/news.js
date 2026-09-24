@@ -130,21 +130,14 @@ export function createNewsView(dependencies) {
 
   const NEWS_TOPICS = ["宏观", "国际", "科技", "公司", "市场"];
 
-  function newsTopicBarHtml() {
-    const active = state.newsTopic || "";
-    return `<div class="news-topic-bar" role="tablist" aria-label="新闻主题">
-      <button type="button" class="news-topic-chip ${active ? "" : "is-on"}" onclick="selectNewsTopic('')" aria-pressed="${active ? "false" : "true"}">全部</button>
-      ${NEWS_TOPICS.map((topic) => `<button type="button" class="news-topic-chip ${active === topic ? "is-on" : ""}" onclick="selectNewsTopic('${topic}')" aria-pressed="${active === topic ? "true" : "false"}">${topic}</button>`).join("")}
-    </div>`;
-  }
-
   function newsListItemHtml(item) {
     const unread = !item.is_read;
     const thumbnail = item.has_image
       ? `<img class="news-list-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'%3E%3C/svg%3E" data-news-thumbnail="${item.id}" alt="" width="112" height="75" loading="lazy" onerror="this.closest('.news-list-thumb-link').style.display='none'">`
       : "";
+    const activeTopic = state.newsTopic || "";
     const topics = Array.isArray(item.topics) && item.topics.length
-      ? `<span class="news-item-topics">${item.topics.map((topic) => NEWS_TOPICS.includes(topic) ? `<button type="button" class="news-item-topic" onclick="selectNewsTopic('${topic}')">${escapeHtml(topic)}</button>` : `<i>${escapeHtml(topic)}</i>`).join("")}</span>`
+      ? `<span class="news-item-topics">${item.topics.map((topic) => NEWS_TOPICS.includes(topic) ? `<button type="button" class="news-item-topic${topic === activeTopic ? " is-on" : ""}" aria-pressed="${topic === activeTopic ? "true" : "false"}" onclick="selectNewsTopic('${topic}')">${escapeHtml(topic)}</button>` : `<i>${escapeHtml(topic)}</i>`).join("")}</span>`
       : "";
     return `<article class="news-list-item ${unread ? "is-unread" : "is-read"}" data-news-id="${item.id}">
     <div class="news-list-copy">
@@ -246,8 +239,8 @@ export function createNewsView(dependencies) {
   function syncNewsFilterChrome() {
     const topic = state.newsTopic || "";
     const selected = String(state.newsFilterSourceId || "");
-    document.querySelectorAll(".news-topic-chip").forEach((button) => {
-      const on = (button.textContent || "").trim() === (topic || "全部");
+    document.querySelectorAll(".news-item-topic").forEach((button) => {
+      const on = !!topic && (button.textContent || "").trim() === topic;
       button.classList.toggle("is-on", on);
       button.setAttribute("aria-pressed", on ? "true" : "false");
     });
@@ -294,6 +287,7 @@ export function createNewsView(dependencies) {
     <div class="news-stream-title"><h2 class="section-title">资讯流</h2><p class="section-meta">实时更新的财经资讯聚合</p></div>
     <div class="news-source-mobile"><select aria-label="资讯来源" onchange="selectNewsSource(this.value)">${newsGroupedOptions()}</select>${CHEVRON_DOWN_ICON}</div>
     <div class="news-stream-actions">
+      <button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}" aria-label="未读">${EYE_ICON}<span>未读</span>${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</button>
       <button type="button" class="icon-btn news-search-toggle${searching ? " is-on" : ""}" onclick="toggleNewsSearch()" aria-expanded="${searching ? "true" : "false"}" aria-label="搜索资讯">${SEARCH_ICON}</button>
       ${unreadCount ? `<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()" aria-label="全部已读">${CHECK_CHECK_ICON}<span>全部已读</span></button>` : ""}
       <button type="button" class="btn-ghost news-source-manage" onclick="openNewsSourcePicker()">${GEAR_ICON}<span>我的来源</span></button>
@@ -301,10 +295,6 @@ export function createNewsView(dependencies) {
     <label class="news-stream-search">${SEARCH_ICON}<input id="news-query" type="search" placeholder="搜索资讯..." value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)" aria-label="搜索资讯"></label>
   </header>
   ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停资讯采集，历史文章仍可阅读。</div>'}
-  <div class="news-stream-topbar">
-    ${newsTopicBarHtml()}
-    <button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}">${EYE_ICON}<span>未读</span>${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</button>
-  </div>
   <div class="news-stream-layout">
     <main class="news-stream-main">
       ${newsFilterSummaryHtml()}
@@ -772,7 +762,8 @@ export function createNewsView(dependencies) {
   }
 
   function selectNewsTopic(topic) {
-    state.newsTopic = topic || "";
+    const next = topic || "";
+    state.newsTopic = state.newsTopic === next ? "" : next;
     return applyNewsListFilter();
   }
 

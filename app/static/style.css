@@ -4774,8 +4774,6 @@ details.bind-steps[open] > summary .ui-icon { transform: rotate(90deg); }
 .news-stream-search { display: flex; align-items: center; width: min(320px, 34vw); min-height: 42px; gap: 8px; padding: 0 12px; border: var(--border-default); border-radius: var(--radius-control); background: var(--color-surface); order: 2; }
 .news-stream-search .search-ic { width: 16px; height: 16px; flex: 0 0 16px; color: var(--color-text-muted); }
 .news-stream-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--color-text); font: inherit; }
-.news-stream-topbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; min-width: 0; }
-.news-stream-topbar .news-topic-bar { flex: 1 1 auto; margin: 0; min-width: 0; }
 .news-stream-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: start; }
 .news-source-rail { position: sticky; top: 72px; max-height: calc(100vh - 92px); overflow-y: auto; min-width: 0; padding: 12px; border: var(--border-default); border-radius: var(--radius-card); background: var(--color-surface); }
 .news-source-rail-head { display: flex; align-items: center; justify-content: space-between; min-height: 40px; padding: 0 8px; }
@@ -4803,14 +4801,10 @@ details.bind-steps[open] > summary .ui-icon { transform: rotate(90deg); }
 .news-unread-toggle.is-on { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-white); }
 .news-unread-toggle.is-on b { background: rgba(255, 255, 255, 0.22); color: var(--color-white); }
 .news-read-all { flex: 0 0 auto; }
-.news-topic-bar { display: flex; gap: 8px; margin-bottom: 12px; overflow-x: auto; scrollbar-width: none; }
-.news-topic-bar::-webkit-scrollbar { display: none; }
-.news-topic-chip { flex: 0 0 auto; height: 36px; padding: 0 14px; border: var(--border-soft); border-radius: 14px; background: var(--color-surface); color: var(--color-text-muted); font-size: var(--text-sm); cursor: pointer; white-space: nowrap; }
-.news-topic-chip:hover { border-color: var(--color-accent); color: var(--color-text); }
-.news-topic-chip.is-on { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-white); font-weight: var(--font-weight-semibold); }
 .news-item-topics { display: inline-flex; flex: 0 0 auto; gap: 4px; }
 .news-item-topics i,
 .news-item-topics button { padding: 1px 6px; border: 0; border-radius: 4px; background: var(--color-surface-accent); color: var(--color-accent); font: inherit; font-size: var(--text-xs); font-style: normal; line-height: 1.5; white-space: nowrap; cursor: pointer; }
+.news-item-topics button.is-on { background: var(--color-accent); color: var(--color-white); }
 .news-day-sep { display: flex; align-items: center; gap: 10px; margin: 14px 0 8px; color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--font-weight-semibold); letter-spacing: 1px; }
 .news-day-sep::after { content: ""; flex: 1 1 auto; border-top: 1px solid var(--color-line); }
 .news-day-sep:first-child { margin-top: 2px; }
@@ -4903,12 +4897,10 @@ details.bind-steps[open] > summary .ui-icon { transform: rotate(90deg); }
   .news-stream-search { display: none; order: 4; width: 100%; }
   .news-page.is-searching .news-stream-search { display: flex; flex: 1 0 100%; }
   .news-source-manage { display: inline-flex; }
-  .news-stream-topbar { align-items: center; flex-direction: row; gap: 8px; margin-bottom: 8px; }
   .news-source-mobile { position: relative; display: flex; order: 2; align-items: center; flex: 1 1 7.5em; width: auto; max-width: 46%; min-width: 0; }
   .news-source-mobile select { width: 100%; min-width: 0; min-height: 36px; padding: 0 32px 0 10px; border: var(--border-default); border-radius: var(--radius-control); appearance: none; background: var(--color-surface); color: var(--color-text); }
   .news-source-mobile .chevron-down-icon { position: absolute; right: 8px; pointer-events: none; }
   .news-unread-toggle { height: 36px; padding: 0 10px; }
-  .news-topic-chip { height: 32px; }
   .news-stream-layout { grid-template-columns: 1fr; gap: 0; }
   .news-source-rail { display: none; }
   .news-list-item { gap: 12px; padding: 12px; }
