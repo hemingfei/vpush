@@ -1531,6 +1531,19 @@ def test_source_status_splits_cold_start_and_credentials():
     assert "还没跑过" in cause
 
 
+def test_ima_source_row_uses_arm_not_empty_rate():
+    """ima 归 ARM，全景不把空成功率画成「暂无数据」，也不算进「尚未开始」。"""
+    rows = _fn_body("sourceRowsHtml")
+    status = _fn_body("armStatusCell")
+    rate = _fn_body("armRateCell")
+    duty = _fn_body("dutyStripHtml")
+    assert 'managed_by === "arm"' in rows
+    assert "ARM 中间层" in status
+    assert "由 ARM 采集" in rate
+    assert "rateBar" not in rate
+    assert 'managed_by === "arm"' in duty
+
+
 def test_stale_kols_are_exceptions_not_inventory():
     """停更名单：只启用、从未抓到或超过 48h、最多 10 个。"""
     src = APP_JS.read_text()

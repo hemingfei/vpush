@@ -6070,6 +6070,31 @@ def create_api_router(
                 )
                 # 双通道总览：模式 / 两侧凭证 / 分流覆盖 / 429 冷却，供后台展示与健康判据
                 src["channels"] = x_channel_overview(db)
+            if platform == "ima":
+                # 研报不走本机轮询，采集在 ARM。24h 成功率为空时前端会写成「暂无数据」。
+                finished = 0
+                raw_finished = str(db.get_setting("ima_pure_last_finished_at") or "").strip()
+                try:
+                    finished = int(raw_finished)
+                except ValueError:
+                    finished = 0
+                result: dict = {}
+                raw_result = db.get_setting("ima_pure_last_result") or ""
+                if raw_result:
+                    try:
+                        parsed = json.loads(raw_result)
+                    except json.JSONDecodeError:
+                        parsed = {}
+                    if isinstance(parsed, dict):
+                        result = parsed
+                src["managed_by"] = "arm"
+                src["arm"] = {
+                    "configured": bool(os.environ.get("IMA_PULL_URL", "").strip()),
+                    "last_finished_at": finished,
+                    "downloaded": int(result.get("downloaded") or 0),
+                    "failed": int(result.get("failed") or 0),
+                    "last_error": str(result.get("last_error") or "")[:200],
+                }
             sources.append(src)
         xueqiu_cookie = db.get_setting("xueqiu_cookie") or ""
         xueqiu_updated = db.get_setting("xueqiu_cookie_updated_at") or ""

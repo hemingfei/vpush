@@ -2939,6 +2939,26 @@ def test_stats_include_source_health():
     assert sources["xueqiu"]["health"] == "overdue"
 
 
+def test_stats_ima_row_reports_arm():
+    """ima 不走本机轮询。空的 24h 成功率留给前端，行上带 ARM 上次采集。"""
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    db.set_setting("ima_pure_last_finished_at", "1710000000")
+    db.set_setting(
+        "ima_pure_last_result",
+        json.dumps({"downloaded": 12, "failed": 0, "last_error": ""}),
+    )
+    stats = client.get("/api/stats", headers=headers).json()
+    ima = next(row for row in stats["sources"] if row["platform"] == "ima")
+    assert ima["managed_by"] == "arm"
+    assert ima["arm"]["last_finished_at"] == 1710000000
+    assert ima["arm"]["downloaded"] == 12
+    assert ima["arm"]["failed"] == 0
+    assert ima["arm"]["last_error"] == ""
+    assert ima["success_rate_24h"] is None
+
+
 def test_stats_no_enabled_kol_not_stale():
     """没有该抓的大V时，不把陈旧 source_ok 当成故障。"""
     client = make_client()
