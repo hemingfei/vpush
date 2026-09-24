@@ -144,6 +144,7 @@ from .news import (
     NewsService,
     NewsUpstreamError,
     clean_summary_text,
+    dedupe_news_stream,
     normalize_feed_url,
 )
 from .plaza import (
@@ -2489,7 +2490,10 @@ def create_api_router(
         return {
             "items": items,
             "collection_enabled": db.get_setting("news_enabled") == "1",
-            "unread_count": db.unread_news_count(user["id"]),
+            "unread_count": len(dedupe_news_stream(db.list_news_articles(
+                user["id"], source_id=None, q="", limit=None, offset=0, unread=True,
+                exclude_internal=_exclude_internal_news(user),
+            ))),
         }
 
     @router.get("/news")
@@ -2510,20 +2514,28 @@ def create_api_router(
             if int(browse["internal"] or 0) and hide_internal:
                 raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
         view_started_at = datetime.now(UTC).isoformat()
-        rows = db.list_news_articles(
-            user["id"], source_id=source_id, q=q, limit=limit, offset=offset,
-            unread=unread, topic=topic.strip(), exclude_internal=hide_internal,
-        )
+        if source_id is None:
+            rows = dedupe_news_stream(db.list_news_articles(
+                user["id"], source_id=None, q=q, limit=None, offset=0,
+                unread=unread, topic=topic.strip(), exclude_internal=hide_internal,
+            ))
+            total = len(rows)
+            rows = rows[offset:offset + limit]
+        else:
+            rows = db.list_news_articles(
+                user["id"], source_id=source_id, q=q, limit=limit, offset=offset,
+                unread=unread, topic=topic.strip(), exclude_internal=hide_internal,
+            )
+            total = db.count_news_articles(
+                user["id"], source_id=source_id, q=q, unread=unread, topic=topic.strip(),
+                exclude_internal=hide_internal,
+            )
         items = []
         for row in rows:
             row.pop("images", None)
             row["summary"] = clean_summary_text(row.get("summary") or "")
             row["is_new"] = not row["is_read"]
             items.append(row)
-        total = db.count_news_articles(
-            user["id"], source_id=source_id, q=q, unread=unread, topic=topic.strip(),
-            exclude_internal=hide_internal,
-        )
         return {
             "items": items,
             "offset": offset,
