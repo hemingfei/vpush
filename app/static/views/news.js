@@ -274,7 +274,7 @@ export function createNewsView(dependencies) {
     const searching = !!(state.newsQuery || "").trim();
     main.innerHTML = `<section class="news-page${searching ? " is-searching" : ""}" id="news-page">
   <header class="news-stream-head">
-    <div class="news-stream-title"><p class="section-meta">实时更新的财经资讯聚合</p><button type="button" class="news-source-switch" onclick="toggleNewsSourceSheet()" aria-haspopup="dialog" aria-expanded="false" aria-controls="news-source-rail"><span>${escapeHtml(newsSourceSwitchLabel())}</span>${CHEVRON_DOWN_ICON}</button></div>
+    <div class="news-stream-title"><button type="button" class="news-source-switch" onclick="toggleNewsSourceSheet()" aria-haspopup="dialog" aria-expanded="false" aria-controls="news-source-rail"><span>${escapeHtml(newsSourceSwitchLabel())}</span>${CHEVRON_DOWN_ICON}</button></div>
     <div class="news-stream-actions">
       <button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}" aria-label="未读">${EYE_ICON}<span>未读</span>${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</button>
       <button type="button" class="icon-btn news-search-toggle${searching ? " is-on" : ""}" onclick="toggleNewsSearch()" aria-expanded="${searching ? "true" : "false"}" aria-label="搜索资讯">${SEARCH_ICON}</button>

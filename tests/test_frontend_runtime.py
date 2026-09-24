@@ -1159,7 +1159,7 @@ def test_news_stream_switches_source_navigation_by_viewport(page, static_origin,
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
     expect(page.locator(".news-stream-title .section-title")).to_have_count(0)
-    expect(page.locator(".section-meta")).to_have_text("实时更新的财经资讯聚合")
+    expect(page.locator(".news-page .section-meta")).to_have_count(0)
     expect(page.locator(".news-item-unread-dot")).to_have_count(1)
     expect(page.locator(".news-item-topics button").first).to_have_text("宏观")
     expect(page.locator(".news-source-group").first).to_have_attribute("open", "")
@@ -1171,7 +1171,11 @@ def test_news_stream_switches_source_navigation_by_viewport(page, static_origin,
         expect(rail).to_be_visible()
         expect(switch).to_be_hidden()
         expect(page.locator(".news-stream-search input")).to_be_visible()
-        assert rail.bounding_box()["x"] > box["x"]
+        rail_box = rail.bounding_box()
+        search_box = page.locator(".news-stream-search").bounding_box()
+        assert rail_box["x"] > box["x"]
+        assert abs(search_box["x"] - rail_box["x"]) < 1
+        assert abs(search_box["width"] - rail_box["width"]) < 1
         assert box["y"] < 360
     else:
         expect(rail).to_be_hidden()

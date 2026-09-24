@@ -166,7 +166,7 @@ def _plain_text(value: object, limit: int) -> str:
 
 # 财新等 Feed 的 description 以「图 + <dl>图注</dl>」开头；只剥开头，正文里的「图：」保留。
 _CAPTION_BLOCK = re.compile(r"<(dl|figure|figcaption)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
-_LEADING_CAPTION = re.compile(r"^(?:\[图\]\s*|[^\s【]{0,200}?图[:：]\S+(?:\s+|$))")
+_LEADING_CAPTION = re.compile(r"^(?:\[图\]\s*|[^【]{0,200}?。\s*图[:：]\S+(?:\s+|$))")
 
 
 def clean_summary_text(text: str) -> str:

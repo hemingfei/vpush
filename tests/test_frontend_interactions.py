@@ -4800,6 +4800,13 @@ def test_news_stream_css_has_two_column_and_mobile_contract():
     css = STYLE_CSS.read_text()
     assert ".news-stream-layout" in css
     assert "grid-template-columns: minmax(0, 1fr) 300px" in css
+    news_page = re.search(r"\.news-page\s*\{([^}]*)\}", css)
+    assert news_page and "max-width" not in news_page.group(1)
+    head = re.search(r"\.news-stream-head\s*\{([^}]*)\}", css)
+    assert head and "grid-template-columns: minmax(0, 1fr) 300px" in head.group(1)
+    item = re.search(r"\.news-list-item\s*\{([^}]*)\}", css)
+    assert item and "border-radius" not in item.group(1)
+    assert ".news-list-item.is-unread { border-left" not in css
     thumb = re.search(r"\.news-list-thumb\s*\{([^}]*)\}", css)
     assert thumb and "width: 112px" in thumb.group(1) and "height: 75px" in thumb.group(1)
     assert ".news-item-unread-dot" in css and "width: 7px" in css

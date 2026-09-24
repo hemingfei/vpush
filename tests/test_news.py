@@ -112,8 +112,13 @@ def test_clean_summary_text_strips_leading_image_markers_and_credits():
     )
     assert clean_summary_text(stored) == "全球劳动力市场正在对年轻人关上大门"
     assert clean_summary_text("资料图：王陆进。图：张宇/中新社/视觉中国 【财新网】正文") == "【财新网】正文"
-    kept = "【彭博】正文提到如下图：数据来源于 IMF"
-    assert clean_summary_text(kept) == kept
+    spaced = (
+        "2026年9月22日，杭州，千问办公CEO正式发布AI硬件QwenNote A2。图：视觉中国 "
+        "2026年9月22日，杭州，千问办公CEO正式发布AI硬件QwenNote A2。图：视觉中国 【财新网】用智能体"
+    )
+    assert clean_summary_text(spaced) == "【财新网】用智能体"
+    for kept in ("【彭博】正文提到如下图：数据来源于 IMF", "报告显示，如下图：GDP 增速放缓"):
+        assert clean_summary_text(kept) == kept
     assert clean_summary_text("") == ""
 
 
