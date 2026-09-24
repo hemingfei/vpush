@@ -168,6 +168,7 @@ from .news import (
     NewsService,
     NewsUpstreamError,
     clean_summary_text,
+    dedupe_news_stream,
     normalize_feed_url,
 )
 from .market import MarketQuotes
@@ -2959,7 +2960,10 @@ def create_api_router(
         return {
             "items": items,
             "collection_enabled": db.get_setting("news_enabled") == "1",
-            "unread_count": db.unread_news_count(user["id"]),
+            "unread_count": len(dedupe_news_stream(db.list_news_articles(
+                user["id"], source_id=None, q="", limit=None, offset=0, unread=True,
+                exclude_internal=_exclude_internal_news(user),
+            ))),
         }
 
     @router.get("/news")
@@ -2981,10 +2985,23 @@ def create_api_router(
                 raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
         view_started_at = datetime.now(UTC).isoformat()
         anchor = (db.get_user(user["id"]) or {}).get("news_last_seen_at")
-        rows = db.list_news_articles(
-            user["id"], source_id=source_id, q=q, limit=limit, offset=offset,
-            unread=unread, topic=topic.strip(), exclude_internal=hide_internal,
-        )
+        if source_id is None:
+            # main v1.12.264：全部资讯合并同题稿（dedupe_news_stream 全量去重后内存分页）
+            rows = dedupe_news_stream(db.list_news_articles(
+                user["id"], source_id=None, q=q, limit=None, offset=0,
+                unread=unread, topic=topic.strip(), exclude_internal=hide_internal,
+            ))
+            total = len(rows)
+            rows = rows[offset:offset + limit]
+        else:
+            rows = db.list_news_articles(
+                user["id"], source_id=source_id, q=q, limit=limit, offset=offset,
+                unread=unread, topic=topic.strip(), exclude_internal=hide_internal,
+            )
+            total = db.count_news_articles(
+                user["id"], source_id=source_id, q=q, unread=unread, topic=topic.strip(),
+                exclude_internal=hide_internal,
+            )
         items = []
         for row in rows:
             row.pop("images", None)
@@ -2993,10 +3010,6 @@ def create_api_router(
             # is_read 走单篇已读记录，二者独立供前端使用
             row["is_new"] = bool(anchor and row["published_at"] > anchor)
             items.append(row)
-        total = db.count_news_articles(
-            user["id"], source_id=source_id, q=q, unread=unread, topic=topic.strip(),
-            exclude_internal=hide_internal,
-        )
         return {
             "items": items,
             "offset": offset,

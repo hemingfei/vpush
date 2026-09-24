@@ -1918,6 +1918,7 @@ def test_news_article_page_marks_read_on_open(page: Page, static_origin: str):
     install_news_bootstrap(page)
     page.goto(f"{static_origin}/news/7", wait_until="domcontentloaded")
     expect(page.get_by_role("heading", name="Title")).to_be_visible()
+    expect(page.locator(".news-article-body p")).to_have_css("text-indent", "34px")
     page.wait_for_function("() => (window.__newsRequests || []).some((call) => String(call.url).includes('/api/news/7/read') && String(call.method || 'GET').toUpperCase() === 'POST')")
 
 

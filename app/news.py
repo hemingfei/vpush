@@ -9,6 +9,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 from time import struct_time
 from urllib.parse import (
     SplitResult,
@@ -183,17 +184,62 @@ def _plain_text(value: object, limit: int) -> str:
 
 # 财新等 Feed 的 description 以「图 + <dl>图注</dl>」开头；只剥开头，正文里的「图：」保留。
 _CAPTION_BLOCK = re.compile(r"<(dl|figure|figcaption)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
-_LEADING_CAPTION = re.compile(r"^(?:\[图\]\s*|[^【]{0,200}?。\s*图[:：]\S+(?:\s+|$))")
+# 署名可含空格（图：IC photo）。只多吃拉丁词，避免把后面的中文正文吃掉。
+_LEADING_CAPTION = re.compile(
+    r"^(?:\[图\]\s*|[^【]{0,200}?。\s*图[:：][^\s【]{1,80}(?:\s+[A-Za-z][\w.]*)*)"
+)
+_TITLE_KEY = re.compile(r"[\s|｜:：,，.。!！?？\"“”'‘’、]+")
 
 
 def clean_summary_text(text: str) -> str:
     text = (text or "").strip()
     for _ in range(4):
-        stripped = _LEADING_CAPTION.sub("", text, count=1)
+        stripped = _LEADING_CAPTION.sub("", text, count=1).strip()
         if stripped == text:
             break
         text = stripped
     return text
+
+
+def news_dedupe_key(title: str, published_at: str) -> tuple[str, str]:
+    """同一天（上海时区）且标题规范化后相同，视为同一篇。"""
+    day = (published_at or "")[:10]
+    try:
+        parsed = datetime.fromisoformat((published_at or "").replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            day = parsed.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    except ValueError:
+        pass
+    return day, _TITLE_KEY.sub("", title or "").casefold()
+
+
+def _prefer_news_copy(candidate: dict, current: dict) -> bool:
+    if bool(candidate.get("has_image")) != bool(current.get("has_image")):
+        return bool(candidate.get("has_image"))
+    candidate_len = len(clean_summary_text(candidate.get("summary") or ""))
+    current_len = len(clean_summary_text(current.get("summary") or ""))
+    if candidate_len != current_len:
+        return candidate_len > current_len
+    if (candidate.get("published_at") or "") != (current.get("published_at") or ""):
+        return (candidate.get("published_at") or "") > (current.get("published_at") or "")
+    return int(candidate.get("id") or 0) > int(current.get("id") or 0)
+
+
+def dedupe_news_stream(rows: list[dict]) -> list[dict]:
+    """全部资讯：同一天同标题只留一条。输入需按发布时间倒序。"""
+    winners: dict[tuple[str, str], dict] = {}
+    order: list[tuple[str, str]] = []
+    for row in rows:
+        key = news_dedupe_key(row.get("title") or "", row.get("published_at") or "")
+        if not key[1]:
+            key = ("", f"id:{row.get('id')}")
+        current = winners.get(key)
+        if current is None:
+            winners[key] = row
+            order.append(key)
+        elif _prefer_news_copy(row, current):
+            winners[key] = row
+    return [winners[key] for key in order]
 
 
 def _summary_text(value: object) -> str:

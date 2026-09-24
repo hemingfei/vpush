@@ -4950,6 +4950,8 @@ def test_news_unread_and_undo_css_contract():
     item = re.search(r"\.news-list-item\s*\{([^}]*)\}", css)
     assert item and "border-bottom" in item.group(1) and "border-radius" not in item.group(1)
     assert ".news-list-item.is-unread { border-left" not in css
+    body = re.search(r"\.news-article-body p\s*\{([^}]*)\}", css)
+    assert body and "text-indent: 2em" in body.group(1)
     thumb = re.search(r"\.news-list-thumb\s*\{([^}]*)\}", css)
     assert thumb and "width: 112px" in thumb.group(1) and "height: 75px" in thumb.group(1)
 

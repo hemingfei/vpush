@@ -4649,7 +4649,7 @@ class DB:
         *,
         source_id: int | None,
         q: str,
-        limit: int,
+        limit: int | None,
         offset: int,
         unread: bool = False,
         topic: str = "",
@@ -4659,7 +4659,12 @@ class DB:
             user_id, source_id, (q or "").strip(), unread=unread, topic=topic,
             exclude_internal=exclude_internal,
         )
-        params = [user_id, user_id, *params, max(1, min(int(limit), 100)), max(0, int(offset))]
+        # hmf 口径：无订阅圈 JOIN（全局混排），SELECT 占位符仅 2 个 user_id
+        params = [user_id, user_id, *params]
+        paging = ""
+        if limit is not None:
+            params.extend([max(1, min(int(limit), 100)), max(0, int(offset))])
+            paging = " LIMIT ? OFFSET ?"
         rows = self._rows(
             "SELECT a.id, a.title, a.url, a.author, a.summary, a.published_at, "
             "a.source_id, a.topics, s.name AS source_name, s.slug AS source_slug, "
@@ -4672,7 +4677,7 @@ class DB:
             "THEN 1 ELSE 0 END AS is_read "
             "FROM news_articles a "
             "JOIN news_sources s ON s.id = a.source_id "
-            f"WHERE {where} ORDER BY a.published_at DESC, a.id DESC LIMIT ? OFFSET ?",
+            f"WHERE {where} ORDER BY a.published_at DESC, a.id DESC{paging}",
             params,
         )
         result = []

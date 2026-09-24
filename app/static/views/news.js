@@ -676,8 +676,9 @@ export function createNewsView(dependencies) {
       ? `<img class="news-list-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'%3E%3C/svg%3E" data-news-thumbnail="${item.id}" alt="" width="112" height="75" loading="lazy" onerror="this.closest('.news-list-thumb-link').style.display='none'">`
       : "";
     const activeTopic = state.newsTopic || "";
-    const topics = Array.isArray(item.topics) && item.topics.length
-      ? `<span class="news-item-topics">${item.topics.map((topic) => NEWS_TOPICS.includes(topic) ? `<button type="button" class="news-item-topic${topic === activeTopic ? " is-on" : ""}" aria-pressed="${topic === activeTopic ? "true" : "false"}" onclick="selectNewsTopic('${topic}')">${escapeHtml(topic)}</button>` : `<i>${escapeHtml(topic)}</i>`).join("")}</span>`
+    const topicNames = (Array.isArray(item.topics) ? item.topics : []).filter((topic) => topic && topic !== item.source_name);
+    const topics = topicNames.length
+      ? `<span class="news-item-topics">${topicNames.map((topic) => NEWS_TOPICS.includes(topic) ? `<button type="button" class="news-item-topic${topic === activeTopic ? " is-on" : ""}" aria-pressed="${topic === activeTopic ? "true" : "false"}" onclick="selectNewsTopic('${topic}')">${escapeHtml(topic)}</button>` : `<i>${escapeHtml(topic)}</i>`).join("")}</span>`
       : "";
     return `<article class="news-list-item ${unread ? "is-unread" : "is-read"}" data-news-id="${item.id}">
     <div class="news-list-copy">
@@ -685,7 +686,7 @@ export function createNewsView(dependencies) {
         <div class="news-item-title-row">${unread ? '<i class="news-item-unread-dot" aria-label="未读"></i>' : ""}<h3>${escapeHtml(item.title)}</h3></div>
         <p>${escapeHtml(item.summary || "暂无摘要")}</p>
       </a>
-      <div class="news-list-meta"><span class="news-item-source">${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${topics}${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})" aria-label="标为已读">${CHECK_ICON}<span>标为已读</span></button>` : ""}</div>
+      <div class="news-list-meta"><span class="news-item-source">${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${topics}${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})" aria-label="标为已读">${CHECK_ICON}</button>` : ""}</div>
     </div>${thumbnail ? `<a class="news-list-thumb-link" href="/news/${item.id}" tabindex="-1" aria-hidden="true">${thumbnail}</a>` : ""}
   </article>`;
   }

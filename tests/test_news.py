@@ -117,6 +117,8 @@ def test_clean_summary_text_strips_leading_image_markers_and_credits():
         "2026年9月22日，杭州，千问办公CEO正式发布AI硬件QwenNote A2。图：视觉中国 【财新网】用智能体"
     )
     assert clean_summary_text(spaced) == "【财新网】用智能体"
+    credit = "9月23日，Anthropic发布了新模型。图：IC photo 【财新网】OpenAI和Anthropic齐发新模型"
+    assert clean_summary_text(credit) == "【财新网】OpenAI和Anthropic齐发新模型"
     for kept in ("【彭博】正文提到如下图：数据来源于 IMF", "报告显示，如下图：GDP 增速放缓"):
         assert clean_summary_text(kept) == kept
     assert clean_summary_text("") == ""

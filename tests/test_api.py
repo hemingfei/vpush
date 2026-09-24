@@ -92,6 +92,28 @@ def test_news_list_cleans_stored_caption_summaries():
     assert items[0]["summary"] == "全球劳动力市场"
 
 
+def test_news_list_collapses_same_day_title_across_sources():
+    client = make_client("news-dedupe.db")
+    headers = user_headers(client, "news_dedupe")
+    db = client.app.state.db
+    uid = db.get_user_by_username("news_dedupe")["id"]
+    sources = db.list_news_sources()
+    first, second = sources[0]["id"], sources[1]["id"]
+    db.set_user_news_sources(uid, [first, second])
+    title = "早报 | OpenAI和Anthropic齐发新模型"
+    plain = insert_news_article(db, first, "2026-09-24T05:16:00+00:00", external_id="dup-a")
+    pictured = insert_news_article(db, second, "2026-09-24T05:17:00+00:00", external_id="dup-b")
+    db._execute("UPDATE news_articles SET title = ?, summary = ? WHERE id = ?", (title, "短摘要", plain))
+    db._execute(
+        "UPDATE news_articles SET title = ?, summary = ?, images = ? WHERE id = ?",
+        (title, "【财新网】更完整的摘要", '["https://img.example/a.jpg"]', pictured),
+    )
+    merged = client.get("/api/news", headers=headers).json()["items"]
+    assert [item["id"] for item in merged] == [pictured]
+    own = client.get(f"/api/news?source_id={first}", headers=headers).json()["items"]
+    assert [item["id"] for item in own] == [plain]
+
+
 def test_news_list_and_seen_anchor_are_user_scoped():
     client = make_client("news-api.db")
     first_headers = user_headers(client, "news_first")
