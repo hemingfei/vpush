@@ -71,6 +71,22 @@ def insert_news_article(db, source_id, published_at, external_id=None, images=No
     })
 
 
+def test_news_list_cleans_stored_caption_summaries():
+    client = make_client("news-summary-clean.db")
+    headers = user_headers(client, "news_summary")
+    db = client.app.state.db
+    uid = db.get_user_by_username("news_summary")["id"]
+    source_id = db.list_news_sources()[0]["id"]
+    db.set_user_news_sources(uid, [source_id])
+    article_id = insert_news_article(db, source_id, "2026-09-01T10:00:00+00:00")
+    db._execute(
+        "UPDATE news_articles SET summary = ? WHERE id = ?",
+        ("[图] 南京招聘会现场。图：视觉中国 全球劳动力市场", article_id),
+    )
+    items = client.get("/api/news", headers=headers).json()["items"]
+    assert items[0]["summary"] == "全球劳动力市场"
+
+
 def test_news_list_and_seen_anchor_are_user_scoped():
     client = make_client("news-api.db")
     first_headers = user_headers(client, "news_first")

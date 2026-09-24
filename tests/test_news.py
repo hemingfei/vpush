@@ -7,6 +7,7 @@ import pytest
 from app.news import (
     NewsNotFound,
     clean_article_html,
+    clean_summary_text,
     normalize_article_url,
     normalize_feed_url,
     parse_feed,
@@ -87,6 +88,33 @@ def test_parse_truncates_text_fields():
     assert len(article.title) == 500
     assert len(article.author) == 200
     assert len(article.summary) == 2000
+
+
+def test_summary_drops_image_captions_from_description():
+    description = (
+        '<img alt="资料图：王陆进。图：张宇/中新社/视觉中国" src="https://img.example/1.jpg" />'
+        "<dl><dt>资料图：王陆进。图：张宇/中新社/视觉中国</dt></dl>"
+        "<p>\u3000\u3000<b>【财新网】</b>王陆进已代理河南省长。</p>"
+    )
+    payload = (
+        '<rss version="2.0"><channel><title>Feed</title><item>'
+        "<guid>caption</guid><title>Caption</title><link>https://feed.example/c</link>"
+        f"<description><![CDATA[{description}]]></description></item></channel></rss>"
+    ).encode()
+    article = parse_feed(payload, "https://feed.example/rss", NOW).articles[0]
+    assert article.summary == "【财新网】王陆进已代理河南省长。"
+
+
+def test_clean_summary_text_strips_leading_image_markers_and_credits():
+    stored = (
+        "[图] 2026年9月15日，南京，秋季校园招聘会现场。图：视觉中国 "
+        "2026年9月15日，南京，秋季校园招聘会现场。图：视觉中国 全球劳动力市场正在对年轻人关上大门"
+    )
+    assert clean_summary_text(stored) == "全球劳动力市场正在对年轻人关上大门"
+    assert clean_summary_text("资料图：王陆进。图：张宇/中新社/视觉中国 【财新网】正文") == "【财新网】正文"
+    kept = "【彭博】正文提到如下图：数据来源于 IMF"
+    assert clean_summary_text(kept) == kept
+    assert clean_summary_text("") == ""
 
 
 

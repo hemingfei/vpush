@@ -4980,6 +4980,7 @@ const {
   selectNewsTopic,
   setNewsFontSize,
   toggleNewsSearch,
+  toggleNewsSourceSheet,
   toggleNewsUnreadOnly,
   undoNewsReadAll,
 } = createNewsView({
@@ -6278,6 +6279,7 @@ const INLINE_HANDLERS = {
   testProxyNode,
   tlApplyFilter,
   toggleNewsSearch,
+  toggleNewsSourceSheet,
   toggleNewsUnreadOnly,
   tlApplyRailSearch,
   tlFilterPanel,

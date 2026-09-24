@@ -39,7 +39,7 @@ export function trapFocus(container, onEscape) {
 
   container.addEventListener("keydown", handleKeydown);
 
-  setTimeout(() => {
+  const initialFocusTimer = setTimeout(() => {
     if (!container.contains(document.activeElement)) {
       const initial = container.querySelector("[autofocus]") || container.querySelector(focusableSelector);
       if (initial) initial.focus();
@@ -48,6 +48,7 @@ export function trapFocus(container, onEscape) {
 
   const observer = new MutationObserver(() => {
     if (!document.body.contains(container)) {
+      clearTimeout(initialFocusTimer);
       observer.disconnect();
       container.removeEventListener("keydown", handleKeydown);
       if (previousActive && previousActive.isConnected) {
@@ -58,6 +59,7 @@ export function trapFocus(container, onEscape) {
   observer.observe(document.body, { childList: true });
 
   return () => {
+    clearTimeout(initialFocusTimer);
     observer.disconnect();
     container.removeEventListener("keydown", handleKeydown);
     if (previousActive && previousActive.isConnected) {

@@ -1165,18 +1165,32 @@ def test_news_stream_switches_source_navigation_by_viewport(page, static_origin,
     expect(page.locator(".news-source-group").first).to_have_attribute("open", "")
     box = page.locator(".news-list-item").first.bounding_box()
     assert box is not None
-    rail = page.locator(".news-source-rail").bounding_box()
-    assert rail is not None
-    expect(page.locator(".news-source-rail")).to_be_visible()
+    rail = page.locator(".news-source-rail")
+    switch = page.locator(".news-source-switch")
     if width > 768:
+        expect(rail).to_be_visible()
+        expect(switch).to_be_hidden()
         expect(page.locator(".news-stream-search input")).to_be_visible()
-        assert rail["x"] > box["x"]
+        assert rail.bounding_box()["x"] > box["x"]
         assert box["y"] < 360
     else:
+        expect(rail).to_be_hidden()
+        assert box["y"] < 220
+        expect(switch).to_have_text("全部资讯")
+        switch.click()
+        expect(rail).to_be_visible()
+        expect(rail).to_have_attribute("role", "dialog")
+        expect(switch).to_have_attribute("aria-expanded", "true")
+        page.keyboard.press("Escape")
+        expect(rail).to_be_hidden()
+        expect(switch).to_be_focused()
+        switch.click()
+        rail.locator(".news-source-row[data-source-id]").first.click()
+        expect(rail).to_be_hidden()
+        expect(switch).not_to_have_text("全部资讯")
         expect(page.locator(".news-stream-search input")).to_be_hidden()
         page.get_by_role("button", name="搜索资讯").click()
         expect(page.locator(".news-stream-search input")).to_be_visible()
-        assert rail["y"] < box["y"]
 
 
 @pytest.mark.parametrize("width", [390, 768, 1280])

@@ -143,6 +143,7 @@ from .news import (
     NewsNotFound,
     NewsService,
     NewsUpstreamError,
+    clean_summary_text,
     normalize_feed_url,
 )
 from .plaza import (
@@ -2516,6 +2517,7 @@ def create_api_router(
         items = []
         for row in rows:
             row.pop("images", None)
+            row["summary"] = clean_summary_text(row.get("summary") or "")
             row["is_new"] = not row["is_read"]
             items.append(row)
         total = db.count_news_articles(

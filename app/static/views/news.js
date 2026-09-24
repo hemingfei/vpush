@@ -28,6 +28,7 @@ export function createNewsView(dependencies) {
   let searchTimer = null;
   let readAllUndoTimer = null;
   let readAllUndoPayload = null;
+  let releaseSourceSheet = null;
 
   function clearNewsReadUndo() {
     clearTimeout(readAllUndoTimer);
@@ -197,11 +198,17 @@ export function createNewsView(dependencies) {
       <summary>${CHEVRON_DOWN_ICON}<span>${escapeHtml(label)}</span></summary>
       ${sources.map((source) => `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')"><span>${escapeHtml(source.name)}</span><b>${Number(source.unread_count) || ""}</b></button>`).join("")}
     </details>`).join("");
-    return `<nav class="news-source-rail" aria-label="资讯来源">
+    return `<nav class="news-source-rail" id="news-source-rail" aria-label="资讯来源">
     <div class="news-source-rail-head"><strong>资讯来源</strong><button type="button" class="icon-btn" onclick="openNewsSourcePicker()" aria-label="管理资讯来源" title="管理资讯来源">${GEAR_ICON}</button></div>
     <button type="button" class="news-source-row news-source-all ${allOn ? "is-on" : ""}" onclick="selectNewsSource('')">${NEWS_ICON}<span>全部资讯</span><b>${Number(state.newsUnreadCount) || ""}</b></button>
     ${rows || '<p class="muted">尚未选择资讯来源</p>'}
   </nav>`;
+  }
+
+  function newsSourceSwitchLabel() {
+    if (!state.newsFilterSourceId) return "全部资讯";
+    const source = state.newsSources.find((item) => String(item.id) === String(state.newsFilterSourceId));
+    return source?.name || "指定来源";
   }
 
   function newsActiveFilterParts() {
@@ -240,6 +247,8 @@ export function createNewsView(dependencies) {
       const on = selected ? row.dataset.sourceId === selected : row.classList.contains("news-source-all");
       row.classList.toggle("is-on", on);
     });
+    const switchLabel = document.querySelector(".news-source-switch span");
+    if (switchLabel) switchLabel.textContent = newsSourceSwitchLabel();
     const input = $("#news-query");
     if (input && input.value !== (state.newsQuery || "")) input.value = state.newsQuery || "";
     const summary = document.querySelector("#news-filter-summary");
@@ -265,7 +274,7 @@ export function createNewsView(dependencies) {
     const searching = !!(state.newsQuery || "").trim();
     main.innerHTML = `<section class="news-page${searching ? " is-searching" : ""}" id="news-page">
   <header class="news-stream-head">
-    <div class="news-stream-title"><p class="section-meta">实时更新的财经资讯聚合</p></div>
+    <div class="news-stream-title"><p class="section-meta">实时更新的财经资讯聚合</p><button type="button" class="news-source-switch" onclick="toggleNewsSourceSheet()" aria-haspopup="dialog" aria-expanded="false" aria-controls="news-source-rail"><span>${escapeHtml(newsSourceSwitchLabel())}</span>${CHEVRON_DOWN_ICON}</button></div>
     <div class="news-stream-actions">
       <button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}" aria-label="未读">${EYE_ICON}<span>未读</span>${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</button>
       <button type="button" class="icon-btn news-search-toggle${searching ? " is-on" : ""}" onclick="toggleNewsSearch()" aria-expanded="${searching ? "true" : "false"}" aria-label="搜索资讯">${SEARCH_ICON}</button>
@@ -283,6 +292,7 @@ export function createNewsView(dependencies) {
     </main>
     ${newsSourceNavigationHtml()}
   </div>
+  <div class="news-source-backdrop" onclick="toggleNewsSourceSheet(false)" aria-hidden="true"></div>
   <div id="news-read-undo" class="news-read-undo" role="status" aria-live="polite" hidden></div>
 </section>`;
   }
@@ -664,6 +674,7 @@ export function createNewsView(dependencies) {
   }
 
   function openNewsSourcePicker() {
+    toggleNewsSourceSheet(false);
     const newsSelectedIds = new Set(state.newsSources.filter((source) => source.selected).map((source) => Number(source.id)));
     const mask = document.createElement("div");
     mask.className = "modal-mask news-source-modal";
@@ -716,7 +727,31 @@ export function createNewsView(dependencies) {
     }
   }
 
+  function toggleNewsSourceSheet(force) {
+    const page = $("#news-page");
+    const rail = $("#news-source-rail");
+    if (!page || !rail) return;
+    const open = typeof force === "boolean" ? force : !page.classList.contains("is-sources-open");
+    if (open === page.classList.contains("is-sources-open")) return;
+    page.classList.toggle("is-sources-open", open);
+    const trigger = page.querySelector(".news-source-switch");
+    trigger?.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) {
+      rail.setAttribute("role", "dialog");
+      rail.setAttribute("aria-modal", "true");
+      releaseSourceSheet = trapFocus(rail, () => toggleNewsSourceSheet(false));
+      rail.querySelector(".news-source-row.is-on")?.focus();
+      return;
+    }
+    rail.removeAttribute("role");
+    rail.removeAttribute("aria-modal");
+    releaseSourceSheet?.();
+    releaseSourceSheet = null;
+    trigger?.focus();
+  }
+
   function selectNewsSource(sourceId) {
+    toggleNewsSourceSheet(false);
     state.newsFilterSourceId = sourceId;
     return applyNewsListFilter();
   }
@@ -774,6 +809,7 @@ export function createNewsView(dependencies) {
     selectNewsTopic,
     setNewsFontSize,
     toggleNewsSearch,
+    toggleNewsSourceSheet,
     toggleNewsUnreadOnly,
     undoNewsReadAll,
   };

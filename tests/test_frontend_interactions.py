@@ -4712,6 +4712,10 @@ def test_news_stream_layout_uses_responsive_source_navigation():
     select = _fn_body("selectNewsSource", NEWS_JS)
     assert "renderNewsListShell" not in select
     assert "applyNewsListFilter" in select
+    assert "toggleNewsSourceSheet(false)" in select
+    assert "toggleNewsSourceSheet(false)" in _fn_body("openNewsSourcePicker", NEWS_JS)
+    assert "trapFocus" in _fn_body("toggleNewsSourceSheet", NEWS_JS)
+    assert 'aria-controls="news-source-rail"' in src
     apply = _fn_body("applyNewsListFilter", NEWS_JS)
     assert "syncNewsFilterChrome" in apply
     assert "loadFinancialNews" in apply
@@ -4804,7 +4808,10 @@ def test_news_stream_css_has_two_column_and_mobile_contract():
     assert ".news-source-row .nav-svg" in css
     assert ".news-unread-toggle .eye-icon" in css
     mobile = _media_block(css, "@media (max-width: 768px)", last=False)
-    assert ".news-source-rail" in mobile and "max-height: 50vh" in mobile
+    rail = re.search(r"\.news-source-rail\s*\{([^}]*)\}", mobile)
+    assert rail and "position: fixed" in rail.group(1) and "visibility: hidden" in rail.group(1)
+    assert ".news-page.is-sources-open .news-source-rail" in mobile
+    assert "order: -1" not in mobile
     assert "news-source-mobile" not in mobile
     assert "width: 96px" in mobile and "height: 64px" in mobile
     assert ".news-page.is-searching .news-stream-search" in mobile
