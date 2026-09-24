@@ -181,6 +181,26 @@ def _plain_text(value: object, limit: int) -> str:
     return text[:limit]
 
 
+# 财新等 Feed 的 description 以「图 + <dl>图注</dl>」开头；只剥开头，正文里的「图：」保留。
+_CAPTION_BLOCK = re.compile(r"<(dl|figure|figcaption)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+_LEADING_CAPTION = re.compile(r"^(?:\[图\]\s*|[^【]{0,200}?。\s*图[:：]\S+(?:\s+|$))")
+
+
+def clean_summary_text(text: str) -> str:
+    text = (text or "").strip()
+    for _ in range(4):
+        stripped = _LEADING_CAPTION.sub("", text, count=1)
+        if stripped == text:
+            break
+        text = stripped
+    return text
+
+
+def _summary_text(value: object) -> str:
+    raw = _CAPTION_BLOCK.sub(" ", str(value or ""))
+    return clean_summary_text(_plain_text(raw, MAX_SUMMARY_CHARS * 2))[:MAX_SUMMARY_CHARS]
+
+
 def _safe_content_url(value: str, base_url: str) -> str | None:
     try:
         return normalize_article_url(urljoin(base_url, (value or "").strip()))
@@ -277,7 +297,7 @@ def parse_feed(payload: bytes, feed_url: str, fetched_at: datetime) -> ParsedFee
             content_raw = _entry_content(entry)
             content_html, images = clean_article_html(content_raw, url)
             author = _plain_text(entry.get("author"), MAX_AUTHOR_CHARS)
-            summary = _plain_text(entry.get("summary") or entry.get("description"), MAX_SUMMARY_CHARS)
+            summary = _summary_text(entry.get("summary") or entry.get("description"))
             published = _entry_date(entry, fetched_at)
             external_id = _plain_text(entry.get("id") or entry.get("guid"), 2048) or url
             article = ParsedArticle(

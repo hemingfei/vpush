@@ -670,21 +670,14 @@ export function createNewsView(dependencies) {
 
   const NEWS_TOPICS = ["宏观", "国际", "科技", "公司", "市场"];
 
-  function newsTopicBarHtml() {
-    const active = state.newsTopic || "";
-    return `<div class="news-topic-bar" role="tablist" aria-label="新闻主题">
-      <button type="button" class="news-topic-chip ${active ? "" : "is-on"}" onclick="selectNewsTopic('')" aria-pressed="${active ? "false" : "true"}">全部</button>
-      ${NEWS_TOPICS.map((topic) => `<button type="button" class="news-topic-chip ${active === topic ? "is-on" : ""}" onclick="selectNewsTopic('${topic}')" aria-pressed="${active === topic ? "true" : "false"}">${topic}</button>`).join("")}
-    </div>`;
-  }
-
   function newsListItemHtml(item) {
     const unread = !item.is_read;
     const thumbnail = item.has_image
       ? `<img class="news-list-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 3 2'%3E%3C/svg%3E" data-news-thumbnail="${item.id}" alt="" width="112" height="75" loading="lazy" onerror="this.closest('.news-list-thumb-link').style.display='none'">`
       : "";
+    const activeTopic = state.newsTopic || "";
     const topics = Array.isArray(item.topics) && item.topics.length
-      ? `<span class="news-item-topics">${item.topics.map((topic) => `<i>${escapeHtml(topic)}</i>`).join("")}</span>`
+      ? `<span class="news-item-topics">${item.topics.map((topic) => NEWS_TOPICS.includes(topic) ? `<button type="button" class="news-item-topic${topic === activeTopic ? " is-on" : ""}" aria-pressed="${topic === activeTopic ? "true" : "false"}" onclick="selectNewsTopic('${topic}')">${escapeHtml(topic)}</button>` : `<i>${escapeHtml(topic)}</i>`).join("")}</span>`
       : "";
     return `<article class="news-list-item ${unread ? "is-unread" : "is-read"}" data-news-id="${item.id}">
     <div class="news-list-copy">
@@ -723,28 +716,35 @@ export function createNewsView(dependencies) {
     return emptyState("还没有财经新闻，采集开始后会自动出现");
   }
 
-  function newsSourceNavigationHtml() {
-    const groups = new Map();
-    for (const source of state.newsSources) {
-      const label = source.group_name || "其他来源";
-      if (!groups.has(label)) groups.set(label, []);
-      groups.get(label).push(source);
-    }
-    const allOn = !state.newsFilterSourceId;
-    const rows = [...groups.entries()].map(([label, sources]) => `
-    <details class="news-source-group" open>
-      <summary>${CHEVRON_DOWN_ICON}<span>${escapeHtml(label)}</span></summary>
-      ${sources.map((source) => `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')"><span>${escapeHtml(source.name)}${source.enabled ? "" : "（已暂停）"}</span><b>${Number(source.unread_count) || ""}</b></button>`).join("")}
-    </details>`).join("");
-    return `<nav class="news-source-rail" aria-label="资讯来源">
-    <div class="news-source-rail-head"><strong>资讯来源</strong></div>
-    <button type="button" class="news-source-row news-source-all ${allOn ? "is-on" : ""}" onclick="selectNewsSource('')">${NEWS_ICON}<span>全部资讯</span><b>${Number(state.newsUnreadCount) || ""}</b></button>
-    ${rows || '<p class="muted">暂无资讯来源</p>'}
-  </nav>`;
-  }
-
   function newsSourceFilterOptions() {
     return `<option value="">全部来源</option>${state.newsSources.map((source) => `<option value="${source.id}" ${String(state.newsFilterSourceId) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name)}${source.enabled ? "" : "（已暂停）"}</option>`).join("")}`;
+  }
+
+  function syncNewsFilterChrome() {
+    const topic = state.newsTopic || "";
+    const selected = String(state.newsFilterSourceId || "");
+    document.querySelectorAll(".news-item-topic").forEach((button) => {
+      const on = !!topic && (button.textContent || "").trim() === topic;
+      button.classList.toggle("is-on", on);
+      button.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    const unread = document.querySelector(".news-unread-toggle");
+    if (unread) {
+      unread.classList.toggle("is-on", !!state.newsUnreadOnly);
+      unread.setAttribute("aria-pressed", state.newsUnreadOnly ? "true" : "false");
+    }
+    document.querySelectorAll("#news-source-filter option").forEach((option) => {
+      option.selected = selected ? option.value === selected : option.value === "";
+    });
+    const input = $("#news-query");
+    if (input && input.value !== (state.newsQuery || "")) input.value = state.newsQuery || "";
+  }
+
+  // 吸收 main v1.12.259：筛选只刷新列表不再整页重绘，避免输入/滚动状态被打断
+  function applyNewsListFilter() {
+    state.newsListKey = newsListKey();
+    syncNewsFilterChrome();
+    return loadFinancialNews(true, currentRouteSeq());
   }
 
   function newsListSkeletonHtml() {
@@ -755,11 +755,13 @@ export function createNewsView(dependencies) {
   function renderFinancialNewsShell(collectionEnabled = true) {
     const unreadOn = !!state.newsUnreadOnly;
     const unreadCount = Number(state.newsUnreadCount) || 0;
+  function renderFinancialNewsShell(collectionEnabled = true) {
+    const unreadOn = !!state.newsUnreadOnly;
+    const unreadCount = Number(state.newsUnreadCount) || 0;
     renderNewsShell(
       "articles",
       `${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
       <div class="news-list-toolbar"><div class="news-toolbar-filters"><button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}">只看未读${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</b></button><select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="selectNewsSource(this.value)">${newsSourceFilterOptions()}</select><div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)"></div></div>${unreadCount ? `<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()" aria-label="全部已读">${CHECK_CHECK_ICON}<span>全部已读</span></button>` : ""}</div>
-      <div class="news-stream-topbar">${newsTopicBarHtml()}</div>
       <div id="news-list" class="news-list">${newsListSkeletonHtml()}</div>
       <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
       <div id="news-read-undo" class="news-read-undo" role="status" aria-live="polite" hidden></div>`,
@@ -831,11 +833,12 @@ export function createNewsView(dependencies) {
     const requestSeq = ++state.newsRequestSeq;
     if (reset) {
       stopNewsAutoLoad();
+      // 吸收 main v1.12.259：筛选变化不清列表不清骨架，数据回来原地替换，避免整列表闪烁。
+      // hmf 的懒加载/在途图片中断仍保留：reset 重查意味着旧缩略图可能不再出现在新结果里。
       stopNewsThumbLoad();
       abortNewsImageRequests();
-      state.newsItems = [];
       state.newsOffset = 0;
-      list.innerHTML = newsListSkeletonHtml();
+      if (!list.querySelector(".news-list-item, .empty-state")) list.innerHTML = newsListSkeletonHtml();
     }
     const params = new URLSearchParams({ limit: "30", offset: String(state.newsOffset) });
     if (state.newsFilterSourceId) params.set("source_id", state.newsFilterSourceId);
@@ -1029,8 +1032,7 @@ export function createNewsView(dependencies) {
   async function toggleNewsUnreadOnly() {
     state.newsUnreadOnly = !state.newsUnreadOnly;
     if (state.newsUnreadOnly) await refreshUnreadCount(currentRouteSeq());
-    renderFinancialNewsShell(state.newsCollectionEnabled !== false);
-    await loadFinancialNews(true, currentRouteSeq());
+    return applyNewsListFilter();
   }
 
   async function markAllNewsRead() {
@@ -1100,8 +1102,7 @@ export function createNewsView(dependencies) {
 
   function selectNewsSource(sourceId) {
     state.newsFilterSourceId = sourceId;
-    state.newsListKey = newsListKey();
-    return loadFinancialNews(true, currentRouteSeq());
+    return applyNewsListFilter();
   }
 
   function clearNewsFilters() {
@@ -1109,14 +1110,14 @@ export function createNewsView(dependencies) {
     state.newsQuery = "";
     state.newsTopic = "";
     state.newsFilterSourceId = "";
-    state.newsListKey = newsListKey();
-    return loadFinancialNews(true, currentRouteSeq());
+    return applyNewsListFilter();
   }
 
+  // 吸收 main：主题再点一次取消筛选（主题芯片在卡片上，无需单独主题条）
   function selectNewsTopic(topic) {
-    state.newsTopic = topic || "";
-    state.newsListKey = newsListKey();
-    return loadFinancialNews(true, currentRouteSeq());
+    const next = topic || "";
+    state.newsTopic = state.newsTopic === next ? "" : next;
+    return applyNewsListFilter();
   }
 
   function selectNewsRtSource(sourceId) {
@@ -1132,7 +1133,11 @@ export function createNewsView(dependencies) {
   function queueNewsSearch(query) {
     state.newsQuery = query;
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => loadFinancialNews(true, currentRouteSeq()), 250);
+    searchTimer = setTimeout(() => {
+      state.newsListKey = newsListKey();
+      syncNewsFilterChrome();
+      loadFinancialNews(true, currentRouteSeq());
+    }, 250);
   }
 
   function queueNewsRtSearch(query) {

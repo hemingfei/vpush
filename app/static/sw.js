@@ -1,10 +1,10 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-9731b109c3ad";
+const CACHE = "dav-shell-83aa96ba5dd3";
 const SHELL = [
   "/",
-  "/app.928cbbcbf042.js",
+  "/app.cda909bfca00.js",
   // asset-modules:start
-  "/core/dialog.3b30511c3cfd.js",
+  "/core/dialog.7687bbb78d96.js",
   "/core/html.817ab2339b89.js",
   "/core/icons.23f0669a7a7d.js",
   "/core/lightbox.362ec10437b5.js",
@@ -16,19 +16,19 @@ const SHELL = [
   "/views/admin/infra.71b1bf8b6bcb.js",
   "/views/admin/knowledge.42883ccab396.js",
   "/views/admin/kol.ec08925bc2fb.js",
-  "/views/admin/news.c92a6cc9c81e.js",
+  "/views/admin/news.84e45f034b03.js",
   "/views/admin/users.4c25d9b3d37e.js",
-  "/views/feishu-personal.d34f03bb7da2.js",
+  "/views/feishu-personal.d74ec140be8a.js",
   "/views/holdings.a1d49e5fe7b0.js",
   "/views/ima.4ee73e107acf.js",
   "/views/market.b64771017dd0.js",
   "/views/mx-kol-holdings.9340733cf11d.js",
   "/views/mx-views.efb668c62c64.js",
-  "/views/news.14a813083c1e.js",
+  "/views/news.c4fc6ef47ce9.js",
   "/views/post-card-export.27dbd2f5c5fa.js",
-  "/views/push-settings.c6dcb9dee07b.js",
+  "/views/push-settings.43f099553f09.js",
   // asset-modules:end
-  "/style.91f7571a5b6a.css",
+  "/style.55024d09d1e1.css",
   "/mx-views.8ae995d2c259.css",
   "/holdings.7270168e6a4f.css",
   "/mx-kol-holdings.a38a07eb5449.css",

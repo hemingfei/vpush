@@ -4729,9 +4729,9 @@ def test_financial_news_navigation_keeps_quick_news_in_timeline():
     nav = src[src.index("const NAV ="):src.index("const SIDEBAR_SLIM_KEY")]
     mobile = src[src.index("const MOBILE_NAV ="):src.index("function renderBottomNav")]
     assert nav.index('route: "timeline"') < nav.index('route: "news"') < nav.index('route: "knowledge"')
-    # 页面更名财经资讯：桌面导航「财经资讯」；手机底栏随 X 式紧凑改版显示「财经新闻」
+    # 页面更名财经资讯（main v1.12.261 统一口径）：桌面导航与手机底栏同名
     assert 'label: "财经资讯"' in nav
-    assert 'label: "财经新闻"' in mobile
+    assert 'label: "财经资讯"' in mobile
     assert 'route: "news"' in mobile
     assert 'data-platform="live"' in _fn_body("tlPillsHtml")
 
@@ -4803,7 +4803,7 @@ def test_mobile_navigation_is_icon_only_and_accessible():
 
     for route, icon, label in (
         ("timeline", "HOME_ICON", "动态"),
-        ("news", "NEWS_ICON", "财经新闻"),
+        ("news", "NEWS_ICON", "财经资讯"),
         ("mx-views", "MX_VIEWS_ICON", "研判"),
         ("holdings", "HOLDINGS_ICON", "持股"),
         ("home", "GRID_ICON", "广场"),
@@ -4878,6 +4878,26 @@ def test_news_images_lazy_load_and_abort_on_route_change():
     assert "newsImageAbort: null" in APP_JS.read_text()
 
 
+def test_news_filter_changes_refresh_list_without_full_redraw():
+    """吸收 main v1.12.259：筛选切换只刷新列表，不再整页重绘（工具条输入/滚动状态保留）。"""
+    src = NEWS_JS.read_text()
+    apply = _fn_body("applyNewsListFilter", NEWS_JS)
+    assert "syncNewsFilterChrome" in apply
+    assert "loadFinancialNews" in apply
+    for handler in ("selectNewsSource", "selectNewsTopic", "toggleNewsUnreadOnly", "clearNewsFilters"):
+        body = _fn_body(handler, NEWS_JS)
+        assert "applyNewsListFilter" in body, handler
+        assert "renderFinancialNewsShell" not in body, handler
+    # 主题筛选走卡片上的主题芯片（可切换取消），不再有独立主题条
+    assert "newsTopicBarHtml" not in src
+    assert "news-item-topic" in _fn_body("newsListItemHtml", NEWS_JS)
+    assert "state.newsTopic === next" in _fn_body("selectNewsTopic", NEWS_JS)
+    # reset 不清列表不清骨架：数据回来原地替换，避免整列表闪烁
+    reset = _fn_body("loadFinancialNews", NEWS_JS)
+    assert "state.newsItems = []" not in reset
+    assert 'if (!list.querySelector(".news-list-item, .empty-state")) list.innerHTML = newsListSkeletonHtml();' in reset
+
+
 def test_news_mark_all_read_reattaches_images():
     body = _fn_body("markAllNewsRead", NEWS_JS)
     assert "startNewsAutoLoad" in body
@@ -4897,6 +4917,12 @@ def test_news_list_item_does_not_nest_button_in_link():
     assert close_at != -1 and mark_at != -1 and close_at < mark_at
 
 
+def test_news_copy_uses_stream_name():
+    src = NEWS_JS.read_text()
+    # 页面级文案统一「财经资讯」（main v1.12.261 口径）；「财经新闻」仅作三栏目中长文栏目 tab 名保留
+    assert 'setPageTitle("财经资讯"' in src
+    assert 'tab("articles", "财经新闻")' in src
+    assert 'aria-label="财经资讯栏目"' in src
 def test_news_pagination_appends_without_replacing_existing_thumbnails():
     body = _fn_body("loadFinancialNews", NEWS_JS)
     assert "insertAdjacentHTML" in body
@@ -4920,6 +4946,12 @@ def test_news_unread_and_undo_css_contract():
     css = STYLE_CSS.read_text()
     assert ".news-item-unread-dot" in css and "width: 7px" in css
     assert ".news-read-undo" in css
+    # 列表卡片保持分隔线面板款（main v1.12.263）：无卡片边框/圆角/左侧未读条
+    item = re.search(r"\.news-list-item\s*\{([^}]*)\}", css)
+    assert item and "border-bottom" in item.group(1) and "border-radius" not in item.group(1)
+    assert ".news-list-item.is-unread { border-left" not in css
+    thumb = re.search(r"\.news-list-thumb\s*\{([^}]*)\}", css)
+    assert thumb and "width: 112px" in thumb.group(1) and "height: 75px" in thumb.group(1)
 
 
 def test_admin_news_tab_is_full_feed_manager():
@@ -4932,7 +4964,7 @@ def test_admin_news_tab_is_full_feed_manager():
     ):
         assert f"function {name}" in src or f"async function {name}" in src
     assert "财经资讯" in src
-    assert "向用户显示财经新闻" in src
+    assert "向用户显示财经资讯" in src
     assert "显示已归档" in src
     archived_toggle = _fn_body("updateAdminNewsArchived", ADMIN_NEWS_JS)
     assert "loadAdminNews()" in archived_toggle
@@ -5005,7 +5037,7 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     # 手机（≤768px）也显示入口：知识库已放开移动端；财经新闻与研报中心并排
     assert "grid-template-columns: 1fr 1fr" in css
     assert "go('news')" in timeline
-    assert "财经新闻" in timeline
+    assert "财经资讯" in timeline
 
 
 

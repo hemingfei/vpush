@@ -162,6 +162,15 @@ from .avatar_cache import (
     normalize_direct_hosts,
 )
 from .market import MarketQuotes
+from .news import (
+    NewsInputError,
+    NewsNotFound,
+    NewsService,
+    NewsUpstreamError,
+    clean_summary_text,
+    normalize_feed_url,
+)
+from .market import MarketQuotes
 from .plaza import (
     filter_plaza_kol_rows,
     filter_plaza_rows,
@@ -2912,7 +2921,7 @@ def create_api_router(
     # ---- 财经新闻 ----
     def _news_service_or_503() -> NewsService:
         if news_service is None:
-            raise HTTPException(status_code=503, detail="财经新闻服务不可用")
+            raise HTTPException(status_code=503, detail="财经资讯服务不可用")
         return news_service
 
     def _news_timestamp(raw: str, *, allow_future: bool = False) -> str:
@@ -2979,6 +2988,7 @@ def create_api_router(
         items = []
         for row in rows:
             row.pop("images", None)
+            row["summary"] = clean_summary_text(row.get("summary") or "")
             # is_new 走水位线锚点（从未打开过 → 不算新，hmf 口径）；
             # is_read 走单篇已读记录，二者独立供前端使用
             row["is_new"] = bool(anchor and row["published_at"] > anchor)
@@ -3206,7 +3216,7 @@ def create_api_router(
 
     def _news_refresh_ids(feed_ids: list[int], response: Response) -> dict:
         if db.get_setting("news_enabled") != "1":
-            raise HTTPException(status_code=409, detail="财经新闻采集已关闭")
+            raise HTTPException(status_code=409, detail="财经资讯采集已关闭")
         accepted, busy = [], []
         service = _news_service_or_503()
         for feed_id in feed_ids:

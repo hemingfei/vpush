@@ -5,7 +5,7 @@ import json
 import threading
 import time
 
-APP_VERSION = "1.12.258"
+APP_VERSION = "1.12.263"
 VERSION_CHECK_TTL = 6 * 3600  # 6 小时
 GITHUB_REPO = "icekale/vpush"
 
