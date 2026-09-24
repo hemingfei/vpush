@@ -2508,6 +2508,7 @@ def create_api_router(
                 "status": status["code"],
                 "last_success_at": status["last_success_at"],
                 "group_name": source["group_name"] or "",
+                "kind": source.get("kind") or "feed",
                 "unread_count": unread_by_source.get(source["id"], 0),
             })
         return {
@@ -2518,6 +2519,23 @@ def create_api_router(
                 exclude_internal=_exclude_internal_news(user),
             ))),
         }
+
+    @router.get("/news/magazine")
+    def news_magazine(
+        source_id: int = Query(...),
+        user: dict = Depends(get_current_user),
+    ):
+        hide_internal = _exclude_internal_news(user)
+        source = db.get_news_source(source_id)
+        if source is None or source["archived_at"] or not source["enabled"]:
+            raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
+        if int(source["internal"] or 0) and hide_internal:
+            raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
+        if (source.get("kind") or "feed") != "magazine":
+            raise HTTPException(status_code=400, detail="这个来源不是周刊")
+        if source_id not in set(db.list_user_news_source_ids(user["id"])):
+            raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
+        return {"source_id": source_id, "issues": db.list_magazine_issues(user["id"], source_id)}
 
     @router.get("/news")
     def list_news(

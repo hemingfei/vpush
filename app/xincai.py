@@ -35,6 +35,29 @@ MAX_EXTERNAL_ID = 200
 MAX_SOURCE_NAME = 60
 
 
+def publication_kind(name: str, hinted: str = "") -> str:
+    hint = (hinted or "").strip().lower()
+    if hint in {"weekly", "magazine"} or "周刊" in (name or ""):
+        return "magazine"
+    return "feed"
+
+
+def _issue_meta(item: dict) -> dict:
+    issue = item.get("issue") if isinstance(item.get("issue"), dict) else {}
+    try:
+        order = int(item.get("tocOrder") if item.get("tocOrder") is not None else issue.get("order") or 0)
+    except (TypeError, ValueError):
+        order = 0
+    return {
+        "issue_key": str(item.get("issueKey") or issue.get("issueKey") or issue.get("key") or "").strip()[:40],
+        "issue_label": str(item.get("issueLabel") or issue.get("label") or "").strip()[:80],
+        "issue_title": str(item.get("issueTitle") or issue.get("title") or "").strip()[:200],
+        "issue_cover": str(item.get("issueCover") or issue.get("cover") or "").strip()[:500],
+        "section": str(item.get("section") or item.get("category") or "").strip()[:40],
+        "toc_order": order,
+    }
+
+
 class XincaiIngestError(ValueError):
     """请求体不合法（对端会收到 400）。"""
 
@@ -102,6 +125,7 @@ def _build_article(item: dict, source_id: int, feed_id: int, now: str) -> dict |
         "published_at": _normalize_ts(item.get("publishedAt"), now),
         "fetched_at": _normalize_ts(item.get("fetchedAt"), now),
         "content_hash": digest,
+        **_issue_meta(item),
     }
 
 
@@ -142,9 +166,11 @@ def ingest_articles(db: DB, payload: dict) -> dict:
     for key, items in grouped.items():
         name, sid = labels[key]
         external_key = f"xincai-{sid}" if sid else ""
+        hinted = str(payload.get("sourceKind") or items[0].get("sourceKind") or "")
         try:
             source_id = db.get_or_create_internal_news_source(
-                name, default_group, external_key=external_key
+                name, default_group, external_key=external_key,
+                kind=publication_kind(name, hinted),
             )
         except ValueError as exc:
             raise XincaiIngestError(str(exc)) from None

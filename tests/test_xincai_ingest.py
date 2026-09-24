@@ -63,7 +63,8 @@ def test_ingest_creates_internal_source_and_sanitizes_html(db, admin):
     assert result["accepted"] == 2
     source = db.get_news_source(_source_id(result))
     assert source["internal"] == 1
-    assert source["group_name"] == "心裁"
+    assert source["group_name"] == "财新"
+    assert source["kind"] == "feed"
 
     article_id = db.list_news_articles(
         admin["id"], source_id=_source_id(result), q="", limit=5, offset=0
@@ -206,3 +207,31 @@ def test_internal_source_goes_paused_when_stale(db, admin):
 
     statuses = {s["id"]: s for s in db.news_source_statuses(admin["id"])}
     assert statuses[source_id]["code"] == "paused"
+
+
+def test_weekly_is_a_magazine_and_stays_off_the_timeline(db, admin):
+    body = _payload(1, source_name="财新 · 周刊")
+    body["sourceKind"] = "weekly"
+    body["articles"][0]["issue"] = {
+        "key": "16905", "label": "2026年第37期", "title": "济州岛迷雾",
+        "cover": "https://img.caixin.com/cover.jpg", "order": 2,
+    }
+    body["articles"][0]["category"] = "封面报道"
+    result = xincai.ingest_articles(db, body)
+    source_id = _source_id(result)
+    db.set_user_news_sources(admin["id"], [source_id])
+
+    source = db.get_news_source(source_id)
+    assert source["kind"] == "magazine"
+    assert source["group_name"] == "财新"
+    assert db.list_news_articles(admin["id"], source_id=None, q="", limit=20, offset=0) == []
+
+    issues = db.list_magazine_issues(admin["id"], source_id)
+    assert issues[0]["label"] == "2026年第37期"
+    assert issues[0]["title"] == "济州岛迷雾"
+    assert issues[0]["articles"][0]["section"] == "封面报道"
+
+
+def test_ft_chinese_is_its_own_group(db):
+    result = xincai.ingest_articles(db, _payload(1, source_name="FT中文网"))
+    assert db.get_news_source(_source_id(result))["group_name"] == "FT中文"

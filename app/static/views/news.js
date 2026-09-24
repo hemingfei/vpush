@@ -167,6 +167,36 @@ export function createNewsView(dependencies) {
     }).join("");
   }
 
+  function magazineShelfHtml(issues) {
+    const years = new Map();
+    for (const issue of issues) {
+      const year = String(issue.published_at || "").slice(0, 4) || "更早";
+      if (!years.has(year)) years.set(year, []);
+      years.get(year).push(issue);
+    }
+    return `<div class="news-magazine">${[...years.entries()].map(([year, list], index) => `
+      <details class="news-magazine-year" ${index === 0 ? "open" : ""}>
+        <summary>${escapeHtml(year)} 年<span>${list.length} 期</span></summary>
+        <div class="news-magazine-issues">${list.map((issue, issueIndex) => {
+          const read = issue.articles.filter((article) => article.is_read).length;
+          const cover = issue.cover
+            ? `<img class="news-issue-cover" src="${escapeHtml(issue.cover)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+            : `<span class="news-issue-cover is-blank" aria-hidden="true"></span>`;
+          let lastSection = "";
+          const articles = issue.articles.map((article) => {
+            const section = article.section && article.section !== lastSection
+              ? `<div class="news-issue-section">${escapeHtml(lastSection = article.section)}</div>`
+              : "";
+            return `${section}<a class="news-issue-article ${article.is_read ? "is-read" : ""}" href="/news/${article.id}"><strong>${escapeHtml(article.title)}</strong>${article.author ? `<span>${escapeHtml(article.author)}</span>` : ""}</a>`;
+          }).join("");
+          return `<details class="news-issue" ${index === 0 && issueIndex === 0 ? "open" : ""}>
+            <summary class="news-issue-head">${cover}<span class="news-issue-meta"><b>${escapeHtml(issue.label || "")}</b>${issue.title ? `<em>${escapeHtml(issue.title)}</em>` : ""}<small>${escapeHtml(String(issue.published_at || "").slice(0, 10))} · 已读 ${read} / ${issue.articles.length} 篇</small></span></summary>
+            <div class="news-issue-body">${articles}</div>
+          </details>`;
+        }).join("")}</div>
+      </details>`).join("")}</div>`;
+  }
+
   function newsEmptyHtml() {
     const query = (state.newsQuery || "").trim();
     const hasSource = state.newsSources.some((source) => source.selected) || state.newsFilterSourceId;
@@ -197,10 +227,19 @@ export function createNewsView(dependencies) {
       sources.sort((a, b) => (Number(b.unread_count) || 0) - (Number(a.unread_count) || 0) || String(a.name).localeCompare(String(b.name), "zh"));
     }
     const allOn = !state.newsFilterSourceId;
-    const rows = [...groups.entries()].map(([label, sources]) => `
+    const groupOrder = ["财新", "FT中文"];
+    const rows = [...groups.entries()].sort((a, b) => {
+      const ia = groupOrder.indexOf(a[0]);
+      const ib = groupOrder.indexOf(b[0]);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a[0].localeCompare(b[0], "zh");
+    }).map(([label, sources]) => `
     <details class="news-source-group" open>
       <summary>${CHEVRON_DOWN_ICON}<span>${escapeHtml(label)}</span></summary>
-      ${sources.map((source) => `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')"><span>${escapeHtml(source.name)}</span><b>${Number(source.unread_count) || ""}</b></button>`).join("")}
+      ${sources.map((source) => {
+        const magazine = source.kind === "magazine";
+        const badge = magazine ? "" : (Number(source.unread_count) || "");
+        return `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')"><span>${escapeHtml(source.name)}</span><b>${badge}</b></button>`;
+      }).join("")}
     </details>`).join("");
     return `<nav class="news-source-rail" id="news-source-rail" aria-label="资讯来源">
     <div class="news-source-rail-head"><strong>资讯来源</strong><button type="button" class="icon-btn" onclick="openNewsSourcePicker()" aria-label="管理资讯来源" title="管理资讯来源">${GEAR_ICON}</button></div>
@@ -329,7 +368,7 @@ export function createNewsView(dependencies) {
   async function renderFinancialNewsList(seq = currentRouteSeq()) {
     setPageTitle("财经资讯");
     // 文章返回且筛选未变：直接复用已加载列表并恢复滚动位置
-    if (state.newsItems.length && state.newsListKey === newsListKey()) {
+    if (state.newsItems.length && state.newsListKey === newsListKey() && !state.newsMagazine) {
       renderNewsListShell(state.newsCollectionEnabled !== false);
       const list = $("#news-list");
       list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : newsEmptyHtml();
@@ -369,6 +408,24 @@ export function createNewsView(dependencies) {
       state.newsOffset = 0;
       if (!list.querySelector(".news-list-item, .empty-state")) list.innerHTML = newsListSkeletonHtml();
     }
+    const picked = state.newsSources.find((source) => String(source.id) === String(state.newsFilterSourceId));
+    if (reset && picked && picked.kind === "magazine") {
+      state.newsMagazine = true;
+      state.newsHasMore = false;
+      stopNewsAutoLoad();
+      try {
+        const data = await api(`/api/news/magazine?source_id=${encodeURIComponent(picked.id)}`);
+        if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
+        state.newsIssues = data.issues || [];
+        state.newsItems = [];
+        list.innerHTML = state.newsIssues.length ? magazineShelfHtml(state.newsIssues) : newsEmptyHtml();
+      } catch (err) {
+        if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
+        list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="loadFinancialNews(true)">重试</button></div>`);
+      }
+      return;
+    }
+    state.newsMagazine = false;
     const params = new URLSearchParams({ limit: "30", offset: String(state.newsOffset) });
     if (state.newsFilterSourceId) params.set("source_id", state.newsFilterSourceId);
     if (state.newsQuery.trim()) params.set("q", state.newsQuery.trim());
