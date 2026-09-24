@@ -4219,6 +4219,62 @@ def test_img_proxy_streams_video_range(monkeypatch):
     assert seen["headers"].get("Range") == "bytes=0-1023"
 
 
+def test_img_proxy_bounds_open_video_range(monkeypatch):
+    """无上限 Range 不能整段转发：105MB QuickTime 的 moov 在尾，截断谎报长度会让播放器停在 0:00。"""
+    import httpx as _httpx
+
+    from app.api import IMAGE_PROXY_VIDEO_MAX_BYTES, IMAGE_PROXY_VIDEO_PROBE_BYTES
+
+    seen = {}
+    fake_resp = _httpx.Response(
+        206,
+        content=b"V" * 16,
+        headers={
+            "content-type": "video/quicktime",
+            "content-range": "bytes 0-15/109833578",
+            "content-length": "16",
+        },
+    )
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def stream(self, method, url, **kwargs):
+            seen["range"] = (kwargs.get("headers") or {}).get("Range")
+
+            class Stream:
+                def __enter__(self):
+                    return fake_resp
+
+                def __exit__(self, *args):
+                    return False
+
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+    client = make_client()
+    video = "https://static-assets-1.truthsocial.com/media/clip.mp4"
+    cases = [
+        ({"Range": "bytes=0-"}, f"bytes=0-{IMAGE_PROXY_VIDEO_PROBE_BYTES - 1}"),
+        ({}, f"bytes=0-{IMAGE_PROXY_VIDEO_PROBE_BYTES - 1}"),
+        ({"Range": "bytes=-32"}, "bytes=-32"),
+        (
+            {"Range": f"bytes=0-{IMAGE_PROXY_VIDEO_MAX_BYTES + 10}"},
+            f"bytes=0-{IMAGE_PROXY_VIDEO_MAX_BYTES - 1}",
+        ),
+    ]
+    for headers, expected in cases:
+        resp = client.get("/api/img-proxy", params={"url": video}, headers=headers)
+        assert resp.status_code == 206, headers
+        assert seen["range"] == expected
+        assert resp.headers["content-range"] == "bytes 0-15/109833578"
+        assert resp.headers["vary"] == "Range"
+
+
 def test_img_proxy_rejects_html_masquerading_as_mp4(monkeypatch):
     import httpx as _httpx
 

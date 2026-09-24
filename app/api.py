@@ -819,7 +819,31 @@ IMAGE_PROXY_MAX_PER_WINDOW = 60
 IMAGE_PROXY_WINDOW_SECONDS = 60
 IMAGE_PROXY_VIDEO_MAX_PER_WINDOW = 180  # 播放器会打多次 Range，单独放宽
 IMAGE_PROXY_VIDEO_MAX_BYTES = 60 * 1024 * 1024
+# 无上限 Range 先回这一小段。播放器读到 mdat 大小后会自己再要文件尾的 moov。
+IMAGE_PROXY_VIDEO_PROBE_BYTES = 1024 * 1024
 IMAGE_PROXY_VIDEO_TYPES = frozenset({"video/mp4", "video/quicktime", "video/webm"})
+
+
+def _bounded_video_range(header: str | None) -> str:
+    """把视频 Range 收进单次上限。
+
+    Chrome 点播放发 `bytes=0-`。整段转发再在 60MB 处拉断、却按源站许诺全长，
+    moov 在尾部的 QuickTime 会一直停在 0:00。
+    """
+    raw = (header or "").strip()
+    bounded = re.fullmatch(r"bytes=(\d+)-(\d*)", raw, re.I)
+    if bounded:
+        start = int(bounded.group(1))
+        if bounded.group(2):
+            end = min(int(bounded.group(2)), start + IMAGE_PROXY_VIDEO_MAX_BYTES - 1)
+        else:
+            end = start + IMAGE_PROXY_VIDEO_PROBE_BYTES - 1
+        return f"bytes={start}-{max(end, start)}"
+    suffix = re.fullmatch(r"bytes=-(\d+)", raw, re.I)
+    if suffix:
+        n = min(max(int(suffix.group(1)), 1), IMAGE_PROXY_VIDEO_MAX_BYTES)
+        return f"bytes=-{n}"
+    return f"bytes=0-{IMAGE_PROXY_VIDEO_PROBE_BYTES - 1}"
 
 
 ACCOUNT_ORIGIN_LABELS = {
@@ -1268,9 +1292,7 @@ def create_api_router(
             ),
             "Accept": "*/*",
         }
-        range_header = request.headers.get("range")
-        if range_header:
-            headers["Range"] = range_header
+        headers["Range"] = _bounded_video_range(request.headers.get("range"))
         client = httpx.Client(timeout=30, follow_redirects=False)
         stream_ctx = client.stream("GET", url, headers=headers, follow_redirects=False)
         try:
@@ -1311,6 +1333,7 @@ def create_api_router(
         out_headers = {
             # 禁止边缘缓存：CF 默认按 URL 缓存，会把第一次 206 片段当成整段
             "Cache-Control": "private, no-store",
+            "Vary": "Range",
             "Accept-Ranges": "bytes",
         }
         if resp.headers.get("content-range"):
@@ -6276,9 +6299,9 @@ def create_api_router(
     def img_proxy(url: str, request: Request):
         """受信图床代理：精确域名、HTTPS、无重定向、流式限制 10 MB，按 IP 限速。
 
-        视频（.mp4/.webm）单独走流式通道：透传 Range（206 分段，播放器拖动
-        进度必需）、上限 60MB、边下边发不整段缓冲——图床对视频不回 206，
-        播放统一从源站代理。
+        视频（.mp4/.webm）单独走流式通道：Range 收成有界 206（单次最多 60MB，
+        无上限请求先回 1MB），透传 Content-Range，播放器再自己要文件尾。
+        图床对视频不回 206，播放统一从源站代理。
         """
         from urllib.parse import urlparse
 
