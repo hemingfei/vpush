@@ -4807,6 +4807,8 @@ def test_news_stream_css_has_two_column_and_mobile_contract():
     item = re.search(r"\.news-list-item\s*\{([^}]*)\}", css)
     assert item and "border-radius" not in item.group(1)
     assert ".news-list-item.is-unread { border-left" not in css
+    body = re.search(r"\.news-article-body p\s*\{([^}]*)\}", css)
+    assert body and "text-indent: 2em" in body.group(1)
     thumb = re.search(r"\.news-list-thumb\s*\{([^}]*)\}", css)
     assert thumb and "width: 112px" in thumb.group(1) and "height: 75px" in thumb.group(1)
     assert ".news-item-unread-dot" in css and "width: 7px" in css
