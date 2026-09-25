@@ -3054,6 +3054,12 @@ function combinationDetailHtml(post) {
   return sections.length ? `<div class="combo-detail">${sections.join("")}</div>` : "";
 }
 
+function postBodyHtml(text) {
+  const parts = String(text || "").split(/\n{2,}/).filter((part) => part.trim());
+  if (parts.length < 2) return escapeHtml(text);
+  return parts.map((part) => `<p>${escapeHtml(part)}</p>`).join("");
+}
+
 function postCard(post) {
   const safeUrl = /^https?:\/\//i.test(post.url || "") ? post.url : "#";
   const comboHtml = post.platform === "combination" ? combinationDetailHtml(post) : "";
@@ -3090,7 +3096,7 @@ function postCard(post) {
         </div>
       </div>
       ${isCombination ? `<div class="combo-post">${comboHtml}</div>` : `${trBar}${!titleDup && title ? `<div class="p-title">${escapeHtml(title)}</div>` : ""}
-      <div class="p-content">${escapeHtml(shown)}${body.length > 200
+      <div class="p-content">${postBodyHtml(shown)}${body.length > 200
         ? `<button class="post-expand-btn" onclick="tlTogglePost(${post.id})" aria-expanded="${expanded}" aria-label="${expanded ? "收起全文" : "展开全文"}" title="${expanded ? "收起全文" : "展开全文"}">${expanded ? `${CHEVRON_UP_ICON} 收起` : `${CHEVRON_DOWN_ICON} 展开全文`}</button>`
         : ""}</div>`}
       ${Array.isArray(post.images) && post.images.length ? `
