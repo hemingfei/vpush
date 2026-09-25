@@ -5703,9 +5703,14 @@ def test_type_scale_uses_four_reading_roles():
     assert "text-indent: 2em" in re.search(
         r"\.post-item \.p-content p\s*\{([^}]*)\}", css
     ).group(1)
+    assert "text-indent: 0" in re.search(
+        r"\.post-item \.p-content p\.p-line\s*\{([^}]*)\}", css
+    ).group(1)
     body_html = _fn_body("postBodyHtml")
-    assert "split(/\\n{2,}/)" in body_html and "<p>" in body_html
-    assert "postBodyHtml(shown)" in _fn_body("postCard")
+    assert "split(/\\n{2,}/)" in body_html and 'class="p-line"' in body_html
+    assert 'includes("\\n")' in body_html
+    card = _fn_body("postCard")
+    assert "postBodyHtml(shown)" in card and "previewText(body)" in card
 
     content = re.search(r"\.post-item \.p-content\s*\{([^}]*)\}", css)
     assert content, "未找到 .post-item .p-content"

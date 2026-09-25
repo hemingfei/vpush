@@ -1310,6 +1310,7 @@ textarea.proxy-import { min-height: 96px; }
 /* 正文限行宽：外壳铺满后保持舒适阅读行长（65-75ch），超宽屏不整行读不动 */
 .post-item .p-content { color: var(--color-text); margin-top: 8px; line-height: 1.65; overflow-wrap: break-word; word-break: normal; font-size: var(--text-body); max-width: 75ch; white-space: pre-line; }
 .post-item .p-content p { margin: 0 0 0.75em; text-indent: 2em; }
+.post-item .p-content p.p-line { text-indent: 0; margin-bottom: 0.35em; }
 .post-item .p-content p:last-of-type { margin-bottom: 0; }
 :root.theme-dark .post-item .p-content { line-height: 1.7; }
 .post-images { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }

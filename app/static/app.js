@@ -3055,9 +3055,24 @@ function combinationDetailHtml(post) {
 }
 
 function postBodyHtml(text) {
-  const parts = String(text || "").split(/\n{2,}/).filter((part) => part.trim());
-  if (parts.length < 2) return escapeHtml(text);
-  return parts.map((part) => `<p>${escapeHtml(part)}</p>`).join("");
+  const raw = String(text || "");
+  const parts = raw.split(/\n{2,}/).filter((part) => part.trim());
+  if (parts.length < 2) return escapeHtml(raw);
+  // ponytail: 过半块含单换行就当诗/短帖，不拆段。长文仍按空行分段。
+  if (parts.filter((part) => part.includes("\n")).length * 2 >= parts.length) return escapeHtml(raw);
+  return parts.map((part) => {
+    const line = part.trim();
+    const heading = part.includes("\n") || (line.length <= 48 && !/[。！？]/.test(line) && (
+      /^[一二三四五六七八九十]+、/.test(line) || /^\d+[.、．]/.test(line) || line.length <= 4
+    ));
+    return `<p${heading ? ' class="p-line"' : ""}>${escapeHtml(part)}</p>`;
+  }).join("");
+}
+
+function previewText(text, limit = 200) {
+  if (!text || text.length <= limit) return text;
+  const cut = text.lastIndexOf("\n\n", limit);
+  return cut >= 80 ? text.slice(0, cut) : text.slice(0, limit);
 }
 
 function postCard(post) {
@@ -3071,7 +3086,7 @@ function postCard(post) {
   const title = showSrc ? srcT : (post.title || "");
   const body = (showSrc ? srcC : (post.content || "")) || "（无正文）";
   const expanded = _tlExpanded.has(post.id);
-  const shown = expanded ? body : body.slice(0, 200);
+  const shown = expanded ? body : previewText(body);
   // X 帖常 title==content（如纯链接帖），标题和正文都渲染会视觉重复，跳过标题；
   // 长文帖 title 常为 content 开头一段（截断），同样跳过避免重复展示。
   // 译文标题/正文来自两次独立翻译、措辞可能不同，前缀匹配要落在原文侧才稳
