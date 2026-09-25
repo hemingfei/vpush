@@ -130,6 +130,18 @@ export function createNewsView(dependencies) {
   }
 
   const NEWS_TOPICS = ["宏观", "国际", "科技", "公司", "市场"];
+  // Glyphs traced from the sites' own icons (caixin favicon, FT share mark), drawn in currentColor.
+  const NEWS_PLATFORM_ICONS = {
+    caixin: '<svg class="pt-icon" viewBox="0 0 11 12" fill="currentColor" aria-hidden="true"><path d="M9 0h1v1H9z M0 1h5v1H0z M9 1h1v1H9z M0 2h1v1H0z M4 2h1v1H4z M9 2h1v1H9z M0 3h1v1H0z M2 3h1v1H2z M4 3h1v1H4z M6 3h5v1H6z M0 4h1v1H0z M2 4h1v1H2z M4 4h1v1H4z M9 4h1v1H9z M0 5h1v1H0z M2 5h1v1H2z M4 5h1v1H4z M8 5h2v1H8z M0 6h1v1H0z M2 6h1v1H2z M4 6h1v1H4z M8 6h2v1H8z M0 7h1v1H0z M2 7h1v1H2z M4 7h1v1H4z M7 7h1v1H7z M9 7h1v1H9z M0 8h1v1H0z M2 8h1v1H2z M4 8h1v1H4z M6 8h1v1H6z M9 8h1v1H9z M2 9h1v1H2z M5 9h1v1H5z M9 9h1v1H9z M1 10h1v1H1z M3 10h1v1H3z M9 10h1v1H9z M0 11h1v1H0z M4 11h1v1H4z M8 11h2v1H8z"/></svg>',
+    ft: '<svg class="pt-icon" viewBox="0 0 47 26" fill="currentColor" aria-hidden="true"><path d="M1 0h1v1H1z M1 1h21v1H1z M24 1h22v1H24z M3 2h19v1H3z M23 2h23v1H23z M3 3h6v1H3z M19 3h3v1H19z M23 3h3v1H23z M32 3h6v1H32z M44 3h3v1H44z M4 4h5v1H4z M20 4h2v1H20z M23 4h2v1H23z M32 4h6v1H32z M45 4h2v1H45z M4 5h5v1H4z M21 5h1v1H21z M23 5h2v1H23z M32 5h6v1H32z M45 5h2v1H45z M4 6h5v1H4z M32 6h6v1H32z M4 7h5v1H4z M32 7h6v1H32z M4 8h5v1H4z M32 8h6v1H32z M4 9h5v1H4z M16 9h1v1H16z M32 9h6v1H32z M4 10h5v1H4z M15 10h2v1H15z M32 10h6v1H32z M4 11h5v1H4z M14 11h3v1H14z M32 11h6v1H32z M4 12h13v1H4z M32 12h6v1H32z M4 13h13v1H4z M32 13h6v1H32z M4 14h5v1H4z M14 14h3v1H14z M32 14h6v1H32z M4 15h5v1H4z M15 15h2v1H15z M32 15h6v1H32z M4 16h5v1H4z M16 16h1v1H16z M32 16h6v1H32z M4 17h5v1H4z M16 17h1v1H16z M32 17h6v1H32z M4 18h5v1H4z M32 18h6v1H32z M4 19h5v1H4z M32 19h6v1H32z M4 20h5v1H4z M32 20h6v1H32z M4 21h5v1H4z M32 21h6v1H32z M4 22h5v1H4z M32 22h6v1H32z M3 23h6v1H3z M32 23h6v1H32z M3 24h6v1H3z M32 24h6v1H32z M0 25h12v1H0z M29 25h12v1H29z"/></svg>',
+  };
+
+  function newsPlatformMark(key) {
+    const svg = NEWS_PLATFORM_ICONS[key];
+    if (!svg) return "";
+    const label = key === "ft" ? "FT中文网" : "财新";
+    return `<span class="news-platform" data-platform="${key}" role="img" aria-label="${label}" title="${label}">${svg}</span>`;
+  }
 
   function newsListItemHtml(item) {
     const unread = !item.is_read;
@@ -147,7 +159,7 @@ export function createNewsView(dependencies) {
         <div class="news-item-title-row">${unread ? '<i class="news-item-unread-dot" aria-label="未读"></i>' : ""}<h3>${escapeHtml(item.title)}</h3></div>
         <p>${escapeHtml(item.summary || "暂无摘要")}</p>
       </a>
-      <div class="news-list-meta"><span class="news-item-source">${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${topics}${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})" aria-label="标为已读">${CHECK_ICON}</button>` : ""}</div>
+      <div class="news-list-meta"><span class="news-item-source">${newsPlatformMark(item.source_platform)}<span class="news-item-source-name">${escapeHtml(item.source_name || "")}</span></span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${topics}${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})" aria-label="标为已读">${CHECK_ICON}</button>` : ""}</div>
     </div>${thumbnail ? `<a class="news-list-thumb-link" href="/news/${item.id}" tabindex="-1" aria-hidden="true">${thumbnail}</a>` : ""}
   </article>`;
   }
@@ -238,7 +250,7 @@ export function createNewsView(dependencies) {
       ${sources.map((source) => {
         const magazine = source.kind === "magazine";
         const badge = magazine ? "" : (Number(source.unread_count) || "");
-        return `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')"><span>${escapeHtml(source.name)}</span><b>${badge}</b></button>`;
+        return `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')">${newsPlatformMark(source.platform)}<span>${escapeHtml(source.name)}</span><b>${badge}</b></button>`;
       }).join("")}
     </details>`).join("");
     return `<nav class="news-source-rail" id="news-source-rail" aria-label="资讯来源">
@@ -529,7 +541,7 @@ export function createNewsView(dependencies) {
         <div class="news-read-progress" aria-hidden="true"><i></i></div>
         <article class="news-article-page">
           <header class="news-article-head">
-            <div class="news-article-meta"><span>${escapeHtml(article.source_name || "")}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div>
+            <div class="news-article-meta"><span class="news-article-source">${newsPlatformMark(article.source_platform)}${escapeHtml(article.source_name || "")}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div>
             <h1>${escapeHtml(article.title)}</h1>
             ${article.author ? `<p class="section-meta">作者：${escapeHtml(article.author)}</p>` : ""}
             <div class="news-article-tools">
