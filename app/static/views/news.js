@@ -130,17 +130,6 @@ export function createNewsView(dependencies) {
   }
 
   const NEWS_TOPICS = ["宏观", "国际", "科技", "公司", "市场"];
-  const PLATFORM_MARKS = {
-    caixin: '<svg class="platform-mark" viewBox="0 0 24 24" aria-hidden="true"><text x="12" y="16.6" text-anchor="middle" font-size="14" font-weight="600" fill="currentColor">财</text></svg>',
-    ft: '<svg class="platform-mark" viewBox="0 0 24 24" aria-hidden="true"><text x="12" y="15.8" text-anchor="middle" font-size="9.5" font-weight="700" fill="currentColor">FT</text></svg>',
-  };
-
-  function platformMark(key) {
-    const svg = PLATFORM_MARKS[key];
-    if (!svg) return "";
-    const label = key === "ft" ? "FT中文网" : "财新";
-    return `<span class="platform-badge" title="${label}" aria-label="${label}">${svg}</span>`;
-  }
 
   function newsListItemHtml(item) {
     const unread = !item.is_read;
@@ -158,7 +147,7 @@ export function createNewsView(dependencies) {
         <div class="news-item-title-row">${unread ? '<i class="news-item-unread-dot" aria-label="未读"></i>' : ""}<h3>${escapeHtml(item.title)}</h3></div>
         <p>${escapeHtml(item.summary || "暂无摘要")}</p>
       </a>
-      <div class="news-list-meta"><span class="news-item-source">${platformMark(item.source_platform)}<span class="news-item-source-name">${escapeHtml(item.source_name || "")}</span></span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${topics}${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})" aria-label="标为已读">${CHECK_ICON}</button>` : ""}</div>
+      <div class="news-list-meta"><span class="news-item-source">${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${topics}${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})" aria-label="标为已读">${CHECK_ICON}</button>` : ""}</div>
     </div>${thumbnail ? `<a class="news-list-thumb-link" href="/news/${item.id}" tabindex="-1" aria-hidden="true">${thumbnail}</a>` : ""}
   </article>`;
   }
@@ -249,7 +238,7 @@ export function createNewsView(dependencies) {
       ${sources.map((source) => {
         const magazine = source.kind === "magazine";
         const badge = magazine ? "" : (Number(source.unread_count) || "");
-        return `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')">${platformMark(source.platform)}<span>${escapeHtml(source.name)}</span><b>${badge}</b></button>`;
+        return `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')"><span>${escapeHtml(source.name)}</span><b>${badge}</b></button>`;
       }).join("")}
     </details>`).join("");
     return `<nav class="news-source-rail" id="news-source-rail" aria-label="资讯来源">
@@ -540,7 +529,7 @@ export function createNewsView(dependencies) {
         <div class="news-read-progress" aria-hidden="true"><i></i></div>
         <article class="news-article-page">
           <header class="news-article-head">
-            <div class="news-article-meta"><span class="news-article-source">${platformMark(article.source_platform)}${escapeHtml(article.source_name || "")}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div>
+            <div class="news-article-meta"><span>${escapeHtml(article.source_name || "")}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div>
             <h1>${escapeHtml(article.title)}</h1>
             ${article.author ? `<p class="section-meta">作者：${escapeHtml(article.author)}</p>` : ""}
             <div class="news-article-tools">
