@@ -143,6 +143,11 @@ export function createNewsView(dependencies) {
     return `<span class="news-platform" data-platform="${key}" role="img" aria-label="${label}" title="${label}">${svg}</span>`;
   }
 
+  // 栏目名前的「FT ·」和角标重复。只改显示，库里的来源名仍是推送用的那个。
+  function channelName(name) {
+    return String(name || "").replace(/^FT\s*[·•・.]\s*/, "");
+  }
+
   function newsListItemHtml(item) {
     const unread = !item.is_read;
     const thumbnail = item.has_image
@@ -159,7 +164,7 @@ export function createNewsView(dependencies) {
         <div class="news-item-title-row">${unread ? '<i class="news-item-unread-dot" aria-label="未读"></i>' : ""}<h3>${escapeHtml(item.title)}</h3></div>
         <p>${escapeHtml(item.summary || "暂无摘要")}</p>
       </a>
-      <div class="news-list-meta"><span class="news-item-source">${newsPlatformMark(item.source_platform)}<span class="news-item-source-name">${escapeHtml(item.source_name || "")}</span></span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${topics}${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})" aria-label="标为已读">${CHECK_ICON}</button>` : ""}</div>
+      <div class="news-list-meta"><span class="news-item-source">${newsPlatformMark(item.source_platform)}<span class="news-item-source-name">${escapeHtml(channelName(item.source_name))}</span></span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${topics}${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})" aria-label="标为已读">${CHECK_ICON}</button>` : ""}</div>
     </div>${thumbnail ? `<a class="news-list-thumb-link" href="/news/${item.id}" tabindex="-1" aria-hidden="true">${thumbnail}</a>` : ""}
   </article>`;
   }
@@ -250,7 +255,7 @@ export function createNewsView(dependencies) {
       ${sources.map((source) => {
         const magazine = source.kind === "magazine";
         const badge = magazine ? "" : (Number(source.unread_count) || "");
-        return `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')">${newsPlatformMark(source.platform)}<span>${escapeHtml(source.name)}</span><b>${badge}</b></button>`;
+        return `<button type="button" class="news-source-row ${String(state.newsFilterSourceId) === String(source.id) ? "is-on" : ""}" data-source-id="${source.id}" onclick="selectNewsSource('${source.id}')">${newsPlatformMark(source.platform)}<span>${escapeHtml(channelName(source.name))}</span><b>${badge}</b></button>`;
       }).join("")}
     </details>`).join("");
     return `<nav class="news-source-rail" id="news-source-rail" aria-label="资讯来源">
@@ -263,14 +268,14 @@ export function createNewsView(dependencies) {
   function newsSourceSwitchLabel() {
     if (!state.newsFilterSourceId) return "全部资讯";
     const source = state.newsSources.find((item) => String(item.id) === String(state.newsFilterSourceId));
-    return source?.name || "指定来源";
+    return channelName(source?.name) || "指定来源";
   }
 
   function newsActiveFilterParts() {
     const parts = [];
     if (state.newsFilterSourceId) {
       const source = state.newsSources.find((item) => String(item.id) === String(state.newsFilterSourceId));
-      parts.push(source?.name || "指定来源");
+      parts.push(channelName(source?.name) || "指定来源");
     }
     if (state.newsTopic) parts.push(state.newsTopic);
     if (state.newsUnreadOnly) parts.push("未读");
@@ -541,7 +546,7 @@ export function createNewsView(dependencies) {
         <div class="news-read-progress" aria-hidden="true"><i></i></div>
         <article class="news-article-page">
           <header class="news-article-head">
-            <div class="news-article-meta"><span class="news-article-source">${newsPlatformMark(article.source_platform)}${escapeHtml(article.source_name || "")}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div>
+            <div class="news-article-meta"><span class="news-article-source">${newsPlatformMark(article.source_platform)}${escapeHtml(channelName(article.source_name))}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div>
             <h1>${escapeHtml(article.title)}</h1>
             ${article.author ? `<p class="section-meta">作者：${escapeHtml(article.author)}</p>` : ""}
             <div class="news-article-tools">
@@ -743,7 +748,7 @@ export function createNewsView(dependencies) {
   }
 
   function newsSourceOptionHtml(source, selectedIds) {
-    return `<label class="news-source-option"><input type="checkbox" value="${source.id}" ${(selectedIds ? selectedIds.has(Number(source.id)) : source.selected) ? "checked" : ""}><span>${escapeHtml(source.name)}</span>${source.enabled ? "" : '<em>管理员已暂停更新</em>'}</label>`;
+    return `<label class="news-source-option"><input type="checkbox" value="${source.id}" ${(selectedIds ? selectedIds.has(Number(source.id)) : source.selected) ? "checked" : ""}><span>${escapeHtml(channelName(source.name))}</span>${source.enabled ? "" : '<em>管理员已暂停更新</em>'}</label>`;
   }
 
   function openNewsSourcePicker() {
