@@ -235,3 +235,31 @@ def test_weekly_is_a_magazine_and_stays_off_the_timeline(db, admin):
 def test_ft_chinese_is_its_own_group(db):
     result = xincai.ingest_articles(db, _payload(1, source_name="FT中文网"))
     assert db.get_news_source(_source_id(result))["group_name"] == "FT中文"
+
+
+def test_platform_sticks_to_the_source_and_reaches_the_list(db, admin):
+    body = _payload(1, source_name="FT · 中国")
+    body["articles"][0]["sourceId"] = "source-ftcn"
+    body["articles"][0]["platform"] = "ft"
+    result = xincai.ingest_articles(db, body)
+    source_id = _source_id(result)
+    assert db.get_news_source(source_id)["platform"] == "ft"
+
+    # 旧推送没有这个字段，不能把已经记上的角标擦掉
+    again = _payload(1, source_name="FT · 中国")
+    again["articles"][0]["sourceId"] = "source-ftcn"
+    xincai.ingest_articles(db, again)
+    assert db.get_news_source(source_id)["platform"] == "ft"
+
+    db.set_user_news_sources(admin["id"], [source_id])
+    row = db.list_news_articles(admin["id"], source_id=source_id, q="", limit=5, offset=0)[0]
+    assert row["source_platform"] == "ft"
+    assert db.get_news_article(row["id"])["source_platform"] == "ft"
+
+
+def test_platform_backfill_uses_the_source_name(db):
+    source_id = db.get_or_create_internal_news_source("财新 · 国际", "心裁", "xincai-backfill")
+    db._execute("UPDATE news_sources SET platform = '' WHERE id = ?", (source_id,))
+    db._migrate_news()
+    db._conn.commit()
+    assert db.get_news_source(source_id)["platform"] == "caixin"

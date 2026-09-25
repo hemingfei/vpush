@@ -4843,8 +4843,13 @@ details.bind-steps[open] > summary .ui-icon { transform: rotate(90deg); }
 .news-list-item.is-unread h3 { color: var(--color-text-strong); font-weight: var(--font-weight-semibold); }
 .news-list-item p { display: -webkit-box; margin: 0; overflow: hidden; color: var(--color-text-muted); font-size: 0.84rem; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .news-list-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; min-width: 0; color: var(--color-text-faint, var(--color-text-muted)); font-size: 0.75rem; }
-.news-item-source { max-width: 11em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--font-weight-semibold); }
+.news-item-source { display: inline-flex; align-items: center; gap: 3px; max-width: 12.5em; overflow: hidden; font-weight: var(--font-weight-semibold); }
+.news-item-source-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .news-list-item.is-unread .news-item-source { color: var(--color-accent); }
+.platform-badge { display: inline-flex; flex: 0 0 auto; width: 1.05em; height: 1.05em; }
+.platform-badge .platform-mark { display: block; width: 100%; height: 100%; }
+.news-source-row .platform-badge { width: 16px; height: 16px; }
+.news-article-source { display: inline-flex; align-items: center; gap: 4px; }
 .news-list-meta time { flex: 0 0 auto; }
 .news-list-thumb { width: 112px; height: 75px; flex: 0 0 112px; object-fit: cover; border-radius: 8px; background: var(--color-surface-muted); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06); }
 :root.theme-dark .news-list-thumb { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08); }

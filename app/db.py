@@ -1754,6 +1754,20 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE news_sources ADD COLUMN kind TEXT NOT NULL DEFAULT 'feed'"
             )
+        if "platform" not in source_cols:
+            # caixin / ft：心裁推送带来的平台角标。空串表示没有。
+            self._conn.execute(
+                "ALTER TABLE news_sources ADD COLUMN platform TEXT NOT NULL DEFAULT ''"
+            )
+        # 旧库没有这个字段。只填空的，不覆盖推送后来写上的值。
+        self._conn.execute(
+            "UPDATE news_sources SET platform = 'caixin' "
+            "WHERE platform = '' AND (name LIKE '财新%' OR name LIKE 'Caixin%' OR slug = 'caixin')"
+        )
+        self._conn.execute(
+            "UPDATE news_sources SET platform = 'ft' "
+            "WHERE platform = '' AND (name LIKE 'FT%' OR name LIKE '金融时报%')"
+        )
         article_cols = {row["name"] for row in self._rows("PRAGMA table_info(news_articles)")}
         if "topics" not in article_cols:
             self._conn.execute(
@@ -3507,7 +3521,8 @@ class DB:
             raise ValueError("该媒体下的 Feed 名称已存在") from None
 
     def get_or_create_internal_news_source(
-        self, name: str, group_name: str = "", external_key: str = "", kind: str = "feed"
+        self, name: str, group_name: str = "", external_key: str = "", kind: str = "feed",
+        platform: str = "",
     ) -> int:
         """按外部稳定键找（或建）一个内部媒体源：internal=1。
 
@@ -3542,6 +3557,7 @@ class DB:
                         (slug, row["id"]),
                     )
         kind = "magazine" if kind == "magazine" else "feed"
+        platform = platform if platform in ("caixin", "ft") else ""
         grouped = (_publication_group(name) or (group_name or "")).strip()[:40]
         if row is not None:
             source_id = int(row["id"])
@@ -3556,11 +3572,17 @@ class DB:
                     "UPDATE news_sources SET group_name = ?, updated_at = datetime('now') WHERE id = ?",
                     (grouped, source_id),
                 )
+            # 空值不覆盖：旧推送没有这个字段，不能把已经记上的角标擦掉。
+            if platform and (current.get("platform") or "") != platform:
+                self._execute(
+                    "UPDATE news_sources SET platform = ?, updated_at = datetime('now') WHERE id = ?",
+                    (platform, source_id),
+                )
             return source_id
         source_id = self._execute(
-            "INSERT INTO news_sources (slug, name, built_in, default_selected, group_name, internal, kind) "
-            "VALUES (?, ?, 0, 1, ?, 1, ?)",
-            (slug or f"internal-{uuid.uuid4().hex}", name, grouped, kind),
+            "INSERT INTO news_sources (slug, name, built_in, default_selected, group_name, internal, kind, platform) "
+            "VALUES (?, ?, 0, 1, ?, 1, ?, ?)",
+            (slug or f"internal-{uuid.uuid4().hex}", name, grouped, kind, platform),
         )
         self._grant_new_source_to_users(source_id)
         return source_id
@@ -4035,7 +4057,7 @@ class DB:
         rows = self._rows(
             "SELECT a.id, a.title, a.url, a.author, a.summary, a.published_at, "
             "a.source_id, a.topics, s.name AS source_name, s.slug AS source_slug, "
-            "s.enabled AS source_enabled, "
+            "s.platform AS source_platform, s.enabled AS source_enabled, "
             "(a.images IS NOT NULL AND a.images != '[]' AND a.images != '') AS has_image, "
             "CASE WHEN a.published_at <= COALESCE("
             "(SELECT news_last_seen_at FROM users WHERE id = ?), '') "
@@ -4152,7 +4174,8 @@ class DB:
 
     _NEWS_ARTICLE_VISIBLE = (
         "SELECT a.*, s.name AS source_name, s.slug AS source_slug, "
-        "s.enabled AS source_enabled, s.kind AS source_kind FROM news_articles a "
+        "s.platform AS source_platform, s.enabled AS source_enabled, s.kind AS source_kind "
+        "FROM news_articles a "
         "JOIN news_sources s ON s.id = a.source_id "
         "WHERE s.archived_at IS NULL"
     )

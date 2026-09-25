@@ -167,10 +167,14 @@ def ingest_articles(db: DB, payload: dict) -> dict:
         name, sid = labels[key]
         external_key = f"xincai-{sid}" if sid else ""
         hinted = str(payload.get("sourceKind") or items[0].get("sourceKind") or "")
+        platform = next(
+            (p for p in (str(it.get("platform") or "").strip().lower() for it in items) if p in ("caixin", "ft")),
+            "",
+        )
         try:
             source_id = db.get_or_create_internal_news_source(
                 name, default_group, external_key=external_key,
-                kind=publication_kind(name, hinted),
+                kind=publication_kind(name, hinted), platform=platform,
             )
         except ValueError as exc:
             raise XincaiIngestError(str(exc)) from None
