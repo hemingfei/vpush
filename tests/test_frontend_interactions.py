@@ -3512,6 +3512,22 @@ def test_timeline_new_badge_shows_posted_not_count():
     assert "pollFeedUpdates()" in vis
 
 
+def test_news_list_prompts_before_inserting_new_items():
+    """财经资讯只出胶囊，点了才把新稿插到列表前面。周刊目录不轮询。"""
+    poll = _fn_body("pollNewsUpdates", NEWS_JS)
+    start = _fn_body("startNewsPoll", NEWS_JS)
+    show = _fn_body("showPendingNews", NEWS_JS)
+    load = _fn_body("loadFinancialNews", NEWS_JS)
+    article = _fn_body("renderFinancialNewsArticle", NEWS_JS)
+    assert "60000" in start
+    assert "after_published_at" in poll
+    assert 'id="news-new-badge"' in NEWS_JS.read_text()
+    assert 'insertAdjacentHTML("afterbegin"' in show
+    assert "stopNewsPoll()" in article
+    magazine = load[load.index('picked.kind === "magazine"'):]
+    assert magazine.index("stopNewsPoll()") < magazine.index("state.newsMagazine = false")
+
+
 def test_live_feed_auto_consumes_pending_only_at_top():
     """快讯增量在顶部自动合并，深读时必须保留气泡供手动查看。"""
     poll = _fn_body("pollFeedUpdates")

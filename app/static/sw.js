@@ -1,8 +1,8 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-ccce4b205570";
+const CACHE = "dav-shell-fde3336fc3d7";
 const SHELL = [
   "/",
-  "/app.c8bbcc99258e.js",
+  "/app.9931dcc34ac0.js",
   // asset-modules:start
   "/core/dialog.b2db015b3a5e.js",
   "/core/html.817ab2339b89.js",
@@ -21,11 +21,11 @@ const SHELL = [
   "/views/feishu-personal.d74ec140be8a.js",
   "/views/ima.4ee73e107acf.js",
   "/views/market.0a97a470169d.js",
-  "/views/news.083e0e6848b3.js",
+  "/views/news.5c106892e6a3.js",
   "/views/post-card-export.27dbd2f5c5fa.js",
   "/views/push-settings.43f099553f09.js",
   // asset-modules:end
-  "/style.417e16771f94.css",
+  "/style.3f71545cd2f8.css",
   "/vendor/design-tokens.965639a4e5c3.css",
   "/logo-mark.svg",
   "/icon-192.png",

@@ -3998,6 +3998,7 @@ class DB:
     def _news_article_filter(
         self, user_id: int, source_id: int | None, q: str, *, unread: bool = False,
         topic: str = "", exclude_internal: bool = False,
+        after: tuple[str, int] | None = None,
     ) -> tuple[str, list[object]]:
         """source_id 给定时按源浏览（启用且未归档），否则限定用户订阅圈内的启用源。
 
@@ -4031,6 +4032,9 @@ class DB:
             conds.append("(a.title LIKE ? OR a.summary LIKE ?)")
             like = f"%{q}%"
             params.extend([like, like])
+        if after:
+            conds.append("(a.published_at > ? OR (a.published_at = ? AND a.id > ?))")
+            params.extend([after[0], after[0], int(after[1])])
         return " AND ".join(conds), params
 
     def list_news_articles(
@@ -4044,10 +4048,11 @@ class DB:
         unread: bool = False,
         topic: str = "",
         exclude_internal: bool = False,
+        after: tuple[str, int] | None = None,
     ) -> list[dict]:
         where, params = self._news_article_filter(
             user_id, source_id, (q or "").strip(), unread=unread, topic=topic,
-            exclude_internal=exclude_internal,
+            exclude_internal=exclude_internal, after=after,
         )
         params = [user_id, user_id, user_id, *params]
         paging = ""

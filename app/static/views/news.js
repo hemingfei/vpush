@@ -29,6 +29,10 @@ export function createNewsView(dependencies) {
   let readAllUndoTimer = null;
   let readAllUndoPayload = null;
   let releaseSourceSheet = null;
+  let newsPollTimer = null;
+  let newsPollBusy = false;
+  let newsPending = [];
+  let newsPendingHasMore = false;
 
   function clearNewsReadUndo() {
     clearTimeout(readAllUndoTimer);
@@ -64,6 +68,8 @@ export function createNewsView(dependencies) {
 
   function clearNewsReaderState() {
     stopNewsAutoLoad();
+    stopNewsPoll();
+    hideNewsPending();
     stopReadProgress();
     clearNewsReadUndo();
     clearNewsImageUrls();
@@ -347,6 +353,7 @@ export function createNewsView(dependencies) {
   <div class="news-stream-layout">
     <main class="news-stream-main">
       ${newsFilterSummaryHtml()}
+      <div id="news-new-badge" class="news-new-badge" hidden><button type="button" onclick="showPendingNews()"><span>新资讯</span></button></div>
       <div id="news-list" class="news-list">${newsListSkeletonHtml()}</div>
       <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
     </main>
@@ -375,7 +382,12 @@ export function createNewsView(dependencies) {
       const sources = await api("/api/news/sources");
       if (!routeStillActive(seq)) return null;
       state.newsUnreadCount = Number(sources.unread_count) || 0;
+      for (const row of sources.items || []) {
+        const source = state.newsSources.find((item) => Number(item.id) === Number(row.id));
+        if (source) source.unread_count = Number(row.unread_count) || 0;
+      }
       syncUnreadBadge();
+      if ($("#news-source-rail")) paintNewsUnreadChrome();
       return sources;
     } catch {
       return null;
@@ -391,6 +403,15 @@ export function createNewsView(dependencies) {
       list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : newsEmptyHtml();
       attachListImages(seq);
       startNewsAutoLoad(seq);
+      startNewsPoll();
+      if (newsPending.length) {
+        const badge = $("#news-new-badge");
+        const label = badge?.querySelector("span");
+        if (badge && label) {
+          label.textContent = `${newsPendingHasMore ? "30+" : newsPending.length} 条新资讯`;
+          badge.hidden = false;
+        }
+      }
       window.scrollTo(0, state.newsScrollY || 0);
       return;
     }
@@ -422,6 +443,7 @@ export function createNewsView(dependencies) {
     const requestSeq = ++state.newsRequestSeq;
     if (reset) {
       stopNewsAutoLoad();
+      hideNewsPending();
       state.newsOffset = 0;
       if (!list.querySelector(".news-list-item, .empty-state")) list.innerHTML = newsListSkeletonHtml();
     }
@@ -430,6 +452,7 @@ export function createNewsView(dependencies) {
       state.newsMagazine = true;
       state.newsHasMore = false;
       stopNewsAutoLoad();
+      stopNewsPoll();
       try {
         const data = await api(`/api/news/magazine?source_id=${encodeURIComponent(picked.id)}`);
         if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
@@ -464,6 +487,7 @@ export function createNewsView(dependencies) {
       if (sentinel) sentinel.innerHTML = "";
       attachListImages(seq);
       startNewsAutoLoad(seq);
+      if (reset) startNewsPoll();
     } catch (err) {
       if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
       if (!reset && state.newsItems.length) {
@@ -523,6 +547,7 @@ export function createNewsView(dependencies) {
   }
 
   async function renderFinancialNewsArticle(articleId, seq = currentRouteSeq()) {
+    stopNewsPoll();
     setPageTitle("财经资讯", true, "news", "返回财经资讯");
     const main = $("#main");
     if (!main) return;
@@ -870,6 +895,92 @@ export function createNewsView(dependencies) {
     }, 250);
   }
 
+  function stopNewsPoll() {
+    if (newsPollTimer) {
+      clearInterval(newsPollTimer);
+      newsPollTimer = null;
+    }
+  }
+
+  function startNewsPoll() {
+    stopNewsPoll();
+    ensureNewsVisibilityPoll();
+    if (state.newsMagazine || !$("#news-list")) return;
+    newsPollTimer = setInterval(pollNewsUpdates, 60000);
+  }
+
+  function ensureNewsVisibilityPoll() {
+    if (ensureNewsVisibilityPoll.bound) return;
+    ensureNewsVisibilityPoll.bound = true;
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible" || !$("#news-list")) return;
+      pollNewsUpdates();
+    });
+  }
+
+  function hideNewsPending() {
+    newsPending = [];
+    newsPendingHasMore = false;
+    const badge = $("#news-new-badge");
+    if (badge) badge.hidden = true;
+  }
+
+  async function pollNewsUpdates() {
+    if (document.visibilityState === "hidden" || newsPollBusy || state.newsMagazine || !$("#news-list")) return;
+    newsPollBusy = true;
+    const seq = currentRouteSeq();
+    const key = newsListKey();
+    try {
+      const params = new URLSearchParams({ limit: "30", offset: "0" });
+      if (state.newsFilterSourceId) params.set("source_id", state.newsFilterSourceId);
+      if ((state.newsQuery || "").trim()) params.set("q", state.newsQuery.trim());
+      if (state.newsUnreadOnly) params.set("unread", "1");
+      if (state.newsTopic) params.set("topic", state.newsTopic);
+      const head = state.newsItems[0];
+      params.set("after_published_at", head?.published_at || "1970-01-01T00:00:00+00:00");
+      params.set("after_id", String(head?.id || 0));
+      const data = await api(`/api/news?${params}`);
+      if (!routeStillActive(seq) || key !== newsListKey() || !$("#news-list")) return;
+      const known = new Set(state.newsItems.map((item) => Number(item.id)));
+      const fresh = (data.items || []).filter((item) => !known.has(Number(item.id)));
+      if (!fresh.length) return;
+      newsPending = fresh;
+      newsPendingHasMore = !!data.has_more;
+      const badge = $("#news-new-badge");
+      const label = badge?.querySelector("span");
+      if (!badge || !label) return;
+      label.textContent = `${data.has_more ? "30+" : fresh.length} 条新资讯`;
+      badge.hidden = false;
+      await refreshUnreadCount(seq);
+    } catch {
+      // 下一轮再试，不改正在看的列表。
+    } finally {
+      newsPollBusy = false;
+    }
+  }
+
+  function showPendingNews() {
+    const list = $("#news-list");
+    if (!list) return;
+    if (newsPendingHasMore || !newsPending.length) {
+      hideNewsPending();
+      window.scrollTo(0, 0);
+      return loadFinancialNews(true, currentRouteSeq());
+    }
+    const known = new Set(state.newsItems.map((item) => Number(item.id)));
+    const items = newsPending.filter((item) => !known.has(Number(item.id)));
+    hideNewsPending();
+    if (!items.length) return;
+    state.newsItems = items.concat(state.newsItems);
+    const lastLabel = groupNewsItemsByDay(items).at(-1)?.label;
+    const firstSep = list.querySelector(".news-day-sep");
+    if (firstSep && firstSep.querySelector("span")?.textContent === lastLabel) firstSep.remove();
+    if (list.querySelector(".news-list-item")) list.insertAdjacentHTML("afterbegin", newsListHtml(items));
+    else list.innerHTML = newsListHtml(items);
+    attachListImages(currentRouteSeq());
+    window.scrollTo(0, 0);
+  }
+
   return {
     clearNewsReaderState,
     loadFinancialNews,
@@ -885,6 +996,7 @@ export function createNewsView(dependencies) {
     clearNewsFilters,
     selectNewsSource,
     selectNewsTopic,
+    showPendingNews,
     setNewsFontSize,
     toggleNewsSearch,
     toggleNewsSourceSheet,

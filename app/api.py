@@ -2545,6 +2545,8 @@ def create_api_router(
         q: str = Query("", max_length=200),
         unread: bool = Query(False),
         topic: str = Query("", max_length=20),
+        after_published_at: str = Query("", max_length=40),
+        after_id: int = Query(0, ge=0),
         user: dict = Depends(get_current_user),
     ):
         hide_internal = _exclude_internal_news(user)
@@ -2555,7 +2557,21 @@ def create_api_router(
             if int(browse["internal"] or 0) and hide_internal:
                 raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
         view_started_at = datetime.now(UTC).isoformat()
-        if source_id is None:
+        after_at = after_published_at.strip()
+        pending = bool(after_at)
+        if pending:
+            # ponytail: 只对这页增量去重。已在屏幕上的同日同题副本，要等整表重载才折叠。
+            rows = db.list_news_articles(
+                user["id"], source_id=source_id, q=q, limit=limit + 1, offset=0,
+                unread=unread, topic=topic.strip(), exclude_internal=hide_internal,
+                after=(after_at, after_id),
+            )
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            if source_id is None:
+                rows = dedupe_news_stream(rows)
+            total = offset + len(rows) + (1 if has_more else 0)
+        elif source_id is None:
             rows = dedupe_news_stream(db.list_news_articles(
                 user["id"], source_id=None, q=q, limit=None, offset=0,
                 unread=unread, topic=topic.strip(), exclude_internal=hide_internal,
@@ -2577,14 +2593,16 @@ def create_api_router(
             row["summary"] = clean_summary_text(row.get("summary") or "")
             row["is_new"] = not row["is_read"]
             items.append(row)
-        return {
+        payload = {
             "items": items,
             "offset": offset,
             "next_offset": offset + len(items),
             "has_more": offset + len(items) < total,
             "view_started_at": view_started_at,
-            "source_statuses": db.news_source_statuses(user["id"]),
         }
+        if not pending:
+            payload["source_statuses"] = db.news_source_statuses(user["id"])
+        return payload
 
     @router.post("/news/seen")
     def mark_news_seen(body: NewsSeenIn, user: dict = Depends(get_current_user)):

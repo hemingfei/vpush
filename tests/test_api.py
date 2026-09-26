@@ -109,6 +109,38 @@ def test_news_list_collapses_same_day_title_across_sources():
     assert [item["id"] for item in own] == [plain]
 
 
+def test_news_pending_returns_only_rows_newer_than_cursor():
+    client = make_client("news-pending.db")
+    headers = user_headers(client, "news_pending")
+    db = client.app.state.db
+    uid = db.get_user_by_username("news_pending")["id"]
+    sources = db.list_news_sources()
+    first, second = sources[0]["id"], sources[1]["id"]
+    db.set_user_news_sources(uid, [first, second])
+    same_at = "2026-09-24T02:00:00+00:00"
+    insert_news_article(db, first, "2026-09-24T01:00:00+00:00", external_id="old")
+    same_low = insert_news_article(db, first, same_at, external_id="same-low")
+    head = insert_news_article(db, first, same_at, external_id="head")
+    newer = insert_news_article(db, second, "2026-09-24T03:00:00+00:00", external_id="new")
+    for article_id in (same_low, head, newer):
+        db._execute("UPDATE news_articles SET title = ? WHERE id = ?", (f"标题{article_id}", article_id))
+
+    def pending(after_id, source_id=None):
+        params = {"after_published_at": same_at, "after_id": after_id}
+        if source_id is not None:
+            params["source_id"] = source_id
+        return client.get("/api/news", params=params, headers=headers).json()
+
+    page = pending(head)
+    assert [item["id"] for item in page["items"]] == [newer]
+    assert page["has_more"] is False
+    assert "source_statuses" not in page
+    assert [item["id"] for item in pending(same_low)["items"]] == [newer, head]
+    assert [item["id"] for item in pending(same_low, first)["items"]] == [head]
+    insert_news_article(db, first, same_at, external_id="head")
+    assert [item["id"] for item in pending(head)["items"]] == [newer]
+
+
 def test_news_list_and_seen_anchor_are_user_scoped():
     client = make_client("news-api.db")
     first_headers = user_headers(client, "news_first")
