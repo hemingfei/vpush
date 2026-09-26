@@ -46,6 +46,11 @@ export function createNewsView(dependencies) {
     const full = fmtPublished(s);
     return full.startsWith("今天") ? fmtPublished(s, true) : full;
   }
+  // main v1.12.276 胶囊轮询状态：待读新稿攒在 newsPending，点击胶囊才插入列表
+  let newsPollTimer = null;
+  let newsPollBusy = false;
+  let newsPending = [];
+  let newsPendingHasMore = false;
 
   function clearNewsReadUndo() {
     clearTimeout(readAllUndoTimer);
@@ -94,6 +99,8 @@ export function createNewsView(dependencies) {
     stopNewsResearchPoll();
     abortNewsImageRequests();
     clearTimeout(searchTimer);
+    stopNewsPoll();
+    hideNewsPending();
     clearNewsReadUndo();
     clearNewsImageUrls();
     state.newsSources = [];
@@ -669,6 +676,23 @@ export function createNewsView(dependencies) {
   }
 
   const NEWS_TOPICS = ["宏观", "国际", "科技", "公司", "市场"];
+  // Glyphs traced from the sites' own icons (caixin favicon, FT share mark), drawn in currentColor.
+  const NEWS_PLATFORM_ICONS = {
+    caixin: '<svg class="pt-icon" viewBox="0 0 11 12" fill="currentColor" aria-hidden="true"><path d="M9 0h1v1H9z M0 1h5v1H0z M9 1h1v1H9z M0 2h1v1H0z M4 2h1v1H4z M9 2h1v1H9z M0 3h1v1H0z M2 3h1v1H2z M4 3h1v1H4z M6 3h5v1H6z M0 4h1v1H0z M2 4h1v1H2z M4 4h1v1H4z M9 4h1v1H9z M0 5h1v1H0z M2 5h1v1H2z M4 5h1v1H4z M8 5h2v1H8z M0 6h1v1H0z M2 6h1v1H2z M4 6h1v1H4z M8 6h2v1H8z M0 7h1v1H0z M2 7h1v1H2z M4 7h1v1H4z M7 7h1v1H7z M9 7h1v1H9z M0 8h1v1H0z M2 8h1v1H2z M4 8h1v1H4z M6 8h1v1H6z M9 8h1v1H9z M2 9h1v1H2z M5 9h1v1H5z M9 9h1v1H9z M1 10h1v1H1z M3 10h1v1H3z M9 10h1v1H9z M0 11h1v1H0z M4 11h1v1H4z M8 11h2v1H8z"/></svg>',
+    ft: '<svg class="pt-icon" viewBox="0 0 47 26" fill="currentColor" aria-hidden="true"><path d="M1 0h1v1H1z M1 1h21v1H1z M24 1h22v1H24z M3 2h19v1H3z M23 2h23v1H23z M3 3h6v1H3z M19 3h3v1H19z M23 3h3v1H23z M32 3h6v1H32z M44 3h3v1H44z M4 4h5v1H4z M20 4h2v1H20z M23 4h2v1H23z M32 4h6v1H32z M45 4h2v1H45z M4 5h5v1H4z M21 5h1v1H21z M23 5h2v1H23z M32 5h6v1H32z M45 5h2v1H45z M4 6h5v1H4z M32 6h6v1H32z M4 7h5v1H4z M32 7h6v1H32z M4 8h5v1H4z M32 8h6v1H32z M4 9h5v1H4z M16 9h1v1H16z M32 9h6v1H32z M4 10h5v1H4z M15 10h2v1H15z M32 10h6v1H32z M4 11h5v1H4z M14 11h3v1H14z M32 11h6v1H32z M4 12h13v1H4z M32 12h6v1H32z M4 13h13v1H4z M32 13h6v1H32z M4 14h5v1H4z M14 14h3v1H14z M32 14h6v1H32z M4 15h5v1H4z M15 15h2v1H15z M32 15h6v1H32z M4 16h5v1H4z M16 16h1v1H16z M32 16h6v1H32z M4 17h5v1H4z M16 17h1v1H16z M32 17h6v1H32z M4 18h5v1H4z M32 18h6v1H32z M4 19h5v1H4z M32 19h6v1H32z M4 20h5v1H4z M32 20h6v1H32z M4 21h5v1H4z M32 21h6v1H32z M4 22h5v1H4z M32 22h6v1H32z M3 23h6v1H3z M32 23h6v1H32z M3 24h6v1H3z M32 24h6v1H32z M0 25h12v1H0z M29 25h12v1H29z"/></svg>',
+  };
+
+  function newsPlatformMark(key) {
+    const svg = NEWS_PLATFORM_ICONS[key];
+    if (!svg) return "";
+    const label = key === "ft" ? "FT中文网" : "财新";
+    return `<span class="news-platform" data-platform="${key}" role="img" aria-label="${label}" title="${label}">${svg}</span>`;
+  }
+
+  // 栏目名前的「FT ·」和角标重复。只改显示，库里的来源名仍是推送用的那个。
+  function channelName(name) {
+    return String(name || "").replace(/^FT\s*[·•・.]\s*/, "");
+  }
 
   function newsListItemHtml(item) {
     const unread = !item.is_read;
@@ -686,7 +710,7 @@ export function createNewsView(dependencies) {
         <div class="news-item-title-row">${unread ? '<i class="news-item-unread-dot" aria-label="未读"></i>' : ""}<h3>${escapeHtml(item.title)}</h3></div>
         <p>${escapeHtml(item.summary || "暂无摘要")}</p>
       </a>
-      <div class="news-list-meta"><span class="news-item-source">${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${topics}${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})" aria-label="标为已读">${CHECK_ICON}</button>` : ""}</div>
+      <div class="news-list-meta"><span class="news-item-source">${newsPlatformMark(item.source_platform)}<span class="news-item-source-name">${escapeHtml(channelName(item.source_name))}</span></span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${topics}${unread ? `<button type="button" class="news-mark-read" onclick="markNewsItemRead(${item.id})" aria-label="标为已读">${CHECK_ICON}</button>` : ""}</div>
     </div>${thumbnail ? `<a class="news-list-thumb-link" href="/news/${item.id}" tabindex="-1" aria-hidden="true">${thumbnail}</a>` : ""}
   </article>`;
   }
@@ -704,6 +728,36 @@ export function createNewsView(dependencies) {
         : `<div class="news-day-sep"><span>${escapeHtml(group.label)}</span></div>`;
       return `${head}${group.items.map(newsListItemHtml).join("")}`;
     }).join("");
+  }
+
+  function magazineShelfHtml(issues) {
+    const years = new Map();
+    for (const issue of issues) {
+      const year = String(issue.published_at || "").slice(0, 4) || "更早";
+      if (!years.has(year)) years.set(year, []);
+      years.get(year).push(issue);
+    }
+    return `<div class="news-magazine">${[...years.entries()].map(([year, list], index) => `
+      <details class="news-magazine-year" ${index === 0 ? "open" : ""}>
+        <summary>${escapeHtml(year)} 年<span>${list.length} 期</span></summary>
+        <div class="news-magazine-issues">${list.map((issue, issueIndex) => {
+          const read = issue.articles.filter((article) => article.is_read).length;
+          const cover = issue.cover
+            ? `<img class="news-issue-cover" src="${escapeHtml(issue.cover)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+            : `<span class="news-issue-cover is-blank" aria-hidden="true"></span>`;
+          let lastSection = "";
+          const articles = issue.articles.map((article) => {
+            const section = article.section && article.section !== lastSection
+              ? `<div class="news-issue-section">${escapeHtml(lastSection = article.section)}</div>`
+              : "";
+            return `${section}<a class="news-issue-article ${article.is_read ? "is-read" : ""}" href="/news/${article.id}"><strong>${escapeHtml(article.title)}</strong>${article.author ? `<span>${escapeHtml(article.author)}</span>` : ""}</a>`;
+          }).join("");
+          return `<details class="news-issue" ${index === 0 && issueIndex === 0 ? "open" : ""}>
+            <summary class="news-issue-head">${cover}<span class="news-issue-meta"><b>${escapeHtml(issue.label || "")}</b>${issue.title ? `<em>${escapeHtml(issue.title)}</em>` : ""}<small>${escapeHtml(String(issue.published_at || "").slice(0, 10))} · 已读 ${read} / ${issue.articles.length} 篇</small></span></summary>
+            <div class="news-issue-body">${articles}</div>
+          </details>`;
+        }).join("")}</div>
+      </details>`).join("")}</div>`;
   }
 
   function newsEmptyHtml() {
@@ -759,7 +813,8 @@ export function createNewsView(dependencies) {
     renderNewsShell(
       "articles",
       `${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
-      <div class="news-list-toolbar"><div class="news-toolbar-filters"><button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}">只看未读${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</b></button><select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="selectNewsSource(this.value)">${newsSourceFilterOptions()}</select><div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)"></div></div>${unreadCount ? `<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()" aria-label="全部已读">${CHECK_CHECK_ICON}<span>全部已读</span></button>` : ""}</div>
+      <div class="news-list-toolbar"><div class="news-toolbar-filters"><button type="button" class="news-unread-toggle ${unreadOn ? "is-on" : ""}" onclick="toggleNewsUnreadOnly()" aria-pressed="${unreadOn}">只看未读${unreadCount ? `<b>${unreadCount > 99 ? "99+" : unreadCount}</b>` : ""}</button><select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="selectNewsSource(this.value)">${newsSourceFilterOptions()}</select><div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)"></div></div>${unreadCount ? `<button type="button" class="btn-ghost news-read-all" onclick="markAllNewsRead()" aria-label="全部已读">${CHECK_CHECK_ICON}<span>全部已读</span></button>` : ""}</div>
+      <div id="news-new-badge" class="news-new-badge" hidden><button type="button" onclick="showPendingNews()"><span>新资讯</span></button></div>
       <div id="news-list" class="news-list">${newsListSkeletonHtml()}</div>
       <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
       <div id="news-read-undo" class="news-read-undo" role="status" aria-live="polite" hidden></div>`,
@@ -785,7 +840,12 @@ export function createNewsView(dependencies) {
       const sources = await api("/api/news/sources");
       if (!routeStillActive(seq)) return null;
       state.newsUnreadCount = Number(sources.unread_count) || 0;
+      for (const row of sources.items || []) {
+        const source = state.newsSources.find((item) => Number(item.id) === Number(row.id));
+        if (source) source.unread_count = Number(row.unread_count) || 0;
+      }
       syncUnreadBadge();
+      if ($("#news-source-rail")) paintNewsUnreadChrome();
       return sources;
     } catch {
       return null;
@@ -795,13 +855,22 @@ export function createNewsView(dependencies) {
   async function renderFinancialNewsList(seq = currentRouteSeq()) {
     setPageTitle("财经资讯");
     // 文章返回且筛选未变：直接复用已加载列表并恢复滚动位置
-    if (state.newsItems.length && state.newsListKey === newsListKey()) {
+    if (state.newsItems.length && state.newsListKey === newsListKey() && !state.newsMagazine) {
       clearNewsImageUrls();
       renderFinancialNewsShell(state.newsCollectionEnabled !== false);
       const list = $("#news-list");
       list.innerHTML = state.newsItems.length ? newsListHtml(state.newsItems) : newsEmptyHtml();
       observeNewsLazyImages();
       startNewsAutoLoad(seq);
+      startNewsPoll();
+      if (newsPending.length) {
+        const badge = $("#news-new-badge");
+        const label = badge?.querySelector("span");
+        if (badge && label) {
+          label.textContent = `${newsPendingHasMore ? "30+" : newsPending.length} 条新资讯`;
+          badge.hidden = false;
+        }
+      }
       window.scrollTo(0, state.newsScrollY || 0);
       return;
     }
@@ -835,9 +904,29 @@ export function createNewsView(dependencies) {
       // hmf 的懒加载/在途图片中断仍保留：reset 重查意味着旧缩略图可能不再出现在新结果里。
       stopNewsThumbLoad();
       abortNewsImageRequests();
+      hideNewsPending();
       state.newsOffset = 0;
       if (!list.querySelector(".news-list-item, .empty-state")) list.innerHTML = newsListSkeletonHtml();
     }
+    const picked = state.newsSources.find((source) => String(source.id) === String(state.newsFilterSourceId));
+    if (reset && picked && picked.kind === "magazine") {
+      state.newsMagazine = true;
+      state.newsHasMore = false;
+      stopNewsAutoLoad();
+      stopNewsPoll();
+      try {
+        const data = await api(`/api/news/magazine?source_id=${encodeURIComponent(picked.id)}`);
+        if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
+        state.newsIssues = data.issues || [];
+        state.newsItems = [];
+        list.innerHTML = state.newsIssues.length ? magazineShelfHtml(state.newsIssues) : newsEmptyHtml();
+      } catch (err) {
+        if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
+        list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="loadFinancialNews(true)">重试</button></div>`);
+      }
+      return;
+    }
+    state.newsMagazine = false;
     const params = new URLSearchParams({ limit: "30", offset: String(state.newsOffset) });
     if (state.newsFilterSourceId) params.set("source_id", state.newsFilterSourceId);
     if (state.newsQuery.trim()) params.set("q", state.newsQuery.trim());
@@ -865,6 +954,7 @@ export function createNewsView(dependencies) {
       const sentinel = $("#news-load-sentinel");
       if (sentinel) sentinel.innerHTML = "";
       startNewsAutoLoad(seq);
+      if (reset) startNewsPoll();
     } catch (err) {
       if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
       if (!reset && state.newsItems.length) {
@@ -1150,6 +1240,92 @@ export function createNewsView(dependencies) {
     searchTimer = setTimeout(() => loadResearchNews(true, currentRouteSeq()), 250);
   }
 
+  function stopNewsPoll() {
+    if (newsPollTimer) {
+      clearInterval(newsPollTimer);
+      newsPollTimer = null;
+    }
+  }
+
+  function startNewsPoll() {
+    stopNewsPoll();
+    ensureNewsVisibilityPoll();
+    if (state.newsMagazine || !$("#news-list")) return;
+    newsPollTimer = setInterval(pollNewsUpdates, 60000);
+  }
+
+  function ensureNewsVisibilityPoll() {
+    if (ensureNewsVisibilityPoll.bound) return;
+    ensureNewsVisibilityPoll.bound = true;
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible" || !$("#news-list")) return;
+      pollNewsUpdates();
+    });
+  }
+
+  function hideNewsPending() {
+    newsPending = [];
+    newsPendingHasMore = false;
+    const badge = $("#news-new-badge");
+    if (badge) badge.hidden = true;
+  }
+
+  async function pollNewsUpdates() {
+    if (document.visibilityState === "hidden" || newsPollBusy || state.newsMagazine || !$("#news-list")) return;
+    newsPollBusy = true;
+    const seq = currentRouteSeq();
+    const key = newsListKey();
+    try {
+      const params = new URLSearchParams({ limit: "30", offset: "0" });
+      if (state.newsFilterSourceId) params.set("source_id", state.newsFilterSourceId);
+      if ((state.newsQuery || "").trim()) params.set("q", state.newsQuery.trim());
+      if (state.newsUnreadOnly) params.set("unread", "1");
+      if (state.newsTopic) params.set("topic", state.newsTopic);
+      const head = state.newsItems[0];
+      params.set("after_published_at", head?.published_at || "1970-01-01T00:00:00+00:00");
+      params.set("after_id", String(head?.id || 0));
+      const data = await api(`/api/news?${params}`);
+      if (!routeStillActive(seq) || key !== newsListKey() || !$("#news-list")) return;
+      const known = new Set(state.newsItems.map((item) => Number(item.id)));
+      const fresh = (data.items || []).filter((item) => !known.has(Number(item.id)));
+      if (!fresh.length) return;
+      newsPending = fresh;
+      newsPendingHasMore = !!data.has_more;
+      const badge = $("#news-new-badge");
+      const label = badge?.querySelector("span");
+      if (!badge || !label) return;
+      label.textContent = `${data.has_more ? "30+" : fresh.length} 条新资讯`;
+      badge.hidden = false;
+      await refreshUnreadCount(seq);
+    } catch {
+      // 下一轮再试，不改正在看的列表。
+    } finally {
+      newsPollBusy = false;
+    }
+  }
+
+  function showPendingNews() {
+    const list = $("#news-list");
+    if (!list) return;
+    if (newsPendingHasMore || !newsPending.length) {
+      hideNewsPending();
+      window.scrollTo(0, 0);
+      return loadFinancialNews(true, currentRouteSeq());
+    }
+    const known = new Set(state.newsItems.map((item) => Number(item.id)));
+    const items = newsPending.filter((item) => !known.has(Number(item.id)));
+    hideNewsPending();
+    if (!items.length) return;
+    state.newsItems = items.concat(state.newsItems);
+    const lastLabel = groupNewsItemsByDay(items).at(-1)?.label;
+    const firstSep = list.querySelector(".news-day-sep");
+    if (firstSep && firstSep.querySelector("span")?.textContent === lastLabel) firstSep.remove();
+    if (list.querySelector(".news-list-item")) list.insertAdjacentHTML("afterbegin", newsListHtml(items));
+    else list.innerHTML = newsListHtml(items);
+    attachListImages(currentRouteSeq());
+    window.scrollTo(0, 0);
+  }
+
   return {
     clearNewsReaderState,
     loadFinancialNews,
@@ -1177,6 +1353,7 @@ export function createNewsView(dependencies) {
     selectNewsSource,
     selectNewsTab,
     selectNewsTopic,
+    showPendingNews,
     setNewsFontSize,
     toggleNewsUnreadOnly,
     undoNewsReadAll,

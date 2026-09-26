@@ -37,6 +37,11 @@ def test_strip_html_decodes_entities():
     assert strip_html("&lt;b&gt;字面&lt;/b&gt;") == "<b>字面</b>"
     assert strip_html("&amp;lt;") == "&lt;"
     assert strip_html("a&nbsp;b") == "a b"
+    # 雪球长文 text 用 <p>/<h4>，不能剥掉标签后粘成一段；表情图只有 alt
+    assert strip_html(
+        '<p>节日快乐<img src="x" title="[献花花]" alt="[献花花]" />。</p>'
+        "<p>一、</p><h4>1.趋势</h4><p>存储 &gt; 光模块</p>"
+    ) == "节日快乐[献花花]。\n\n一、\n\n1.趋势\n\n存储 > 光模块"
 
 
 def test_truncate_text_cuts_with_ellipsis():

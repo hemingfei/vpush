@@ -1427,6 +1427,17 @@ CREATE TABLE IF NOT EXISTS kol_pnl_cache (
 
 ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq", "mx", "system", "truth"}
 
+def _publication_group(name: str) -> str:
+    """财新与 FT 中文是两个大类；对不上的源保持原分组。"""
+    text = (name or "").strip()
+    folded = text.casefold().replace(" ", "")
+    if "ft中文" in folded or folded.startswith("ft中文网"):
+        return "FT中文"
+    if "财新" in text or "caixin" in folded:
+        return "财新"
+    return ""
+
+
 _BUILTIN_NEWS = (
     ("bloomberg", "Bloomberg", (("最新财经", "https://quanwenrss.com/bloomberg"),)),
     ("caixin", "财新", (("最新文章", "https://quanwenrss.com/caixin"),)),
@@ -2302,11 +2313,44 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE news_sources ADD COLUMN internal INTEGER NOT NULL DEFAULT 0"
             )
+        if "kind" not in source_cols:
+            # feed：进资讯时间线。magazine：周刊，只在按期书架里读，不进时间线。
+            self._conn.execute(
+                "ALTER TABLE news_sources ADD COLUMN kind TEXT NOT NULL DEFAULT 'feed'"
+            )
+        if "platform" not in source_cols:
+            # caixin / ft：心裁推送带来的平台角标。空串表示没有。
+            self._conn.execute(
+                "ALTER TABLE news_sources ADD COLUMN platform TEXT NOT NULL DEFAULT ''"
+            )
+        # 旧库没有这个字段。只填空的，不覆盖推送后来写上的值。
+        self._conn.execute(
+            "UPDATE news_sources SET platform = 'caixin' "
+            "WHERE platform = '' AND (name LIKE '财新%' OR name LIKE 'Caixin%' OR slug = 'caixin')"
+        )
+        self._conn.execute(
+            "UPDATE news_sources SET platform = 'ft' "
+            "WHERE platform = '' AND (name LIKE 'FT%' OR name LIKE '金融时报%')"
+        )
         article_cols = {row["name"] for row in self._rows("PRAGMA table_info(news_articles)")}
         if "topics" not in article_cols:
             self._conn.execute(
                 "ALTER TABLE news_articles ADD COLUMN topics TEXT NOT NULL DEFAULT '[]'"
             )
+        for column, ddl in (
+            ("issue_key", "TEXT NOT NULL DEFAULT ''"),
+            ("issue_label", "TEXT NOT NULL DEFAULT ''"),
+            ("issue_title", "TEXT NOT NULL DEFAULT ''"),
+            ("issue_cover", "TEXT NOT NULL DEFAULT ''"),
+            ("section", "TEXT NOT NULL DEFAULT ''"),
+            ("toc_order", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if column not in article_cols:
+                self._conn.execute(f"ALTER TABLE news_articles ADD COLUMN {column} {ddl}")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_news_articles_issue "
+            "ON news_articles(source_id, issue_key, toc_order, id)"
+        )
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS news_article_reads ("
             "user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
@@ -2359,6 +2403,7 @@ class DB:
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
             )
         self._ensure_default_caixin()
+        self._classify_publication_groups()
 
     def _ensure_default_caixin(self) -> None:
         if self.get_setting("news_default_caixin_v1") == "1":
@@ -2378,6 +2423,28 @@ class DB:
             )
         self._conn.execute(
             "INSERT INTO settings (key, value) VALUES ('news_default_caixin_v1', '1') "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
+
+    def _classify_publication_groups(self) -> None:
+        """心裁推过来的源拆成「财新」「FT中文」两大类；周刊标成 magazine。"""
+        if self.get_setting("news_publication_groups_v1") == "1":
+            return
+        for row in self._rows("SELECT id, name, group_name FROM news_sources"):
+            group = _publication_group(row["name"])
+            kind = "magazine" if "周刊" in (row["name"] or "") else "feed"
+            if group and (row["group_name"] or "") in ("", "心裁"):
+                self._conn.execute(
+                    "UPDATE news_sources SET group_name = ?, updated_at = datetime('now') WHERE id = ?",
+                    (group, row["id"]),
+                )
+            if kind == "magazine":
+                self._conn.execute(
+                    "UPDATE news_sources SET kind = 'magazine', updated_at = datetime('now') WHERE id = ?",
+                    (row["id"],),
+                )
+        self._conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('news_publication_groups_v1', '1') "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         )
 
@@ -4178,7 +4245,8 @@ class DB:
             raise ValueError("该媒体下的 Feed 名称已存在") from None
 
     def get_or_create_internal_news_source(
-        self, name: str, group_name: str = "", external_key: str = ""
+        self, name: str, group_name: str = "", external_key: str = "", kind: str = "feed",
+        platform: str = "",
     ) -> int:
         """按外部稳定键找（或建）一个内部媒体源：internal=1。
 
@@ -4212,12 +4280,33 @@ class DB:
                         "UPDATE news_sources SET slug = ?, updated_at = datetime('now') WHERE id = ?",
                         (slug, row["id"]),
                     )
+        kind = "magazine" if kind == "magazine" else "feed"
+        platform = platform if platform in ("caixin", "ft") else ""
+        grouped = (_publication_group(name) or (group_name or "")).strip()[:40]
         if row is not None:
-            return int(row["id"])
+            source_id = int(row["id"])
+            current = self.get_news_source(source_id) or {}
+            if kind == "magazine" and (current.get("kind") or "feed") != "magazine":
+                self._execute(
+                    "UPDATE news_sources SET kind = 'magazine', updated_at = datetime('now') WHERE id = ?",
+                    (source_id,),
+                )
+            if grouped and (current.get("group_name") or "") in ("", "心裁"):
+                self._execute(
+                    "UPDATE news_sources SET group_name = ?, updated_at = datetime('now') WHERE id = ?",
+                    (grouped, source_id),
+                )
+            # 空值不覆盖：旧推送没有这个字段，不能把已经记上的角标擦掉。
+            if platform and (current.get("platform") or "") != platform:
+                self._execute(
+                    "UPDATE news_sources SET platform = ?, updated_at = datetime('now') WHERE id = ?",
+                    (platform, source_id),
+                )
+            return source_id
         source_id = self._execute(
-            "INSERT INTO news_sources (slug, name, built_in, default_selected, group_name, internal) "
-            "VALUES (?, ?, 0, 1, ?, 1)",
-            (slug or f"internal-{uuid.uuid4().hex}", name, (group_name or "").strip()[:40]),
+            "INSERT INTO news_sources (slug, name, built_in, default_selected, group_name, internal, kind, platform) "
+            "VALUES (?, ?, 0, 1, ?, 1, ?, ?)",
+            (slug or f"internal-{uuid.uuid4().hex}", name, grouped, kind, platform),
         )
         self._grant_new_source_to_users(source_id)
         return source_id
@@ -4445,20 +4534,30 @@ class DB:
             json.dumps(article.get("topics") or [], ensure_ascii=False),
             article["published_at"],
             article["fetched_at"], article.get("content_hash", ""),
+            article.get("issue_key") or "",
+            article.get("issue_label") or "",
+            article.get("issue_title") or "",
+            article.get("issue_cover") or "",
+            article.get("section") or "",
+            int(article.get("toc_order") or 0),
         )
         with self._lock:
             try:
                 self._conn.execute(
                     "INSERT INTO news_articles "
                     "(source_id, feed_id, external_id, title, url, author, summary, "
-                    "content_html, images, topics, published_at, fetched_at, content_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "content_html, images, topics, published_at, fetched_at, content_hash, "
+                    "issue_key, issue_label, issue_title, issue_cover, section, toc_order) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(source_id, external_id) DO UPDATE SET "
                     "feed_id = excluded.feed_id, title = excluded.title, url = excluded.url, "
                     "author = excluded.author, summary = excluded.summary, "
                     "content_html = excluded.content_html, images = excluded.images, "
                     "topics = excluded.topics, "
                     "published_at = excluded.published_at, fetched_at = excluded.fetched_at, "
+                    "issue_key = excluded.issue_key, issue_label = excluded.issue_label, "
+                    "issue_title = excluded.issue_title, issue_cover = excluded.issue_cover, "
+                    "section = excluded.section, toc_order = excluded.toc_order, "
                     "content_hash = excluded.content_hash",
                     values,
                 )
@@ -4489,6 +4588,12 @@ class DB:
                 json.dumps(article.get("topics") or [], ensure_ascii=False),
                 article["published_at"],
                 article["fetched_at"], article.get("content_hash", ""),
+                article.get("issue_key") or "",
+                article.get("issue_label") or "",
+                article.get("issue_title") or "",
+                article.get("issue_cover") or "",
+                article.get("section") or "",
+                int(article.get("toc_order") or 0),
             ))
         with self._lock:
             try:
@@ -4496,14 +4601,18 @@ class DB:
                 self._conn.executemany(
                     "INSERT INTO news_articles "
                     "(source_id, feed_id, external_id, title, url, author, summary, "
-                    "content_html, images, topics, published_at, fetched_at, content_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "content_html, images, topics, published_at, fetched_at, content_hash, "
+                    "issue_key, issue_label, issue_title, issue_cover, section, toc_order) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(source_id, external_id) DO UPDATE SET "
                     "feed_id = excluded.feed_id, title = excluded.title, url = excluded.url, "
                     "author = excluded.author, summary = excluded.summary, "
                     "content_html = excluded.content_html, images = excluded.images, "
                     "topics = excluded.topics, "
                     "published_at = excluded.published_at, fetched_at = excluded.fetched_at, "
+                    "issue_key = excluded.issue_key, issue_label = excluded.issue_label, "
+                    "issue_title = excluded.issue_title, issue_cover = excluded.issue_cover, "
+                    "section = excluded.section, toc_order = excluded.toc_order, "
                     "content_hash = excluded.content_hash",
                     rows,
                 )
@@ -4613,6 +4722,7 @@ class DB:
     def _news_article_filter(
         self, user_id: int, source_id: int | None, q: str, *, unread: bool = False,
         topic: str = "", exclude_internal: bool = False,
+        after: tuple[str, int] | None = None,
     ) -> tuple[str, list[object]]:
         """source_id 给定时按源浏览（源未归档即可读），否则全部未归档源全局混排
         （财经资讯口径：不按用户订阅圈过滤；停用源留在流里供浏览）。
@@ -4641,6 +4751,9 @@ class DB:
             conds.append("(a.title LIKE ? OR a.summary LIKE ?)")
             like = f"%{q}%"
             params.extend([like, like])
+        if after:
+            conds.append("(a.published_at > ? OR (a.published_at = ? AND a.id > ?))")
+            params.extend([after[0], after[0], int(after[1])])
         return " AND ".join(conds), params
 
     def list_news_articles(
@@ -4654,10 +4767,11 @@ class DB:
         unread: bool = False,
         topic: str = "",
         exclude_internal: bool = False,
+        after: tuple[str, int] | None = None,
     ) -> list[dict]:
         where, params = self._news_article_filter(
             user_id, source_id, (q or "").strip(), unread=unread, topic=topic,
-            exclude_internal=exclude_internal,
+            exclude_internal=exclude_internal, after=after,
         )
         # hmf 口径：无订阅圈 JOIN（全局混排），SELECT 占位符仅 2 个 user_id
         params = [user_id, user_id, *params]
@@ -4668,7 +4782,7 @@ class DB:
         rows = self._rows(
             "SELECT a.id, a.title, a.url, a.author, a.summary, a.published_at, "
             "a.source_id, a.topics, s.name AS source_name, s.slug AS source_slug, "
-            "s.enabled AS source_enabled, "
+            "s.platform AS source_platform, s.enabled AS source_enabled, "
             "(a.images IS NOT NULL AND a.images != '[]' AND a.images != '') AS has_image, "
             "CASE WHEN a.published_at <= COALESCE("
             "(SELECT news_last_seen_at FROM users WHERE id = ?), '') "
@@ -4730,9 +4844,56 @@ class DB:
         )
         return {int(row["source_id"]): int(row["n"]) for row in rows}
 
+    def list_magazine_issues(self, user_id: int, source_id: int) -> list[dict]:
+        """一期一条：封面、栏目目录、已读进度。周刊不走时间线。"""
+        rows = self._rows(
+            "SELECT a.id, a.title, a.author, a.issue_key, a.issue_label, a.issue_title, "
+            "a.issue_cover, a.section, a.published_at, a.toc_order, "
+            "CASE WHEN a.published_at <= COALESCE("
+            "(SELECT news_last_seen_at FROM users WHERE id = ?), '') "
+            "OR EXISTS (SELECT 1 FROM news_article_reads r "
+            "WHERE r.user_id = ? AND r.article_id = a.id) "
+            "THEN 1 ELSE 0 END AS is_read "
+            "FROM news_articles a "
+            "JOIN news_sources s ON s.id = a.source_id "
+            "WHERE a.source_id = ? AND s.archived_at IS NULL AND s.enabled = 1 "
+            "AND a.issue_key != '' "
+            "ORDER BY a.published_at DESC, a.toc_order ASC, a.id ASC",
+            (user_id, user_id, source_id),
+        )
+        issues: dict[str, dict] = {}
+        order: list[str] = []
+        for row in rows:
+            key = row["issue_key"]
+            issue = issues.get(key)
+            if issue is None:
+                issue = {
+                    "issue_key": key,
+                    "label": row["issue_label"] or key,
+                    "title": row["issue_title"] or "",
+                    "cover": row["issue_cover"] or "",
+                    "published_at": row["published_at"],
+                    "articles": [],
+                }
+                issues[key] = issue
+                order.append(key)
+            if row["issue_cover"] and not issue["cover"]:
+                issue["cover"] = row["issue_cover"]
+            if row["issue_title"] and not issue["title"]:
+                issue["title"] = row["issue_title"]
+            issue["articles"].append({
+                "id": row["id"],
+                "title": row["title"],
+                "author": row["author"] or "",
+                "section": row["section"] or "正文",
+                "is_read": bool(row["is_read"]),
+            })
+        return [issues[key] for key in order]
+
     _NEWS_ARTICLE_VISIBLE = (
         "SELECT a.*, s.name AS source_name, s.slug AS source_slug, "
-        "s.enabled AS source_enabled FROM news_articles a "
+        "s.platform AS source_platform, s.enabled AS source_enabled, s.kind AS source_kind "
+        "FROM news_articles a "
         "JOIN news_sources s ON s.id = a.source_id "
         "WHERE s.archived_at IS NULL"
     )
@@ -4768,30 +4929,42 @@ class DB:
     def _adjacent_news_article(
         self, article: dict, user_id: int, *, newer: bool
     ) -> int | None:
-        if newer:
-            boundary = (
-                " AND (a.published_at > ? OR (a.published_at = ? AND a.id > ?)) "
-            )
-            order = "ORDER BY a.published_at ASC, a.id ASC LIMIT 1"
+        magazine = article.get("source_kind") == "magazine" and article.get("issue_key")
+        if magazine:
+            if newer:
+                boundary = " AND (a.toc_order < ? OR (a.toc_order = ? AND a.id < ?)) "
+                order = "ORDER BY a.toc_order DESC, a.id DESC LIMIT 1"
+            else:
+                boundary = " AND (a.toc_order > ? OR (a.toc_order = ? AND a.id > ?)) "
+                order = "ORDER BY a.toc_order ASC, a.id ASC LIMIT 1"
+            scope = "AND a.source_id = ? AND a.issue_key = ? "
+            params: list[object] = [
+                int(article.get("toc_order") or 0), int(article.get("toc_order") or 0),
+                article["id"], article["source_id"], article["issue_key"], user_id,
+            ]
         else:
-            boundary = (
-                " AND (a.published_at < ? OR (a.published_at = ? AND a.id < ?)) "
-            )
-            order = "ORDER BY a.published_at DESC, a.id DESC LIMIT 1"
+            if newer:
+                boundary = (
+                    " AND (a.published_at > ? OR (a.published_at = ? AND a.id > ?)) "
+                )
+                order = "ORDER BY a.published_at ASC, a.id ASC LIMIT 1"
+            else:
+                boundary = (
+                    " AND (a.published_at < ? OR (a.published_at = ? AND a.id < ?)) "
+                )
+                order = "ORDER BY a.published_at DESC, a.id DESC LIMIT 1"
+            scope = "AND COALESCE(s.kind, 'feed') != 'magazine' "
+            params = [article["published_at"], article["published_at"], article["id"], user_id]
         sql = (
             self._NEWS_ARTICLE_VISIBLE
             + boundary
+            + scope
+            # hmf 口径：启用源人人可读，停用源仅历史订阅者可读（与列表可见性一致）
             + "AND (s.enabled = 1 OR EXISTS ("
             + "SELECT 1 FROM user_news_sources u WHERE u.user_id = ? AND u.source_id = a.source_id)) "
             + order
         )
-        rows = self._rows(
-            sql,
-            (
-                article["published_at"], article["published_at"], article["id"],
-                user_id,
-            ),
-        )
+        rows = self._rows(sql, params)
         return rows[0]["id"] if rows else None
 
     def advance_news_seen(self, user_id: int, view_started_at: str) -> bool:

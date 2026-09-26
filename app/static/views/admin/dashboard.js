@@ -605,7 +605,40 @@ export function createAdminDashboardView(dependencies) {
     return ` <span class="status-warn" title="${escapeHtml(src.direct_fallback_reason || "")}">直抓失败</span>`;
   }
 
+  function armStatusCell(src) {
+    const arm = src.arm || {};
+    if (!arm.configured && !arm.last_finished_at) {
+      return `<td class="muted" data-label="状态">ARM 未配置</td>`;
+    }
+    if (arm.last_error || arm.failed) {
+      return `<td class="status-warn" data-label="状态">ARM 异常</td>`;
+    }
+    if (!arm.last_finished_at) {
+      return `<td class="muted" data-label="状态">ARM 中间层</td>`;
+    }
+    return `<td class="status-ok" data-label="状态">ARM 中间层</td>`;
+  }
+
+  function armRateCell(src) {
+    const arm = src.arm || {};
+    if (!arm.last_finished_at) {
+      return `<td class="muted ak-hide-mobile dash-source-rate" data-label="24h 成功率">由 ARM 采集</td>`;
+    }
+    const when = fmtTs(arm.last_finished_at);
+    return `<td class="ak-hide-mobile dash-source-rate" data-label="24h 成功率" title="上次采集 ${escapeHtml(when)}">上次 ${arm.downloaded || 0} 篇</td>`;
+  }
+
+  function armCauseCell(src) {
+    const arm = src.arm || {};
+    if (arm.last_error) {
+      const text = String(arm.last_error);
+      return `<td class="muted dash-source-cause" data-label="最近错误" title="${escapeHtml(text)}">${escapeHtml(text.slice(0, 40))}</td>`;
+    }
+    return `<td class="muted dash-source-cause" data-label="最近错误">不走本机轮询</td>`;
+  }
+
   function sourceStatusCell(src, cookieItems) {
+    if (src.managed_by === "arm") return armStatusCell(src);
     const note = sourceStatusNote(src);
     const health = src.health || "";
     if (health === "ok" || (!health && src.ok)) {
@@ -633,6 +666,16 @@ export function createAdminDashboardView(dependencies) {
     const rows = sources || [];
     if (!rows.length) return '<tr class="ak-empty"><td colspan="4" class="muted">暂无数据源</td></tr>';
     return rows.map((src) => {
+      if (src.managed_by === "arm") {
+        const when = src.arm && src.arm.last_finished_at ? `上次采集 ${fmtTs(src.arm.last_finished_at)}` : "";
+        return `
+      <tr${when ? ` title="${escapeHtml(when)}"` : ""}>
+        <td data-label="平台">${PLATFORM_LABELS[src.platform] || escapeHtml(src.platform)}</td>
+        ${armStatusCell(src)}
+        ${armRateCell(src)}
+        ${armCauseCell(src)}
+      </tr>`;
+      }
       const warn = src.warn_24h ? ` <span class="status-warn">⚠${src.warn_24h}</span>` : "";
       const counts = `<span class="muted dash-source-counts">${src.ok_24h} / ${src.fail_24h}${warn}</span>`;
       const hint = [
@@ -736,6 +779,7 @@ export function createAdminDashboardView(dependencies) {
     let failing = 0;
     let overdue = 0;
     sources.forEach((src) => {
+      if (src.managed_by === "arm") return;
       const health = src.health || (src.ok ? "ok" : "");
       if (health === "ok" || health === "idle") return;
       if (sourceCredentialGap(src, cookies)) cred += 1;

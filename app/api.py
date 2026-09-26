@@ -1084,7 +1084,31 @@ IMAGE_PROXY_MAX_PER_WINDOW = 60
 IMAGE_PROXY_WINDOW_SECONDS = 60
 IMAGE_PROXY_VIDEO_MAX_PER_WINDOW = 180  # 播放器会打多次 Range，单独放宽
 IMAGE_PROXY_VIDEO_MAX_BYTES = 60 * 1024 * 1024
+# 无上限 Range 先回这一小段。播放器读到 mdat 大小后会自己再要文件尾的 moov。
+IMAGE_PROXY_VIDEO_PROBE_BYTES = 1024 * 1024
 IMAGE_PROXY_VIDEO_TYPES = frozenset({"video/mp4", "video/quicktime", "video/webm"})
+
+
+def _bounded_video_range(header: str | None) -> str:
+    """把视频 Range 收进单次上限。
+
+    Chrome 点播放发 `bytes=0-`。整段转发再在 60MB 处拉断、却按源站许诺全长，
+    moov 在尾部的 QuickTime 会一直停在 0:00。
+    """
+    raw = (header or "").strip()
+    bounded = re.fullmatch(r"bytes=(\d+)-(\d*)", raw, re.I)
+    if bounded:
+        start = int(bounded.group(1))
+        if bounded.group(2):
+            end = min(int(bounded.group(2)), start + IMAGE_PROXY_VIDEO_MAX_BYTES - 1)
+        else:
+            end = start + IMAGE_PROXY_VIDEO_PROBE_BYTES - 1
+        return f"bytes={start}-{max(end, start)}"
+    suffix = re.fullmatch(r"bytes=-(\d+)", raw, re.I)
+    if suffix:
+        n = min(max(int(suffix.group(1)), 1), IMAGE_PROXY_VIDEO_MAX_BYTES)
+        return f"bytes=-{n}"
+    return f"bytes=0-{IMAGE_PROXY_VIDEO_PROBE_BYTES - 1}"
 
 
 ACCOUNT_ORIGIN_LABELS = {
@@ -1706,9 +1730,7 @@ def create_api_router(
             ),
             "Accept": "*/*",
         }
-        range_header = request.headers.get("range")
-        if range_header:
-            headers["Range"] = range_header
+        headers["Range"] = _bounded_video_range(request.headers.get("range"))
         client = httpx.Client(timeout=30, follow_redirects=False)
         stream_ctx = client.stream("GET", url, headers=headers, follow_redirects=False)
         try:
@@ -1749,6 +1771,7 @@ def create_api_router(
         out_headers = {
             # 禁止边缘缓存：CF 默认按 URL 缓存，会把第一次 206 片段当成整段
             "Cache-Control": "private, no-store",
+            "Vary": "Range",
             "Accept-Ranges": "bytes",
         }
         if resp.headers.get("content-range"):
@@ -2955,6 +2978,7 @@ def create_api_router(
                 "status": status["code"],
                 "last_success_at": status["last_success_at"],
                 "group_name": source["group_name"] or "",
+                "kind": source.get("kind") or "feed",
                 "unread_count": unread_by_source.get(source["id"], 0),
             })
         return {
@@ -2966,6 +2990,23 @@ def create_api_router(
             ))),
         }
 
+    @router.get("/news/magazine")
+    def news_magazine(
+        source_id: int = Query(...),
+        user: dict = Depends(get_current_user),
+    ):
+        hide_internal = _exclude_internal_news(user)
+        source = db.get_news_source(source_id)
+        if source is None or source["archived_at"] or not source["enabled"]:
+            raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
+        if int(source["internal"] or 0) and hide_internal:
+            raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
+        if (source.get("kind") or "feed") != "magazine":
+            raise HTTPException(status_code=400, detail="这个来源不是周刊")
+        if source_id not in set(db.list_user_news_source_ids(user["id"])):
+            raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
+        return {"source_id": source_id, "issues": db.list_magazine_issues(user["id"], source_id)}
+
     @router.get("/news")
     def list_news(
         limit: int = Query(30, ge=1, le=100),
@@ -2974,6 +3015,8 @@ def create_api_router(
         q: str = Query("", max_length=200),
         unread: bool = Query(False),
         topic: str = Query("", max_length=20),
+        after_published_at: str = Query("", max_length=40),
+        after_id: int = Query(0, ge=0),
         user: dict = Depends(get_current_user),
     ):
         hide_internal = _exclude_internal_news(user)
@@ -2985,7 +3028,21 @@ def create_api_router(
                 raise HTTPException(status_code=400, detail="新闻来源不存在或已归档")
         view_started_at = datetime.now(UTC).isoformat()
         anchor = (db.get_user(user["id"]) or {}).get("news_last_seen_at")
-        if source_id is None:
+        after_at = after_published_at.strip()
+        pending = bool(after_at)
+        if pending:
+            # ponytail: 只对这页增量去重。已在屏幕上的同日同题副本，要等整表重载才折叠。
+            rows = db.list_news_articles(
+                user["id"], source_id=source_id, q=q, limit=limit + 1, offset=0,
+                unread=unread, topic=topic.strip(), exclude_internal=hide_internal,
+                after=(after_at, after_id),
+            )
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            if source_id is None:
+                rows = dedupe_news_stream(rows)
+            total = offset + len(rows) + (1 if has_more else 0)
+        elif source_id is None:
             # main v1.12.264：全部资讯合并同题稿（dedupe_news_stream 全量去重后内存分页）
             rows = dedupe_news_stream(db.list_news_articles(
                 user["id"], source_id=None, q=q, limit=None, offset=0,
@@ -3010,14 +3067,17 @@ def create_api_router(
             # is_read 走单篇已读记录，二者独立供前端使用
             row["is_new"] = bool(anchor and row["published_at"] > anchor)
             items.append(row)
-        return {
+        payload = {
             "items": items,
             "offset": offset,
             "next_offset": offset + len(items),
             "has_more": offset + len(items) < total,
             "view_started_at": view_started_at,
-            "source_statuses": db.news_source_statuses(),
         }
+        # pending（胶囊增量）时跳过来源状态查询；签名沿用 hmf 的无参口径
+        if not pending:
+            payload["source_statuses"] = db.news_source_statuses()
+        return payload
 
     @router.post("/news/seen")
     def mark_news_seen(body: NewsSeenIn, user: dict = Depends(get_current_user)):
@@ -8978,6 +9038,31 @@ def create_api_router(
                 )
                 # 双通道总览：模式 / 两侧凭证 / 分流覆盖 / 429 冷却，供后台展示与健康判据
                 src["channels"] = x_channel_overview(db)
+            if platform == "ima":
+                # 研报不走本机轮询，采集在 ARM。24h 成功率为空时前端会写成「暂无数据」。
+                finished = 0
+                raw_finished = str(db.get_setting("ima_pure_last_finished_at") or "").strip()
+                try:
+                    finished = int(raw_finished)
+                except ValueError:
+                    finished = 0
+                result: dict = {}
+                raw_result = db.get_setting("ima_pure_last_result") or ""
+                if raw_result:
+                    try:
+                        parsed = json.loads(raw_result)
+                    except json.JSONDecodeError:
+                        parsed = {}
+                    if isinstance(parsed, dict):
+                        result = parsed
+                src["managed_by"] = "arm"
+                src["arm"] = {
+                    "configured": bool(os.environ.get("IMA_PULL_URL", "").strip()),
+                    "last_finished_at": finished,
+                    "downloaded": int(result.get("downloaded") or 0),
+                    "failed": int(result.get("failed") or 0),
+                    "last_error": str(result.get("last_error") or "")[:200],
+                }
             sources.append(src)
         xueqiu_cookie = db.get_setting("xueqiu_cookie") or ""
         xueqiu_updated = db.get_setting("xueqiu_cookie_updated_at") or ""
@@ -9225,9 +9310,9 @@ def create_api_router(
     def img_proxy(url: str, request: Request):
         """受信图床代理：精确域名、HTTPS、无重定向、流式限制 10 MB，按 IP 限速。
 
-        视频（.mp4/.webm）单独走流式通道：透传 Range（206 分段，播放器拖动
-        进度必需）、上限 60MB、边下边发不整段缓冲——图床对视频不回 206，
-        播放统一从源站代理。
+        视频（.mp4/.webm）单独走流式通道：Range 收成有界 206（单次最多 60MB，
+        无上限请求先回 1MB），透传 Content-Range，播放器再自己要文件尾。
+        图床对视频不回 206，播放统一从源站代理。
         """
         from urllib.parse import urlparse
 

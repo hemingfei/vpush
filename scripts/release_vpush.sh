@@ -297,8 +297,15 @@ rsync -az --delete --exclude '__pycache__/' --exclude '*.pyc' \
 
 # 远端确认后再 overlay。不改 .env / data / compose，不 build waf-bot。
 ssh_prod "test -d '${PROD_SRC}/app' && grep -n 'APP_VERSION' '${PROD_SRC}/app/version.py' '${PROD_SRC}/app/static/app.js' && grep -F '${APP_JS}' '${PROD_SRC}/app/static/index.html'"
-ssh_prod "cat > '${PROD_SRC}/Dockerfile.overlay' <<EOF
-FROM icekale/vpush:${PREV_TAG}
+ssh_prod "base='icekale/vpush:${PREV_TAG}'
+if ! docker image inspect \"\$base\" >/dev/null 2>&1; then docker pull \"\$base\" >/dev/null 2>&1 || true; fi
+if ! docker image inspect \"\$base\" >/dev/null 2>&1; then
+  base=\$(docker images 'icekale/vpush' --format '{{.Repository}}:{{.Tag}}' | head -1)
+  echo \"上一标签镜像还没进仓库，overlay 改用本地 \$base\" >&2
+fi
+[[ -n \"\$base\" ]] || { echo 'VPS 上没有可用的 vpush 基础镜像' >&2; exit 1; }
+cat > '${PROD_SRC}/Dockerfile.overlay' <<EOF
+FROM \$base
 COPY --chown=99:100 app ./app
 EOF
 cd '${PROD_SRC}' && DOCKER_BUILDKIT=0 docker build -f Dockerfile.overlay -t '${LOCAL_IMAGE}' .

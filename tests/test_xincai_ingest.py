@@ -63,7 +63,8 @@ def test_ingest_creates_internal_source_and_sanitizes_html(db, admin):
     assert result["accepted"] == 2
     source = db.get_news_source(_source_id(result))
     assert source["internal"] == 1
-    assert source["group_name"] == "心裁"
+    assert source["group_name"] == "财新"
+    assert source["kind"] == "feed"
 
     article_id = db.list_news_articles(
         admin["id"], source_id=_source_id(result), q="", limit=5, offset=0
@@ -206,3 +207,61 @@ def test_internal_source_goes_paused_when_stale(db, admin):
 
     statuses = {s["id"]: s for s in db.news_source_statuses()}
     assert statuses[source_id]["code"] == "paused"
+
+
+def test_weekly_is_a_magazine_and_stays_on_the_hmf_timeline(db, admin):
+    """hmf 口径：周刊源仍全局混排留在「全部资讯」时间线，期号目录另走书架接口。"""
+    body = _payload(1, source_name="财新 · 周刊")
+    body["sourceKind"] = "weekly"
+    body["articles"][0]["issue"] = {
+        "key": "16905", "label": "2026年第37期", "title": "济州岛迷雾",
+        "cover": "https://img.caixin.com/cover.jpg", "order": 2,
+    }
+    body["articles"][0]["category"] = "封面报道"
+    result = xincai.ingest_articles(db, body)
+    source_id = _source_id(result)
+
+    source = db.get_news_source(source_id)
+    assert source["kind"] == "magazine"
+    assert source["group_name"] == "财新"
+    # 与 main 不同：hmf 时间线不按订阅圈过滤、也不把周刊挪出流（列表即混排口径）
+    timeline = db.list_news_articles(admin["id"], source_id=None, q="", limit=20, offset=0)
+    assert [row["title"] for row in timeline] == ["标题 0"]
+
+    issues = db.list_magazine_issues(admin["id"], source_id)
+    assert issues[0]["label"] == "2026年第37期"
+    assert issues[0]["title"] == "济州岛迷雾"
+    assert issues[0]["articles"][0]["section"] == "封面报道"
+
+
+def test_ft_chinese_is_its_own_group(db):
+    result = xincai.ingest_articles(db, _payload(1, source_name="FT中文网"))
+    assert db.get_news_source(_source_id(result))["group_name"] == "FT中文"
+
+
+def test_platform_sticks_to_the_source_and_reaches_the_list(db, admin):
+    body = _payload(1, source_name="FT · 中国")
+    body["articles"][0]["sourceId"] = "source-ftcn"
+    body["articles"][0]["platform"] = "ft"
+    result = xincai.ingest_articles(db, body)
+    source_id = _source_id(result)
+    assert db.get_news_source(source_id)["platform"] == "ft"
+
+    # 旧推送没有这个字段，不能把已经记上的角标擦掉
+    again = _payload(1, source_name="FT · 中国")
+    again["articles"][0]["sourceId"] = "source-ftcn"
+    xincai.ingest_articles(db, again)
+    assert db.get_news_source(source_id)["platform"] == "ft"
+
+    db.set_user_news_sources(admin["id"], [source_id])
+    row = db.list_news_articles(admin["id"], source_id=source_id, q="", limit=5, offset=0)[0]
+    assert row["source_platform"] == "ft"
+    assert db.get_news_article(row["id"])["source_platform"] == "ft"
+
+
+def test_platform_backfill_uses_the_source_name(db):
+    source_id = db.get_or_create_internal_news_source("财新 · 国际", "心裁", "xincai-backfill")
+    db._execute("UPDATE news_sources SET platform = '' WHERE id = ?", (source_id,))
+    db._migrate_news()
+    db._conn.commit()
+    assert db.get_news_source(source_id)["platform"] == "caixin"

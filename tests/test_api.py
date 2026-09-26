@@ -114,6 +114,38 @@ def test_news_list_collapses_same_day_title_across_sources():
     assert [item["id"] for item in own] == [plain]
 
 
+def test_news_pending_returns_only_rows_newer_than_cursor():
+    client = make_client("news-pending.db")
+    headers = user_headers(client, "news_pending")
+    db = client.app.state.db
+    uid = db.get_user_by_username("news_pending")["id"]
+    sources = db.list_news_sources()
+    first, second = sources[0]["id"], sources[1]["id"]
+    db.set_user_news_sources(uid, [first, second])
+    same_at = "2026-09-24T02:00:00+00:00"
+    insert_news_article(db, first, "2026-09-24T01:00:00+00:00", external_id="old")
+    same_low = insert_news_article(db, first, same_at, external_id="same-low")
+    head = insert_news_article(db, first, same_at, external_id="head")
+    newer = insert_news_article(db, second, "2026-09-24T03:00:00+00:00", external_id="new")
+    for article_id in (same_low, head, newer):
+        db._execute("UPDATE news_articles SET title = ? WHERE id = ?", (f"标题{article_id}", article_id))
+
+    def pending(after_id, source_id=None):
+        params = {"after_published_at": same_at, "after_id": after_id}
+        if source_id is not None:
+            params["source_id"] = source_id
+        return client.get("/api/news", params=params, headers=headers).json()
+
+    page = pending(head)
+    assert [item["id"] for item in page["items"]] == [newer]
+    assert page["has_more"] is False
+    assert "source_statuses" not in page
+    assert [item["id"] for item in pending(same_low)["items"]] == [newer, head]
+    assert [item["id"] for item in pending(same_low, first)["items"]] == [head]
+    insert_news_article(db, first, same_at, external_id="head")
+    assert [item["id"] for item in pending(head)["items"]] == [newer]
+
+
 def test_news_list_and_seen_anchor_are_user_scoped():
     client = make_client("news-api.db")
     first_headers = user_headers(client, "news_first")
@@ -3176,6 +3208,26 @@ def test_stats_include_source_health():
     assert sources["xueqiu"]["health"] == "overdue"
 
 
+def test_stats_ima_row_reports_arm():
+    """ima 不走本机轮询。空的 24h 成功率留给前端，行上带 ARM 上次采集。"""
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    db.set_setting("ima_pure_last_finished_at", "1710000000")
+    db.set_setting(
+        "ima_pure_last_result",
+        json.dumps({"downloaded": 12, "failed": 0, "last_error": ""}),
+    )
+    stats = client.get("/api/stats", headers=headers).json()
+    ima = next(row for row in stats["sources"] if row["platform"] == "ima")
+    assert ima["managed_by"] == "arm"
+    assert ima["arm"]["last_finished_at"] == 1710000000
+    assert ima["arm"]["downloaded"] == 12
+    assert ima["arm"]["failed"] == 0
+    assert ima["arm"]["last_error"] == ""
+    assert ima["success_rate_24h"] is None
+
+
 def test_stats_no_enabled_kol_not_stale():
     """没有该抓的大V时，不把陈旧 source_ok 当成故障。"""
     client = make_client()
@@ -4556,6 +4608,62 @@ def test_img_proxy_streams_video_range(monkeypatch):
     assert resp.headers["content-range"] == "bytes 0-1023/34590354"
     assert resp.headers["accept-ranges"] == "bytes"
     assert seen["headers"].get("Range") == "bytes=0-1023"
+
+
+def test_img_proxy_bounds_open_video_range(monkeypatch):
+    """无上限 Range 不能整段转发：105MB QuickTime 的 moov 在尾，截断谎报长度会让播放器停在 0:00。"""
+    import httpx as _httpx
+
+    from app.api import IMAGE_PROXY_VIDEO_MAX_BYTES, IMAGE_PROXY_VIDEO_PROBE_BYTES
+
+    seen = {}
+    fake_resp = _httpx.Response(
+        206,
+        content=b"V" * 16,
+        headers={
+            "content-type": "video/quicktime",
+            "content-range": "bytes 0-15/109833578",
+            "content-length": "16",
+        },
+    )
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def stream(self, method, url, **kwargs):
+            seen["range"] = (kwargs.get("headers") or {}).get("Range")
+
+            class Stream:
+                def __enter__(self):
+                    return fake_resp
+
+                def __exit__(self, *args):
+                    return False
+
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+    client = make_client()
+    video = "https://static-assets-1.truthsocial.com/media/clip.mp4"
+    cases = [
+        ({"Range": "bytes=0-"}, f"bytes=0-{IMAGE_PROXY_VIDEO_PROBE_BYTES - 1}"),
+        ({}, f"bytes=0-{IMAGE_PROXY_VIDEO_PROBE_BYTES - 1}"),
+        ({"Range": "bytes=-32"}, "bytes=-32"),
+        (
+            {"Range": f"bytes=0-{IMAGE_PROXY_VIDEO_MAX_BYTES + 10}"},
+            f"bytes=0-{IMAGE_PROXY_VIDEO_MAX_BYTES - 1}",
+        ),
+    ]
+    for headers, expected in cases:
+        resp = client.get("/api/img-proxy", params={"url": video}, headers=headers)
+        assert resp.status_code == 206, headers
+        assert seen["range"] == expected
+        assert resp.headers["content-range"] == "bytes 0-15/109833578"
+        assert resp.headers["vary"] == "Range"
 
 
 def test_img_proxy_rejects_html_masquerading_as_mp4(monkeypatch):

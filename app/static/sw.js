@@ -1,8 +1,8 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-ba9b5e037e9b";
+const CACHE = "dav-shell-d3c36e114347";
 const SHELL = [
   "/",
-  "/app.4e843b5b9989.js",
+  "/app.5512cc7ae077.js",
   // asset-modules:start
   "/core/dialog.7687bbb78d96.js",
   "/core/html.817ab2339b89.js",
@@ -11,7 +11,7 @@ const SHELL = [
   "/core/platforms.4ca4d56112a2.js",
   "/views/admin/cicc.0cd7529b8514.js",
   "/views/admin/codes.0448f2182b10.js",
-  "/views/admin/dashboard.96dc7fa6bee0.js",
+  "/views/admin/dashboard.157ed56654d5.js",
   "/views/admin/ima-collector.f5df4416f5ed.js",
   "/views/admin/infra.71b1bf8b6bcb.js",
   "/views/admin/knowledge.42883ccab396.js",
@@ -24,11 +24,11 @@ const SHELL = [
   "/views/market.b64771017dd0.js",
   "/views/mx-kol-holdings.9340733cf11d.js",
   "/views/mx-views.efb668c62c64.js",
-  "/views/news.56159bafdb05.js",
+  "/views/news.aa6d357df605.js",
   "/views/post-card-export.27dbd2f5c5fa.js",
   "/views/push-settings.43f099553f09.js",
   // asset-modules:end
-  "/style.3fe153a4d246.css",
+  "/style.ec33b1ac3805.css",
   "/mx-views.8ae995d2c259.css",
   "/holdings.7270168e6a4f.css",
   "/mx-kol-holdings.a38a07eb5449.css",

@@ -202,10 +202,20 @@ def apply_twitter_feed(rows: list[dict], user: dict | None) -> list[dict]:
 
 
 def strip_html(text: str) -> str:
-    """去掉 HTML 标签、还原实体（含 &#34; 等数字实体），<br> 转成换行。"""
-    text = re.sub(r"<br\s*/?>", "\n", text)
+    """去掉 HTML 标签、还原实体。<br> 换行，块级结束标签分段，表情图保留 alt。"""
+    text = re.sub(
+        r'<img\b[^>]*?\balt\s*=\s*["\']([^"\']*)["\'][^>]*>',
+        r"\1",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"</(?:p|div|h[1-6]|li|tr|blockquote)\s*>", "\n\n", text, flags=re.I)
     text = re.sub(r"<[^>]+>", "", text)
-    return html.unescape(text).replace("\xa0", " ").strip()
+    text = html.unescape(text).replace("\xa0", " ")
+    text = re.sub(r"[ \t]*\n[ \t]*", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def truncate_text(text: str, limit: int) -> str:

@@ -1606,6 +1606,19 @@ def test_source_status_splits_cold_start_and_credentials():
     assert "还没跑过" in cause
 
 
+def test_ima_source_row_uses_arm_not_empty_rate():
+    """ima 归 ARM，全景不把空成功率画成「暂无数据」，也不算进「尚未开始」。"""
+    rows = _fn_body("sourceRowsHtml")
+    status = _fn_body("armStatusCell")
+    rate = _fn_body("armRateCell")
+    duty = _fn_body("dutyStripHtml")
+    assert 'managed_by === "arm"' in rows
+    assert "ARM 中间层" in status
+    assert "由 ARM 采集" in rate
+    assert "rateBar" not in rate
+    assert 'managed_by === "arm"' in duty
+
+
 def test_stale_kols_are_exceptions_not_inventory():
     """停更名单：只启用、从未抓到或超过 48h、最多 10 个。"""
     src = APP_JS.read_text()
@@ -3603,6 +3616,23 @@ def test_feed_time_comparator_keeps_seconds_tiebreak():
     assert "feedTimeAsc(acc, p) < 0" in newest
 
 
+def test_news_list_prompts_before_inserting_new_items():
+    """财经资讯只出胶囊，点了才把新稿插到列表前面。周刊目录不轮询。
+
+    hmf 口径：无整页阅读器（文章走弹窗），轮询常驻弹窗后无碍。
+    """
+    poll = _fn_body("pollNewsUpdates", NEWS_JS)
+    start = _fn_body("startNewsPoll", NEWS_JS)
+    show = _fn_body("showPendingNews", NEWS_JS)
+    load = _fn_body("loadFinancialNews", NEWS_JS)
+    assert "60000" in start
+    assert "after_published_at" in poll
+    assert 'id="news-new-badge"' in NEWS_JS.read_text()
+    assert 'insertAdjacentHTML("afterbegin"' in show
+    magazine = load[load.index('picked.kind === "magazine"'):]
+    assert magazine.index("stopNewsPoll()") < magazine.index("state.newsMagazine = false")
+
+
 def test_live_feed_auto_consumes_pending_only_at_top():
     """快讯增量在顶部自动合并，深读时必须保留气泡供手动查看。"""
     poll = _fn_body("pollFeedUpdates")
@@ -4894,7 +4924,8 @@ def test_news_filter_changes_refresh_list_without_full_redraw():
     assert "state.newsTopic === next" in _fn_body("selectNewsTopic", NEWS_JS)
     # reset 不清列表不清骨架：数据回来原地替换，避免整列表闪烁
     reset = _fn_body("loadFinancialNews", NEWS_JS)
-    assert "state.newsItems = []" not in reset
+    # 唯一允许清列表的位置是周刊书架分支（切换视图形态本就整页重绘），常规 reset 路径不得清列表
+    assert reset.index("state.newsItems = []") > reset.index('picked.kind === "magazine"')
     assert 'if (!list.querySelector(".news-list-item, .empty-state")) list.innerHTML = newsListSkeletonHtml();' in reset
 
 
@@ -5844,6 +5875,11 @@ def test_type_scale_uses_four_reading_roles():
     body = re.search(r"^body\s*\{([^}]*)\}", css, re.MULTILINE)
     assert body and "font-size: var(--text-body)" in body.group(1)
     assert "font-size: 14px" not in css
+
+    assert not re.search(r"\.post-item \.p-content p\s*\{", css)
+    card = _fn_body("postCard")
+    # hmf 口径：正文走 md-body（mdToHtml 渲染），截断吸收 main 的 previewText 分段预览
+    assert "mdToHtml(shown)" in card and "previewText(body)" in card
 
     content = re.search(r"\.post-item \.p-content\s*\{([^}]*)\}", css)
     assert content, "未找到 .post-item .p-content"
