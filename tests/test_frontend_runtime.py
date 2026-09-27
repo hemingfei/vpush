@@ -1404,7 +1404,7 @@ def test_holdings_kol_board_tabs_expand_sort(page: Page):
         showConfirm: async () => true,
       });
       Object.assign(window, h.view);
-      // 下钻抽屉用真实工厂（非桩）：/holdings 无 #mxv-drawer-slot，走 #main 兜底挂载
+      // 下钻抽屉用真实工厂（非桩）：挂 document.body，不依赖宿主元素
       const mxcView = createMxKolHoldingsView({
         $: (sel) => document.querySelector(sel),
         state: { token: '' },

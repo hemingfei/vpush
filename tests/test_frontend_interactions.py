@@ -347,7 +347,7 @@ def test_mx_post_card_holdings_button_first_in_tag_row():
     src = APP_JS.read_text(encoding="utf-8")
     mxc = (APP_JS.parent / "views" / "mx-kol-holdings.js").read_text(encoding="utf-8")
     assert "function mxcOpenDrawer(" in mxc
-    assert 'document.getElementById("mxv-drawer-slot") || $("#main")' in mxc  # 时间线无 slot 兜底挂 #main
+    assert "document.body.appendChild(mask)" in mxc  # 抽屉挂 body:页面级重绘打不掉(时间线无 slot 兜底旧口径已弃)
     handlers = src[src.index("const INLINE_HANDLERS"):]
     assert "mxcOpenDrawer" in handlers
     # 时间线整页重绘（换筛选/重进页）先关抽屉；loadTimeline 只重写 #feed 不动抽屉
