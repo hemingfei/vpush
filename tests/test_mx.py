@@ -2586,6 +2586,69 @@ def test_window_loop_skips_auto_start_after_manual_attempt(monkeypatch):
     scheduler.stop()
 
 
+def test_window_tick_skips_login_motion_under_token_breaker(monkeypatch):
+    """TOKEN 熔断后到点窗口：不开窗、不调登录、不写「系统自动登录」操作日志。
+
+    熔断即「后续启动 100% 失败」，窗口循环必须完全跳过登录动作——
+    否则每天到点照常记「系统自动执行 MX 平台登录」，管理员会误以为仍在尝试。
+    """
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+    _arm_manual_window(scheduler)
+    scheduler._mx_token_expired = True
+
+    starts = {"n": 0}
+
+    async def fake_session_start():
+        starts["n"] += 1
+        scheduler._mx_window_open = True
+
+    scheduler._mx_session_start = fake_session_start
+
+    asyncio.run(scheduler._mx_window_tick())
+
+    assert starts["n"] == 0  # 登录动作根本不发起
+    assert scheduler._mx_window_open is False  # 窗口也不开
+    assert not [r for r in db.list_admin_logs(limit=10) if r["action"] == "mx_auto_login"]
+    scheduler.stop()
+
+
+def test_restart_login_pending_consumed_under_token_breaker(monkeypatch):
+    """熔断态下重启补登标记只消费：不拉起会话、不写自动登录操作日志。"""
+    from datetime import datetime, timedelta
+
+    from app.services.mx_window import CN_TZ
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+
+    now = datetime.now(CN_TZ)
+    scheduler._mx_window_date = now.date()
+    scheduler._mx_windows = [(now + timedelta(hours=1), now + timedelta(hours=2))]
+    scheduler._mx_armed = [True]
+    scheduler._mx_fallback_at = None
+    scheduler._mx_fallback_done = False
+    scheduler._mx_force_close_at = None
+    scheduler._mx_restart_login_pending = True
+    scheduler._mx_token_expired = True
+
+    starts = {"n": 0}
+
+    async def fake_session_start():
+        starts["n"] += 1
+
+    scheduler._mx_session_start = fake_session_start
+
+    asyncio.run(scheduler._mx_window_tick())
+
+    assert starts["n"] == 0
+    assert scheduler._mx_restart_login_pending is False  # 标记照常消费，不重试
+    assert not [r for r in db.list_admin_logs(limit=10) if r["action"] == "mx_auto_login"]
+    scheduler.stop()
+
+
 def test_windows_today_sets_restart_login_state(monkeypatch):
     """工作日 8-22 重启 glue：窗口内重武装当前段；窗口间隙置一次性补登标记。"""
     from datetime import date, datetime, timedelta

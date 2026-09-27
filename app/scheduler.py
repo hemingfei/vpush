@@ -2743,6 +2743,9 @@ class Scheduler:
 
         每个时段只尝试登录一次；失败/放弃后不再自动拉起（避免形成
         周期性重连流量），靠 TOKEN 更换或次日时段恢复。
+        TOKEN 熔断（过期未更换）期间到点的时段不开窗不登录、也不写
+        「系统自动登录」操作日志——熔断跨时段跨天持续，直到管理员更换
+        TOKEN（保存配置）或手动「登录」半开重探解除。
         """
         while not self._stop.is_set():
             try:
@@ -2770,6 +2773,15 @@ class Scheduler:
             if not self._mx_window_open:
                 if not self._mx_armed[idx] or self._mx_manual_attempted_idx == idx:
                     pass  # 重启前已错过该窗口的开窗时刻，或本窗口已手动登录尝试过：不自动续连（管理员可手动「登录」）
+                elif self._mx_token_expired:
+                    # TOKEN 熔断（过期未更换）：到点窗口不开窗、不调登录、不写
+                    # 「系统自动登录」操作日志——死 TOKEN 上的后续启动 100% 失败，
+                    # 每天照常走登录动作只会让管理员误以为仍在尝试。恢复入口不变：
+                    # 更换 TOKEN（保存配置）或手动「登录」半开重探。
+                    logger.info(
+                        "MX 第 %d 段运行时段到点：TOKEN 已熔断（过期），本次不开窗不登录",
+                        idx + 1,
+                    )
                 else:
                     self._mx_window_open = True
                     self._mx_ws_gave_up = False  # 新窗口：复位放弃标记
@@ -2798,7 +2810,10 @@ class Scheduler:
             # 工作日 08:00-22:00 重启且落在窗口间隙：立即补登一次。只补登一次，
             # 会话后续由 4h 滚动兜底/晚间强关/下一窗口开窗收口
             self._mx_restart_login_pending = False
-            if not (self._mx_ws_gave_up or self._mx_session_active()):
+            if not (
+                self._mx_ws_gave_up or self._mx_session_active() or self._mx_token_expired
+            ):
+                # TOKEN 熔断态补登同样只消费标记：不调登录、不写自动登录操作日志
                 await self._mx_session_start()
                 await asyncio.to_thread(
                     self._mx_log_auto_event,
