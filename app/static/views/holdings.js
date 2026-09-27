@@ -26,6 +26,7 @@ export function createHoldingsView(dependencies) {
     // kolTab=四榜页签；kols=聚合响应；kolsLoading；kolsOpen=行展开的大V kol_id 集合
     view: "mine", days: 30, recent: 0, kolTab: "heavy",
     kols: null, kolsLoading: false, kolsOpen: new Set(),
+    kolsAt: 0, // 聚合缓存落位时间：tab 往返复用时判是否需要后台静默刷新
     kolsSort: "desc", // 清仓榜盈亏列排序：desc=亏最多的在前
   };
   try {
@@ -38,10 +39,17 @@ export function createHoldingsView(dependencies) {
   const WINDOW_DAYS = 30;
   const SUG_LIMIT = 20;
 
-  function hdTeardown() {
+  function hdStopLive() {
+    // 停 mine 视图的 SSE/兜底轮询/建议防抖（tab 往返切换时调用，数据保留；
+    // 路由级卸载仍走 hdTeardown 全清），切回由 hdEnsureSSE 幂等重建
     if (_hd.es) { try { _hd.es.close(); } catch (e) {} _hd.es = null; }
     if (_hd.pollTimer) { clearInterval(_hd.pollTimer); _hd.pollTimer = null; }
     if (_hd.sugTimer) { clearTimeout(_hd.sugTimer); _hd.sugTimer = null; }
+    _hd.sseOk = false;
+  }
+
+  function hdTeardown() {
+    hdStopLive();
     Object.assign(_hd, {
       holdings: [], summary: [], items: [], maxId: 0, filter: null,
       expanded: new Set(), sseOk: false,
@@ -52,6 +60,7 @@ export function createHoldingsView(dependencies) {
       postOpen: new Set(), pickedType: null,
       view: "mine", days: 30, kolTab: "heavy", // recent 跨路由保留：不清
       kols: null, kolsLoading: false, kolsOpen: new Set(), kolsSort: "desc",
+      kolsAt: 0,
     });
   }
 
@@ -300,21 +309,24 @@ export function createHoldingsView(dependencies) {
     ["clears", "清仓", "窗口内清仓的票 · 割肉/止盈"],
   ];
 
-  async function hdLoadKols(force) {
-    if (_hd.kols && !force) return;
-    _hd.kolsLoading = true;
-    hdRenderKolRoot();
+  async function hdLoadKols(silent) {
+    // 全部调用方都是显式重拉（tab 切换/换窗口/滑块），无缓存短路分支——
+    // tab 往返的缓存复用在 hdSwitchView 里完成（缓存先上屏，超期才到这里静默刷）
+    _hd.kolsLoading = !silent; // 静默刷新不进 loading 态：旧数据先顶着
+    if (!silent) hdRenderKolRoot();
     try {
       const data = await api(`/api/my/holdings/kol-summary?days=${_hd.days}`);
       if (!routeStillActive(_hd.seq)) return;
       _hd.kols = data;
+      _hd.kolsAt = Date.now();
     } catch (err) {
       if (!routeStillActive(_hd.seq)) return;
-      _hd.kols = null;
+      if (!silent) _hd.kols = null; // 静默失败保留旧数据（已有提示，不闪空态）
       flash(`大V持股加载失败: ${err.message}`, "error");
     } finally {
       _hd.kolsLoading = false;
-      if (routeStillActive(_hd.seq)) hdRenderKolRoot();
+      // 用户已切回我的持股时不重绘（会整页覆盖 mine 视图），数据留着下次切回用
+      if (routeStillActive(_hd.seq) && _hd.view === "kol") hdRenderKolRoot();
     }
   }
 
@@ -322,16 +334,28 @@ export function createHoldingsView(dependencies) {
     if (_hd.view === view) return;
     _hd.view = view;
     if (view === "kol") {
-      hdLoadKols(true); // 进入大V板块：按当前窗口拉聚合（无缓存即拉）
+      hdStopLive(); // 停 mine 的 SSE/轮询（切回重建），板块数据在内存直接复用
+      if (_hd.kols) {
+        hdRenderAll(); // tab 往返复用：缓存即时上屏，不闪加载态
+        // 缓存超 60s（服务端同窗口防抖窗口）：后台静默重拉，回来换新数据
+        if (Date.now() - (_hd.kolsAt || 0) > 60000) hdLoadKols(true);
+      } else {
+        hdLoadKols(); // 首次进入大V板块：按当前窗口拉聚合
+      }
     } else {
-      renderHoldings(_hd.seq);
+      if (_hd.holdings.length || _hd.items.length || _hd.tagItems.length) {
+        hdRenderAll(); // 缓存即时上屏：单标的筛选/流内页签/展开状态全保留
+        hdEnsureSSE(); // 幂等恢复版本监听与兜底轮询，切走期间的变更自动增量补
+      } else {
+        renderHoldings(_hd.seq);
+      }
     }
   }
 
   function hdKolChangeDays(days) {
     if (_hd.days === days) return;
     _hd.days = days;
-    hdLoadKols(true);
+    hdLoadKols(); // 用户显式切窗口：走 loading 态全量重拉（非静默）
   }
 
   function hdKolRecentInput(value) {
@@ -376,9 +400,12 @@ export function createHoldingsView(dependencies) {
     if (!_hd.recent) return true;
     const day = String(lastAt || "").slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return true; // 无时间锚点不筛掉
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - _hd.recent);
-    return new Date(`${day}T00:00:00`) >= cutoff;
+    // 北京时区口径（与后端交易日对齐，同 mx-kol-holdings 的 mxcRecentCutoff）：
+    // 按浏览器本地时区算，海外机器的筛选边界会差一天
+    const bj = new Date(Date.now() + (480 + new Date().getTimezoneOffset()) * 60000);
+    bj.setDate(bj.getDate() - _hd.recent);
+    const p = (x) => String(x).padStart(2, "0");
+    return day >= `${bj.getFullYear()}-${p(bj.getMonth() + 1)}-${p(bj.getDate())}`; // YYYY-MM-DD 字典序即时间序
   }
 
   function hdKolAva(k) {

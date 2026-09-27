@@ -45,6 +45,19 @@ TAG_BUY_ACTIONS = ("建仓", "加仓", "低吸")
 TAG_PAIR_STOCK_MAX = 3
 
 
+def _manual_mark_direction(action: str) -> str:
+    """人工标注操作词 → 回放方向：买入词看多、清仓/减仓类看空。
+
+    ACTION_POINTS 的键里除 TAG_BUY_ACTIONS（正分）外全是卖出语义
+    （减仓/高抛负分、清仓 None）；做T/观察等中性词返回空串——回放按
+    direction or prev_dir 沿用既有方向，不把中性操作冒充成看空信号。"""
+    if action in TAG_BUY_ACTIONS:
+        return "bull"
+    if action in ACTION_POINTS:
+        return "bear"
+    return ""
+
+
 def _days_ago(day: str, n: int) -> bool:
     try:
         d = datetime.strptime(day, "%Y-%m-%d").date()
@@ -56,6 +69,8 @@ def _days_ago(day: str, n: int) -> bool:
 # 词表进程内缓存：三份词表都在 settings 单键里、变更频率极低，而预估持仓每次
 # 请求都要全量构建（操作词/全市场个股名/别名映射）。以三键原文为版本键——
 # 内容不变直接命中，管理员改词表即刻生效。
+# 无锁设计：多线程并发 miss 会重复构建，但构建是纯读、结果幂等，最坏代价是
+# 多查一次库，数据不会错；加锁反而让热路径排队。
 _vocab_cache: dict = {"key": None, "data": (set(), set(), {})}
 
 
@@ -203,16 +218,22 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
     # 同标的同日的标签事件仍可能被「当日人工事件」压制：人工清仓后的当日建仓
     # 标签多为同一段行情的重复表述，且窗口日粒度下两条都会留存——让最新判断
     # （人工）优先。跨日标签不受影响（dedup 本就按日区分）
+    # 标注帖批量取一次（两个消费循环共用）：逐条 get_post 在汇总重建时按大V数放大
+    mark_post_ids = {
+        pid for pid, eff_list in marks.items()
+        if any(mk["action"] != MARK_NONE for mk in eff_list)
+    }
+    mark_posts = db.get_posts_brief_by_ids(mark_post_ids) if mark_post_ids else {}
     manual_days: dict[str, set] = {}
     for pid, eff_list in marks.items():
         for mk in eff_list:
             if mk["action"] == MARK_NONE:
                 continue
-            post = db.get_post(pid)
+            post = mark_posts.get(int(pid))
             if not post:
                 continue
             manual_days.setdefault(mk["target_name"], set()).add(
-                str(post.get("published_at") or "")[:10])
+                str(post.get("time") or "")[:10])
     events = [e for e in events if not (
         e["source"] == "tag"
         and e["target_name"] in manual_days
@@ -226,14 +247,16 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
         for mk in eff_list:
             if mk["action"] == MARK_NONE:
                 continue
-            post = db.get_post(pid)
+            post = mark_posts.get(int(pid))
             if not post:
                 continue
-            published = str(post.get("published_at") or "")
+            published = str(post.get("time") or "")
             events.append({
                 "trading_day": published[:10], "occurred_at": published, "snapshot_at": "",
                 "target_type": "stock", "target_name": mk["target_name"],
-                "direction": "bull" if mk["action"] in TAG_BUY_ACTIONS else "bear",
+                # 方向按词性：买入词看多、清仓/减仓类看空；做T/观察等中性词
+                # 置空（回放按 direction or prev_dir 沿用，不冒充看空信号）
+                "direction": _manual_mark_direction(mk["action"]),
                 "action": mk["action"], "source": "manual",
                 "summary": str(post.get("content") or "").strip()[:160],
                 "evidence_post_ids": [pid],

@@ -2,7 +2,9 @@
 // ① 独立页 /mx-kol/{id}；② /mx-views 大V头像旁「持仓」按钮弹出的右侧抽屉。
 // 顶部当前持仓汇总（权重条），下方操作时间线（建仓/加仓/减仓/清仓/翻空减仓/持仓表态）。
 // 视觉与持股研判页同一套 .hd- token（holdings.css），样式全部 .mxc- 前缀；
-// 抽屉外壳自带 .hd-root 变量作用域，挂进 #mxv-drawer-slot（与智囊团抽屉同位，同一时刻只留一个）
+// 抽屉外壳自带 .hd-root 变量作用域，挂 document.body（fixed 定位不依赖 DOM 位置）：
+// 页面级重绘（/holdings 四榜页签、/mx-views 换快照）打不掉开着的抽屉，
+// 路由切换由 router() → mxvTeardown 统一摘除，同一时刻只留一个
 export function createMxKolHoldingsView(dependencies) {
   const {
     $, state, api, escapeHtml, setPageTitle, go, routeStillActive, emptyState, flash,
@@ -20,6 +22,8 @@ export function createMxKolHoldingsView(dependencies) {
   const MXC_RECENT_KEY = "mxc_recent_days";
   // 持仓排序：weight=按仓位权重（后端默认序），time=按最近观点时间最新在前
   const MXC_SORT_KEY = "mxc_sort";
+  // 时间线筛选视图（全部/建仓/加仓/减仓/清仓）：与 recent/sort 同口径跨宿主记忆
+  const MXC_VIEW_KEY = "mxc_view";
 
   // 操作事件 → 徽章文案与色彩语义；文案不带买卖前缀（方向由颜色承担：
   // A股口径红=买、绿=卖），与筛选按钮 MXC_VIEWS 的短文案同口径
@@ -33,9 +37,10 @@ export function createMxKolHoldingsView(dependencies) {
   };
 
   function mxcTeardown() {
-    Object.assign(_mxc, { data: null, pnl: null, view: "all", drawerEl: null, drawerBody: null, actsOpen: {} });
+    Object.assign(_mxc, { data: null, pnl: null, drawerEl: null, drawerBody: null, actsOpen: {} });
     // closedExpanded 不重置：换大V/换窗口回来时保持用户上次的展开选择
-    // recent（最近观点天数）跨路由保留：回来时还是用户上次调的口径；
+    // recent（最近观点天数）/view（时间线筛选）/sort（排序）跨路由保留：
+    // 回来时还是用户上次调的口径；
     // days 不保留——每个大V/宿主入口都按默认 30 天开（按钮 title 的承诺）
   }
 
@@ -96,6 +101,8 @@ export function createMxKolHoldingsView(dependencies) {
       }
       const s = localStorage.getItem(MXC_SORT_KEY);
       if (s === "weight" || s === "time") _mxc.sort = s;
+      const v = localStorage.getItem(MXC_VIEW_KEY);
+      if (v && MXC_VIEWS[v]) _mxc.view = v;
     } catch (e) { /* 存储不可用：用默认值 */ }
   }
 
@@ -140,8 +147,6 @@ export function createMxKolHoldingsView(dependencies) {
     if (!mxHoldingsInScope(kolId)) return; // 范围外无持仓可看：按钮本不展示，残留调用直接忽略
     if (typeof closeViewsDrawer === "function") closeViewsDrawer();
     mxcTeardown();
-    const slot = document.getElementById("mxv-drawer-slot") || $("#main");
-    if (!slot) return;
     _mxc.kolId = kolId;
     _mxc.days = 30; // 每个大V的抽屉入口都承诺近 30 天：不带其他大V/页面的残留口径
     mxcLoadPrefs();
@@ -160,8 +165,8 @@ export function createMxKolHoldingsView(dependencies) {
     const aside = shell.querySelector(".mxc-drawer");
     _mxc.drawerEl = aside;
     _mxc.drawerBody = aside.querySelector(".mxc-drawer-body");
-    slot.appendChild(mask);
-    slot.appendChild(aside);
+    document.body.appendChild(mask);
+    document.body.appendChild(aside);
     mxcLoad(kolId, ++_mxc.token, null);
   }
 
@@ -174,6 +179,7 @@ export function createMxKolHoldingsView(dependencies) {
   }
 
   async function mxcChangeDays(days) {
+    if (_mxc.days === days) return; // 同值守卫：点已激活的窗口不重发两个请求（对齐 hdKolChangeDays）
     _mxc.days = days;
     const seq = _mxc.drawerEl ? null : _mxc.seq;
     const feed = document.getElementById("mxc-timeline");
@@ -443,10 +449,10 @@ export function createMxKolHoldingsView(dependencies) {
       return;
     }
     const pnlByName = mxcPnlByStock();
-    const stockRows = holdings.map((h) => {
+    const stockRows = holdings.map((h, i) => {
       const p = pnlByName[h.target_name];
       return `
-      <div class="mxc-holding">
+      <div class="mxc-holding${i === holdings.length - 1 ? " last" : ""}">
         <span class="mxc-h-name">${escapeHtml(h.target_name)}</span>
         <span class="mxc-h-dir ${h.direction === "bull" ? "bull" : h.direction === "bear" ? "bear" : ""}">${h.direction === "bull" ? "看多" : h.direction === "bear" ? "看空" : "中性"}</span>
         ${mxcWeightBar(h.weight)}
@@ -558,6 +564,7 @@ export function createMxKolHoldingsView(dependencies) {
 
   function mxcSetView(v) {
     _mxc.view = MXC_VIEWS[v] ? v : "all";
+    try { localStorage.setItem(MXC_VIEW_KEY, _mxc.view); } catch (e) { /* 本页生效即可 */ }
     mxcRenderTimeline();
   }
 

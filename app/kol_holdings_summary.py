@@ -28,7 +28,7 @@ CN_TZ = timezone(timedelta(hours=8))
 WINDOW_CHOICES = (30, 60, 90)
 CACHE_TTL = 60.0  # 秒：防抖窗口，非数据新鲜度承诺
 
-_cache: dict = {"data": {}, "lock": threading.Lock()}
+_cache: dict = {"data": {}, "build_locks": {}, "lock": threading.Lock()}
 
 
 def _kol_brief(kol: dict) -> dict:
@@ -125,7 +125,9 @@ def build_summary(db, kol_ids: list[int], days: int = 30) -> dict:
         # kind=hold（无先前头寸可加），但那是一笔真实买入（mx_kol_pnl 同样按
         # 此修正）；操作词口径下 opinion/tag/manual 三源一致。
         # 大V→标的去重（一个大V多笔同票买入算一人一票）。
-        pnl_map = _pnl_by_name(db, kol_id, days)
+        # 盈亏缓存惰性加载：整份 payload 的 JSON 解析不便宜，多数大V窗口内
+        # 没有清仓事件，遇到首个 clear 才取
+        pnl_map: dict[str, dict] | None = None
         seen_attack: set[str] = set()
         seen_clear: set[str] = set()
         for ev in out.get("timeline") or []:
@@ -140,6 +142,8 @@ def build_summary(db, kol_ids: list[int], days: int = 30) -> dict:
                     attack_last[name] = at
             elif ev.get("kind") == "clear" and name not in seen_clear:
                 seen_clear.add(name)
+                if pnl_map is None:
+                    pnl_map = _pnl_by_name(db, kol_id, days)
                 pct, signal = _clear_signal(pnl_map.get(name))
                 clears.setdefault(name, []).append({
                     "kol_id": brief["kol_id"], "name": brief["name"],
@@ -180,7 +184,19 @@ def cached_summary(db, kol_ids_provider, days: int = 30) -> dict:
         hit = _cache["data"].get(key)
         if hit and now - hit["at"] <= CACHE_TTL:
             return hit["data"]
-    data = build_summary(db, kol_ids_provider(), days=days)
-    with _cache["lock"]:
-        _cache["data"][key] = {"at": now, "data": data}
+        # single-flight：TTL 过期瞬间 N 个并发请求只让第一个重建全量回放，
+        # 其余等结果（build_summary 是 109 大V × 全窗口回放，集体重跑会打满线程池）
+        build_lock = _cache["build_locks"].get(key)
+        if build_lock is None:
+            build_lock = threading.Lock()
+            _cache["build_locks"][key] = build_lock
+    with build_lock:
+        # 拿到锁后重读：等锁期间排在前面的线程可能已构建完成
+        with _cache["lock"]:
+            hit = _cache["data"].get(key)
+            if hit and time.monotonic() - hit["at"] <= CACHE_TTL:
+                return hit["data"]
+        data = build_summary(db, kol_ids_provider(), days=days)
+        with _cache["lock"]:
+            _cache["data"][key] = {"at": time.monotonic(), "data": data}
     return data

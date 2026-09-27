@@ -1360,6 +1360,9 @@ CREATE TABLE IF NOT EXISTS mx_opinions (
 );
 CREATE INDEX IF NOT EXISTS idx_mx_opinions_day_target ON mx_opinions(trading_day, target_type, target_name);
 CREATE INDEX IF NOT EXISTS idx_mx_opinions_day_kol ON mx_opinions(trading_day, kol_id);
+-- 单大V回放（预估持仓/盈亏逐票重放）按 kol_id 等值 + trading_day 范围取数：
+-- 首列 trading_day 的两个索引覆盖不了（范围条件卡死第二列），汇总重建时对每个大V全扫
+CREATE INDEX IF NOT EXISTS idx_mx_opinions_kol_day ON mx_opinions(kol_id, trading_day);
 
 CREATE TABLE IF NOT EXISTS mx_view_batches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -6659,8 +6662,9 @@ class DB:
             seen.add(key)
             uniq.append(key)
         out: dict[tuple[str, str], dict] = {}
-        for i in range(0, len(uniq), 900):
-            chunk = uniq[i:i + 900]
+        # 每对 2 个绑定参数：450 对 = 900 参数，老 SQLite（<3.32，默认上限 999）也放得下
+        for i in range(0, len(uniq), 450):
+            chunk = uniq[i:i + 450]
             rows = self._rows(
                 "SELECT code, at, price, actual_at, fetched_ts FROM kol_price_cache "
                 f"WHERE (code, at) IN ({','.join('(?,?)' for _ in chunk)})",
@@ -6722,6 +6726,35 @@ class DB:
             "payload = excluded.payload, computed_at = excluded.computed_at",
             (int(kol_id), int(window_days), json.dumps(payload, ensure_ascii=False), now_text),
         )
+
+    def delete_kol_pnl_cache(self, kol_id: int, window_days: int | None = None) -> None:
+        """删除盈亏缓存行：指定 window_days 只删该窗口，不指定清该大V全部窗口。
+
+        供小时重算在 build 返回 None（窗口内已无有效信号）时清理旧行——
+        留着会让端点无限期回放最后一个 payload，时间越久越误导。"""
+        if window_days is None:
+            self._execute("DELETE FROM kol_pnl_cache WHERE kol_id = ?", (int(kol_id),))
+        else:
+            self._execute(
+                "DELETE FROM kol_pnl_cache WHERE kol_id = ? AND window_days = ?",
+                (int(kol_id), int(window_days)),
+            )
+
+    def delete_settings_prefix(self, prefix: str, below: str | None = None) -> int:
+        """按前缀删除 settings 键，返回删除行数。
+
+        below 给定时只删字典序小于 below 的键（时间戳形键名 YYYYMMDD_HH
+        字典序即时间序，供调用方做滚动清理）。值全部参数化，无字符串拼接。"""
+        if below is not None:
+            sql = "DELETE FROM settings WHERE key LIKE ? AND key < ?"
+            params = (prefix + "%", below)
+        else:
+            sql = "DELETE FROM settings WHERE key LIKE ?"
+            params = (prefix + "%",)
+        with self._lock:
+            cur = self._conn.execute(sql, params)
+            self._conn.commit()
+            return cur.rowcount
 
     def set_settings_atomic(self, values: dict[str, str]) -> None:
         if not values:
@@ -7115,6 +7148,23 @@ class DB:
         self._execute("DELETE FROM mx_view_batches WHERE trading_day < ?", (cutoff,))
         return int(rows[0]["n"])
 
+    def purge_old_mx_opinions(self, keep_days: int = 120) -> int:
+        """按天保留期清理 mx_opinions 与 mx_view_snapshots，返回删除行数（两表合计）。
+
+        默认 120 天 = 预估持仓/盈亏最大回放窗口 90 天 + 30 天余量；批次表
+        另有 30 天保留（purge_old_mx_view_batches），更早的快照本就没有
+        可用回看入口（feed 依赖批次 meta 拼 seq）。两表不清理会随研判每天
+        无限增长。cutoff 口径同 purge_old_mx_view_batches（北京日期）。"""
+        cutoff = (datetime.now(CN_TZ) - timedelta(days=int(keep_days))).strftime("%Y-%m-%d")
+        removed = 0
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM mx_opinions WHERE trading_day < ?", (cutoff,))
+            removed += cur.rowcount
+            cur = self._conn.execute("DELETE FROM mx_view_snapshots WHERE trading_day < ?", (cutoff,))
+            removed += cur.rowcount
+            self._conn.commit()
+        return removed
+
     def abort_stale_mx_view_batches(self) -> int:
         """启动清理：进程中断（重启/OOM）遗留的 running 批收尾为 aborted，
         状态页不再永久「运行中」、batches_today 不虚高。返回收尾行数。"""
@@ -7176,7 +7226,7 @@ class DB:
                 self._conn.rollback()
                 raise
 
-    def list_mx_opinions(self, trading_day, up_to_at=None) -> list[dict]:
+    def list_mx_opinions(self, trading_day, up_to_at=None, after_id: int = 0) -> list[dict]:
         sql = (
             "SELECT o.*, k.name AS kol_name, k.avatar_url, COALESCE(k.priority, 0) AS kol_priority "
             "FROM mx_opinions o JOIN kols k ON k.id = o.kol_id WHERE o.trading_day = ?"
@@ -7185,6 +7235,9 @@ class DB:
         if up_to_at:
             sql += " AND o.snapshot_at <= ?"
             params.append(up_to_at)
+        if after_id:
+            sql += " AND o.id > ?"
+            params.append(int(after_id))
         sql += " ORDER BY o.snapshot_at ASC, o.occurred_at ASC, o.id ASC"
         return self._rows(sql, tuple(params))
 
@@ -7385,9 +7438,11 @@ class DB:
         unique_ids = list(dict.fromkeys(post_ids))  # 观点间证据常重复，IN 参数去重
         if unique_ids:
             marks = ",".join("?" for _ in unique_ids)
+            # 证据原帖与正常列表同口径：被拦截/隐藏的帖不下发内容（缺行即从时间线剔除）
             for p in self._rows(
                 f"SELECT p.id, p.content, p.published_at, k.name AS author FROM posts p "
-                f"JOIN kols k ON k.id = p.kol_id WHERE p.id IN ({marks})",
+                f"JOIN kols k ON k.id = p.kol_id WHERE p.id IN ({marks}) "
+                f"AND COALESCE(p.blocked,0)=0 AND COALESCE(p.hidden,0)=0",
                 tuple(unique_ids),
             ):
                 evidence.append({
@@ -7431,9 +7486,11 @@ class DB:
         evidence = []
         if post_ids:
             marks = ",".join("?" for _ in set(post_ids))
+            # 证据原帖与正常列表同口径：被拦截/隐藏的帖不下发内容（缺行即从时间线剔除）
             for p in self._rows(
                 f"SELECT p.id, p.content, p.published_at, k.name AS author FROM posts p "
-                f"JOIN kols k ON k.id = p.kol_id WHERE p.id IN ({marks})",
+                f"JOIN kols k ON k.id = p.kol_id WHERE p.id IN ({marks}) "
+                f"AND COALESCE(p.blocked,0)=0 AND COALESCE(p.hidden,0)=0",
                 tuple(set(post_ids)),
             ):
                 evidence.append({
@@ -8078,10 +8135,17 @@ class DB:
         )
 
     def list_mx_action_marks_recent(self, limit: int = 100) -> list[dict]:
-        """最近标注列表（管理端监督视角），按更新时间倒序。"""
+        """最近标注列表（管理端监督视角），按更新时间倒序。
+
+        时间戳存储是 SQLite datetime('now') 的 UTC，展示按北京时间输出
+        （datetime 列名加 _cn 后缀避免与原始列混淆），与其他模块的 CN_TZ
+        展示口径一致；排序仍在 UTC 列上，语义不变。"""
         return self._rows(
             "SELECT m.id, m.post_id, m.user_id, m.target_name, m.action, "
-            "m.created_at, m.updated_at, u.username, u.is_admin, "
+            "m.created_at AS created_at_utc, "
+            "datetime(m.created_at, '+8 hours') AS created_at_cn, "
+            "datetime(m.updated_at, '+8 hours') AS updated_at_cn, "
+            "u.username, u.is_admin, "
             "p.kol_id, p.published_at, p.content, k.name AS kol_name "
             "FROM mx_action_marks m "
             "JOIN users u ON u.id = m.user_id "

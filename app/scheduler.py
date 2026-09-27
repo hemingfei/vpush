@@ -4292,10 +4292,25 @@ class Scheduler:
                     break
                 if result is not None:
                     self.db.upsert_kol_pnl_cache(kol_id, days, result)
+                else:
+                    # 窗口内已无有效信号（大V停更/观点滚出窗口）：清掉旧缓存行，
+                    # 端点读不到缓存走现算兜底返回空结构，不再无限期回放过期 payload
+                    self.db.delete_kol_pnl_cache(kol_id, days)
             if ok:
                 done += 1
+        if kol_ids and not done:
+            # 整轮全失败（如行情源抖动）：不写小时键，下个 30s tick 重试本小时
+            logger.warning("盈亏小时缓存重算全部失败（%d 个大V），本小时稍后重试", len(kol_ids))
+            return 0
         hour_key = f"kol_pnl_refresh_{now.strftime('%Y%m%d_%H')}"
         self.db.set_setting(hour_key, datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"))
+        # 滚动清理 7 天前的小时键（键名 YYYYMMDD_HH 字典序即时间序），防 settings 无界增长
+        removed = self.db.delete_settings_prefix(
+            "kol_pnl_refresh_",
+            below=(now - timedelta(days=7)).strftime("kol_pnl_refresh_%Y%m%d_%H"),
+        )
+        if removed:
+            logger.debug("清理过期盈亏小时键 %d 个", removed)
         if done:
             logger.info("盈亏小时缓存重算：%d/%d 个大V × %d 窗口",
                         done, len(kol_ids), len(self.KOL_PNL_WINDOWS))

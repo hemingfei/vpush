@@ -7153,8 +7153,8 @@ def create_api_router(
                 "payload": snap["payload"]}
 
     @router.get("/mx-views/feed")
-    async def mx_views_feed(day: str, after_id: int = 0,
-                            current_user: dict = Depends(get_current_user)):
+    def mx_views_feed(day: str, after_id: int = 0,
+                      current_user: dict = Depends(get_current_user)):
         """全天实时观点流：直读当日 mx_opinions 全量（观点流唯一数据源，快照
         payload 不再冗余存 new_opinions）。最新批次在前、批内按发生时间倒序
         （最新在上），每条观点带回所属批次 snapshot_at；seq/kind 由轻量快照元数据拼回。
@@ -7162,14 +7162,13 @@ def create_api_router(
         after_id 可选增量拉取：只返回 id > after_id 的观点，响应带 max_id（当日
         观点当前最大 id，客户端存下它作为下次的 after_id）；不传时行为不变（全量，
         响应也不带 max_id），旧前端零改动。
+        同步 def 走线程池：前端 30s 轮询 + SSE 触发，async def 里同步查库会卡事件循环。
         """
         meta = {str(r["snapshot_at"]): r for r in db.list_mx_view_snapshot_meta(day)}
         grouped: dict = {}
-        all_opinions = db.list_mx_opinions(day)
-        max_id = None
-        if after_id > 0:
-            all_opinions = [o for o in all_opinions if int(o["id"]) > after_id]
-            max_id = db.max_mx_opinion_id(day)
+        # after_id 下推进 SQL：增量客户端不为过滤付全量加载的成本
+        all_opinions = db.list_mx_opinions(day, after_id=after_id)
+        max_id = db.max_mx_opinion_id(day) if after_id > 0 else None
         for o in all_opinions:
             grouped.setdefault(str(o["snapshot_at"]), []).append(o)
         batches = []
@@ -7194,8 +7193,8 @@ def create_api_router(
         return result
 
     @router.get("/mx-views/target")
-    async def mx_views_target(type: str, name: str, day: str, at: str = "",
-                              current_user: dict = Depends(get_current_user)):
+    def mx_views_target(type: str, name: str, day: str, at: str = "",
+                        current_user: dict = Depends(get_current_user)):
         if type not in ("topic", "stock"):
             raise HTTPException(status_code=422, detail="type 须为 topic|stock")
         detail = db.get_mx_view_target_detail(day, type, name, up_to_at=at or None)
@@ -7204,20 +7203,22 @@ def create_api_router(
         return detail
 
     @router.get("/mx-views/kol/{kol_id}")
-    async def mx_views_kol(kol_id: int, day: str, at: str = "",
-                           current_user: dict = Depends(get_current_user)):
+    def mx_views_kol(kol_id: int, day: str, at: str = "",
+                     current_user: dict = Depends(get_current_user)):
         detail = db.get_mx_view_kol_detail(kol_id, day, up_to_at=at or None)
         if not detail:
             raise HTTPException(status_code=404, detail="该大V当日暂无观点")
         return detail
 
     @router.get("/kols/{kol_id}/mx-holdings")
-    async def kol_mx_holdings(kol_id: int, days: int = 30,
-                              user: dict = Depends(get_current_user)):
+    def kol_mx_holdings(kol_id: int, days: int = 30,
+                        user: dict = Depends(get_current_user)):
         """MX 大V预估持仓：回放其近 N 天多空观点推演的当前仓位（纯计算不落库）。
 
         依据是观点研判产出的结构化观点（方向 + 操作词），非实时行情；
         days 限 7-90，越界钳到边界。
+        同步 def 走线程池：build_kol_holdings 是 90 天窗口的 DB+CPU 回放，
+        不能放 async def 里阻塞事件循环（同 mx-pnl 端点注释）。
         """
         from .mx_kol_holdings import build_kol_holdings
 
@@ -7274,7 +7275,14 @@ def create_api_router(
         if days in db.PNL_CACHE_WINDOWS:
             cached = db.get_kol_pnl_cache(kol_id, days)
             if cached is not None:
-                return cached["payload"]
+                payload = cached["payload"]
+                # kol 名/头像是缓存时刻的快照：改名/换头像后用现值覆盖，
+                # 不等下个整点重算才更新
+                kol_info = payload.get("kol")
+                if isinstance(kol_info, dict):
+                    kol_info["name"] = kol.get("name") or ""
+                    kol_info["avatar"] = kol.get("avatar_url") or ""
+                return payload
         result = build_kol_pnl(db, kol_id, days=days)
         if not result:
             # 窗口内无任何信号：不涉及行情，available 如实为 true；不缓存
@@ -8197,7 +8205,9 @@ def create_api_router(
 
         worker = _threading.Thread(target=job, name="mx-view-manual-run", daemon=True)
         worker.start()
-        worker.join(timeout=660)  # LLM 链路自带超时，正常必返；兜底防端点永久挂起
+        # join 也得离开事件循环：LLM 链路慢时 join 可真实等数分钟，
+        # 同步 join 会卡死整个事件循环（SSE 等长连接全部停摆）
+        await asyncio.to_thread(worker.join, 660)  # LLM 链路自带超时，正常必返；兜底防端点永久挂起
         if outcome.get("busy"):
             raise HTTPException(status_code=409, detail="已有批次在跑，请稍后再试")
         if worker.is_alive():
@@ -8414,13 +8424,27 @@ def create_api_router(
 
     # ---------- 大V消息操作标注（人工修正预估持仓/盈亏的回放信号） ----------
 
+    def _mx_mark_post_or_404(post_id: int, user: dict) -> dict:
+        """操作标注三端点（GET/POST/DELETE）共用的可见性前置检查。
+
+        被拦截/隐藏的帖对非管理员 404——与正常列表同口径（标注回放本身排除
+        blocked/hidden，对不可见帖的标注读写没有业务意义）；管理员全可见与
+        全站口径一致。非管理员再叠加 KOL 可见性（停用/隐藏大V）。"""
+        post = db.get_post(post_id)
+        if post is None:
+            raise HTTPException(status_code=404, detail="消息不存在")
+        if not user.get("is_admin"):
+            if post.get("blocked") or post.get("hidden"):
+                raise HTTPException(status_code=404, detail="消息不存在")
+            if not _plaza_kol_visible(user, db.get_kol(post.get("kol_id") or 0)):
+                raise HTTPException(status_code=404, detail="消息不存在")
+        return post
+
     def _mx_action_mark_payload(post_id: int, viewer: dict) -> dict:
         """单帖标注弹窗数据：帖摘要 + 自动标签 + 人工标注名单 + 生效状态 + 词表。"""
         from .mx_action_marks import MARK_NONE, can_mark, get_mark_config, marks_summary_for_posts
 
-        post = db.get_post(post_id)
-        if post is None:
-            raise HTTPException(status_code=404, detail="消息不存在")
+        post = _mx_mark_post_or_404(post_id, viewer)
         if str(post.get("platform") or "") != "mx":
             raise HTTPException(status_code=400, detail="仅支持 MX 平台消息")
         cfg = get_mark_config(db)
@@ -8434,12 +8458,12 @@ def create_api_router(
             except ValueError:
                 tags = []
         vocab = db.get_action_tag_vocabulary()
+        mark_kol = db.get_kol(post.get("kol_id") or 0)
         return {
             "post": {
                 "id": int(post_id),
                 "kol_id": post.get("kol_id") or 0,
-                "kol_name": db.get_kol(post.get("kol_id") or 0).get("name", "")
-                if db.get_kol(post.get("kol_id") or 0) else "",
+                "kol_name": (mark_kol or {}).get("name", ""),
                 "published_at": post.get("published_at") or "",
                 "excerpt": str(post.get("content") or "").strip()[:160],
                 "stock_tags": [str(t) for t in tags if str(t).strip()
@@ -8452,7 +8476,9 @@ def create_api_router(
             "my_marks": s["my_marks"],
             "can_mark": can_mark(viewer, cfg),
             "is_admin": bool(viewer.get("is_admin")),
-            "config": {"agree_n": cfg["agree_n"], "usernames": cfg["usernames"]},
+            # 授权白名单用户名只有管理员（配置页）需要；普通用户不下发
+            "config": {"agree_n": cfg["agree_n"],
+                       "usernames": cfg["usernames"] if viewer.get("is_admin") else []},
             "actions": [str(t) for t in vocab] + [MARK_NONE],
         }
 
@@ -8479,9 +8505,7 @@ def create_api_router(
         )
         from .mx_kol_holdings import _load_tag_vocab
 
-        post = db.get_post(post_id)
-        if post is None:
-            raise HTTPException(status_code=404, detail="消息不存在")
+        post = _mx_mark_post_or_404(post_id, user)
         if str(post.get("platform") or "") != "mx":
             raise HTTPException(status_code=400, detail="仅支持 MX 平台消息")
         cfg = get_mark_config(db)
@@ -8522,8 +8546,13 @@ def create_api_router(
     ):
         """撤销操作标注：默认撤自己的（带 target_name 只撤该标的，否则全撤）；
         管理员可带 user_id 撤他人（审计）。"""
-        if not db.get_post(post_id):
-            raise HTTPException(status_code=404, detail="消息不存在")
+        from .mx_action_marks import can_mark, get_mark_config
+
+        post = _mx_mark_post_or_404(post_id, user)
+        if str(post.get("platform") or "") != "mx":
+            raise HTTPException(status_code=400, detail="仅支持 MX 平台消息")
+        if not can_mark(user, get_mark_config(db)):
+            raise HTTPException(status_code=403, detail="没有操作标注权限")
         target_user = int(user_id) if (user_id and user.get("is_admin")) else int(user["id"])
         removed = db.delete_mx_action_mark(post_id, target_user, target_name)
         if not removed:
@@ -8572,6 +8601,11 @@ def create_api_router(
 
         cfg = get_mark_config(db)
         rows = db.list_mx_action_marks_recent(limit=limit)
+        for r in rows:
+            # 库内时间戳是 UTC（SQLite datetime('now')），展示按北京时间输出：
+            # DB 层出 *_cn 列，这里映射回原字段名，前端 fmtDbTime 零改动
+            r["updated_at"] = r.pop("updated_at_cn", "")
+            r["created_at"] = r.pop("created_at_cn", "")
         effective = resolve_effective_marks(rows, cfg)
         for r in rows:
             eff_rows = [e for e in effective.get(int(r["post_id"]), [])

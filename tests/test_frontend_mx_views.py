@@ -639,7 +639,9 @@ def test_mx_kol_holdings_drawer_entry_and_shell():
     for fn in ("mxcOpenDrawer", "mxcCloseDrawer"):
         assert f"function {fn}(" in mxc, fn
     open_fn = _fn_body("mxcOpenDrawer", mxc)
-    assert "mxv-drawer-slot" in open_fn and "closeViewsDrawer" in open_fn  # 与智囊团抽屉互斥
+    # 抽屉挂 document.body（页面级重绘打不掉）；与智囊团抽屉互斥仍走 closeViewsDrawer
+    assert "document.body.appendChild(mask)" in open_fn and "closeViewsDrawer" in open_fn
+    assert "mxv-drawer-slot" not in open_fn  # 旧宿主已弃：不再是 #main 兜底的可清丢失点
     assert "mxc-drawer-mask" in open_fn and 'class="mxc-drawer hd-root"' in open_fn
     assert "go('/mx-kol/" in open_fn  # 外壳「完整页」按钮
     inner = _fn_body("mxcInnerHtml", mxc)

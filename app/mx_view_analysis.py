@@ -764,8 +764,6 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
                 db.finish_mx_view_batch(batch_id, "done", 0)
                 return {"ran": False, "opinions": 0, "message_count": 0}
             db.replace_mx_opinions(batch_id, valid)
-            if advance_cursor:
-                db.set_mx_view_cursor(max(int(p["id"]) for p in posts))
             if new_topic_names:
                 add_topic_candidates(db, sorted(new_topic_names))
             if mx_view_tagging.get_view_tagging_enabled(db):
@@ -790,6 +788,11 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
                                                 events, trajectories, summary_prompt)
             seq = len(earlier) + 1
             db.upsert_mx_view_snapshot(day, snapshot_at, seq, kind, payload, batch_id)
+            # 游标推进必须在快照落库之后：中间的聚合/LLM 总结/落库任一步失败
+            # 重试时消息仍在窗口内可重研；先推进会留下孤儿观点+永久缺快照，
+            # 且该时刻观点被 feed 的无批次过滤永久跳过
+            if advance_cursor:
+                db.set_mx_view_cursor(max(int(p["id"]) for p in posts))
             db.finish_mx_view_batch(batch_id, "done", len(posts))
             if kind == "live":
                 bump_view_version(db)
@@ -858,11 +861,13 @@ def _run_pending_live_batch(db, llm_config=None):
 
 # 批次表保留期（天）：对齐回填窗口上限，更早的批次行滚动清理
 MX_VIEW_BATCH_RETENTION_DAYS = 30
+# 观点/快照保留期（天）：覆盖最大回放窗口 90 天 + 30 天余量，更早的滚动清理
+MX_OPINIONS_RETENTION_DAYS = 120
 _last_purge_date = {"value": ""}
 
 
 def _purge_old_batches_daily(db) -> None:
-    """调度 tick 顺带清理过期批次行，每天至多执行一次（幂等，竞态最坏重复删 0 行）。"""
+    """调度 tick 顺带清理过期数据，每天至多执行一次（幂等，竞态最坏重复删 0 行）。"""
     today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
     if _last_purge_date["value"] == today:
         return
@@ -874,6 +879,13 @@ def _purge_old_batches_daily(db) -> None:
                         MX_VIEW_BATCH_RETENTION_DAYS)
     except Exception:  # noqa: BLE001 - 清理失败不影响主流程
         logger.exception("mx_view_batches 保留期清理失败")
+    try:
+        removed = db.purge_old_mx_opinions(MX_OPINIONS_RETENTION_DAYS)
+        if removed:
+            logger.info("mx_opinions/mx_view_snapshots 清理 %d 行 %d 天前数据", removed,
+                        MX_OPINIONS_RETENTION_DAYS)
+    except Exception:  # noqa: BLE001 - 清理失败不影响主流程
+        logger.exception("mx_opinions 保留期清理失败")
 
 
 def run_due_view_batch(db, llm_config=None):

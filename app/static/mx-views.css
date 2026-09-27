@@ -145,7 +145,17 @@
 /* 点击截断的操作列：换行展开全部，再点收回 */
 .mxv-row .mxv-actions.open{white-space:normal;word-break:break-all;}
 .mxv-latest-time{font-size:11px;color:var(--mxv-faint);width:38px;text-align:right;}
-.mxv-feed,.mxv-kols{background:var(--mxv-panel);border:1px solid var(--mxv-line);border-radius:10px;
+/* 窄屏明细行压缩档：定宽列合计约 360px 会横向溢出小屏视口，统一收窄 */
+@media (max-width:760px){
+  .mxv-row .rank{width:16px;}
+  .mxv-row .name{width:64px;}
+  .mxv-row .mxv-actions{width:64px;}
+  .mxv-net{width:64px;}
+  .mxv-momo{width:22px;}
+  .mxv-latest-time{width:32px;}
+}
+/* 观点流/大V区容器（feed 是 id 容器，无 class="mxv-feed" 元素） */
+#mxv-feed,.mxv-kols{background:var(--mxv-panel);border:1px solid var(--mxv-line);border-radius:10px;
   padding:10px 12px;margin-bottom:12px;}
 /* 观点流批内两列报纸流：左列顶部最新、右列底部最早；中缝细线；窄屏回落单列 */
 .mxv-feed-cols{display:grid;grid-template-columns:1fr 1fr;column-gap:22px;position:relative;}
@@ -185,6 +195,9 @@
 .mxv-feed-item.fresh{animation:mxvFlashIn .8s ease;}
 .mxv-feed-sep{display:flex;align-items:center;gap:10px;margin:10px 0 2px;color:var(--mxv-faint);
   font-size:11px;}
+/* 观点流刷新失败仍展示旧数据时的顶部提示条（gold 警示色，明暗主题同源） */
+.mxv-feed-stale{margin:10px 0 2px;padding:6px 10px;border-radius:8px;font-size:12px;
+  color:var(--mxv-gold);background:var(--mxv-gold-soft);}
 .mxv-feed-sep::before,.mxv-feed-sep::after{content:"";flex:1;height:1px;background:var(--mxv-sep);}
 .mxv-feed-sep span{white-space:nowrap;}
 .mxv-badge{border-radius:4px;padding:0 6px;font-size:11px;}
@@ -205,7 +218,7 @@
 .mxv-kol-head h3{margin:0;margin-right:auto;color:var(--mxv-accent);font-size:14px;}
 .mxv-mode{display:inline-flex;border:1px solid var(--mxv-btn-line);border-radius:6px;overflow:hidden;}
 .mxv-mode button{background:var(--mxv-soft);border:none;border-left:1px solid var(--mxv-btn-line);color:var(--mxv-muted);
-  padding:3px 12px;font-size:12px;cursor:pointer;}
+  padding:6px 12px;font-size:12px;cursor:pointer;}
 .mxv-mode button:first-child{border-left:none;}
 .mxv-mode button.on{background:var(--mxv-rail);color:var(--mxv-strong);}
 .mxv-more{background:none;border:none;color:var(--mxv-accent);
@@ -220,8 +233,8 @@
 /* 头像右下角「持仓」角标按钮：大V总览/观点流大V卡片通用，点开预估持仓抽屉 */
 .mxv-avawrap{position:relative;flex:none;}
 .mxv-hold-btn{position:absolute;right:-5px;bottom:-4px;border:1px solid var(--mxv-btn-line);
-  background:var(--mxv-panel);color:var(--mxv-muted);font-size:10px;line-height:1;
-  border-radius:8px;padding:2px 4px;cursor:pointer;}
+  background:var(--mxv-panel);color:var(--mxv-muted);font-size:11px;line-height:1;
+  border-radius:8px;padding:5px 6px;cursor:pointer;} /* 触控目标：角标虽小仍保 ~24px 热区 */
 .mxv-hold-btn:hover{color:var(--mxv-accent);border-color:var(--mxv-accent);}
 .mxv-hold-btn.inline{position:static;margin:0 0 8px;padding:3px 12px;font-size:12px;} /* 大V抽屉头部下方块按钮（头像下、筛选行上） */
 .mxv-kolcard .n{color:var(--mxv-text);font-size:13px;}

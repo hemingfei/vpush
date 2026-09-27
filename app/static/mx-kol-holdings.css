@@ -19,7 +19,8 @@
    行情未接入时无徽章，多余列空置不影响 */
 .mxc-holding{display:grid;grid-template-columns:minmax(84px,auto) auto 1fr auto auto;gap:8px;
   align-items:center;padding:7px 4px;border-bottom:1px solid var(--hd-sep);}
-.mxc-holding:last-of-type{border-bottom:none;}
+/* 末行去下边框：:last-of-type 会被同容器后续 div（关注板块标题等）挤占失效，显式标 .last */
+.mxc-holding.last{border-bottom:none;}
 .mxc-h-name{color:var(--hd-strong);font-weight:600;font-size:13px;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
 .mxc-h-dir{font-size:11px;color:var(--hd-faint);}
@@ -88,7 +89,7 @@
 
 /* ---- 右侧持仓抽屉（/mx-views 大V头像旁「持仓」按钮打开）----
    外壳 .mxc-drawer.hd-root 自带本页 token 作用域，需覆盖 .hd-root 的页面级
-   背景/内边距/最小高；挂载点 #mxv-drawer-slot 在 .mxv-root 内，fixed 定位不依赖 DOM 位置 */
+   背景/内边距/最小高；挂载点 document.body（fixed 定位不依赖 DOM 位置） */
 .mxc-drawer-mask{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90;}
 .mxc-drawer{position:fixed;top:0;right:0;bottom:0;width:min(680px,100%);z-index:91;
   background:var(--hd-panel);min-height:0;padding:0;
@@ -103,7 +104,7 @@
   border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;}
 .mxc-drawer-top .full:hover{border-color:var(--hd-accent);}
 .mxc-drawer-top .close{background:none;border:none;color:var(--hd-faint);font-size:18px;
-  cursor:pointer;line-height:1;padding:2px 4px;}
+  cursor:pointer;line-height:1;padding:6px 8px;} /* 触控目标：✕ 热区 ≥32px */
 .mxc-drawer-top .close:hover{color:var(--hd-strong);}
 .mxc-drawer-body{padding:12px 14px calc(20px + var(--safe-bottom));}
 @media (max-width:640px){

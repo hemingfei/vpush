@@ -41,6 +41,9 @@ export function createMxViewsView(dependencies) {
         view: _mxv.feedView, dirs: [..._mxv.feedDirs],
         acts: [..._mxv.feedActs], kols: [..._mxv.feedKols],
         search: _mxv.feedSearch,
+        // 展示口径偏好同桶持久化：双榜热力/明细、大V区按大V/按个股、卡片折叠
+        boardMode: { topic: _mxv.boardMode.topic, stock: _mxv.boardMode.stock },
+        kolMode: _mxv.kolMode, kolExpanded: !!_mxv.kolExpanded,
       }));
     } catch (e) { /* 存储不可用（隐私模式等）：筛选仍在本页生效，只是不跨刷新 */ }
   }
@@ -60,6 +63,13 @@ export function createMxViewsView(dependencies) {
         _mxv.feedKols = new Set(saved.kols.map(Number).filter((n) => Number.isInteger(n) && n > 0));
       }
       if (typeof saved.search === "string") _mxv.feedSearch = saved.search.slice(0, 100);
+      // 展示口径偏好恢复（坏值回落默认）
+      if (saved.boardMode && typeof saved.boardMode === "object") {
+        if (saved.boardMode.topic === "heat" || saved.boardMode.topic === "list") _mxv.boardMode.topic = saved.boardMode.topic;
+        if (saved.boardMode.stock === "heat" || saved.boardMode.stock === "list") _mxv.boardMode.stock = saved.boardMode.stock;
+      }
+      if (saved.kolMode === "kol" || saved.kolMode === "stock") _mxv.kolMode = saved.kolMode;
+      if (typeof saved.kolExpanded === "boolean") _mxv.kolExpanded = saved.kolExpanded;
     } catch (e) { /* 坏数据忽略，用默认筛选 */ }
   }
 
@@ -85,6 +95,7 @@ export function createMxViewsView(dependencies) {
       if (e.isComposing || e.keyCode === 229) return; // 输入法组字中：Esc 先取消组词，不当页面级 Esc 处理
       if (document.querySelector(".mxv-cal")) { mxvCalClose(); return; }
       if (document.querySelector(".mxc-drawer")) { closeHoldingsDrawer(); return; }
+      if (document.querySelector(".mxv-drawer")) { mxvCloseDrawer(); return; } // 桌面端关观点/标的抽屉（安卓返回键已有同层）
       if (_mxv.feedKolOpen) { _mxv.feedKolOpen = false; mxvRenderFeed(); return; }
       const fsearch = document.activeElement && document.activeElement.closest
         && document.activeElement.closest(".mxv-fsearch");
@@ -169,7 +180,15 @@ export function createMxViewsView(dependencies) {
   async function mxvApplySnapshot(at) {
     if (!routeStillActive(_mxv.seq)) return;
     const token = (_mxv.applySeq = (_mxv.applySeq || 0) + 1); // 拖动/连点防乱序：旧响应直接丢弃
-    const data = await api(`/api/mx-views/snapshot?day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(at)}`);
+    // 断网兜底：SSE/轮询/点击都会走到这里，源头 catch 掉失败并给反馈，
+    // 调用方（内联 onclick / SSE handler）不再产生 unhandled rejection
+    let data;
+    try {
+      data = await api(`/api/mx-views/snapshot?day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(at)}`);
+    } catch (err) {
+      if (routeStillActive(_mxv.seq)) flash(`快照加载失败: ${err.message}`, "error");
+      return;
+    }
     if (!routeStillActive(_mxv.seq) || token !== _mxv.applySeq) return;
     _mxv.at = at;
     _mxv.payload = data.payload || {};
@@ -531,11 +550,16 @@ export function createMxViewsView(dependencies) {
     const el = document.getElementById("mxv-clock");
     const mk = document.getElementById("mxv-market");
     if (!el) return;
+    let lastMk = "";
     const tick = () => {
       const n = new Date();
       const p = (x) => String(x).padStart(2, "0");
       el.textContent = `${p(n.getHours())}:${p(n.getMinutes())}:${p(n.getSeconds())}`;
-      if (mk) mk.innerHTML = mxvMarketState();
+      if (mk) {
+        // 只在状态文案变化时重写：每秒重建会打断 .mxv-dot.live 的呼吸动画（变硬闪）
+        const html = mxvMarketState();
+        if (html !== lastMk) { mk.innerHTML = html; lastMk = html; }
+      }
     };
     tick();
     if (_mxv.clockTimer) clearInterval(_mxv.clockTimer);
@@ -755,6 +779,7 @@ export function createMxViewsView(dependencies) {
     if (_mxv.boardMode[kind] === mode) return;
     _mxv.boardMode[kind] = mode;
     _mxv.boardStep = 1; // 每次切入视图重新折叠
+    mxvSaveFilters();
     mxvRenderBoards();
   }
 
@@ -910,6 +935,7 @@ export function createMxViewsView(dependencies) {
   function mxvKolMode(mode) {
     if (_mxv.kolMode === mode) return;
     _mxv.kolMode = mode;
+    mxvSaveFilters();
     mxvRenderKols();
   }
 
@@ -1222,7 +1248,11 @@ export function createMxViewsView(dependencies) {
         return `<div class="mxv-feed-sep"><span>时段 ${escapeHtml(g.end ? `${g.label}~${g.end}` : g.label)} · ${ops.length} 条</span></div>${grid}`;
       }).join("") + `<div class="mxv-feed-sep"><span>共 ${flat.length} 条 · ${groups.length} 时段${groups.length < poolBuckets.size ? `（原 ${poolBuckets.size} 时段）` : ""}</span></div>`;
     }
-    feed.innerHTML = head + body;
+    // 刷新失败但仍有旧数据：照常展示旧流，顶部给一条失败提示——
+    // SSE 已换新快照而观点流还停在上一版时，用户需要知道数据没跟上
+    const staleNote = (_mxv.feedFailed && pool.length)
+      ? `<div class="mxv-feed-stale">观点流刷新失败，以下为上一版数据</div>` : "";
+    feed.innerHTML = head + staleNote + body;
     _mxv.feedFreshPending = false; // fresh 只播一次，之后的筛选重渲染不再闪
     mxvSaveFilters(); // 状态变更必经渲染，这里统一持久化
     mxvBindFeedHighlight();
@@ -1375,13 +1405,18 @@ export function createMxViewsView(dependencies) {
       mxvRenderFeed();
       refocus(".mxv-fkol-search");
     });
-    // 点下拉面板外部收起（容器级只绑一次；面板开着才需要处理）
-    document.addEventListener("click", (e) => {
-      if (!_mxv.feedKolOpen) return;
-      if (e.target.closest && e.target.closest(".mxv-fkol-wrap")) return;
-      _mxv.feedKolOpen = false;
-      mxvRenderFeed();
-    });
+    // 点下拉面板外部收起（工厂级只绑一次，同 hlDocBound 模式；面板开着才需要处理）。
+    // feed 级监听靠 dataset.hlBound 去重，但换快照/重进页面会重建 #mxv-feed——
+    // document 级监听若不做工厂级去重，每换一次快照就多挂一个（线性泄漏）
+    if (!_mxv.fkolDocBound) {
+      _mxv.fkolDocBound = true;
+      document.addEventListener("click", (e) => {
+        if (!_mxv.feedKolOpen) return;
+        if (e.target.closest && e.target.closest(".mxv-fkol-wrap")) return;
+        _mxv.feedKolOpen = false;
+        mxvRenderFeed();
+      });
+    }
   }
 
   // 双榜/今日操作悬停同样联动观点流（点击仍走原抽屉逻辑，不抢行为）
@@ -1660,10 +1695,13 @@ export function createMxViewsView(dependencies) {
       slot.innerHTML = mxvDrawerShell(name);
       mxvBindDrawerFilters();
     }
+    // 请求时刻捕获 day/at：换快照后旧 at 的慢响应不得回退抽屉数据
+    const reqDay = _mxv.day, reqAt = _mxv.at || "";
     try {
-      const data = await api(`/api/mx-views/target?type=${type}&name=${encodeURIComponent(name)}&day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(_mxv.at || "")}`);
+      const data = await api(`/api/mx-views/target?type=${type}&name=${encodeURIComponent(name)}&day=${encodeURIComponent(reqDay)}&at=${encodeURIComponent(reqAt)}`);
       // 竞态守卫：题材与个股可同名，type 也要比对，防止旧响应污染新抽屉（同 mxvOpenKol 口径）
       if (!_mxv.drawer || _mxv.drawer.type !== type || _mxv.drawer.name !== name) return;
+      if (_mxv.day !== reqDay || (_mxv.at || "") !== reqAt) return;
       _mxv.drawer.data = data; // 缓存数据：抽屉内筛选切换只重渲染，不重新请求
       mxvRenderDrawerBody();
     } catch (err) {
@@ -1682,9 +1720,12 @@ export function createMxViewsView(dependencies) {
       slot.innerHTML = mxvDrawerShell("大V观点");
       mxvBindDrawerFilters();
     }
+    // 请求时刻捕获 day/at：换快照后旧 at 的慢响应不得回退抽屉数据
+    const reqDay = _mxv.day, reqAt = _mxv.at || "";
     try {
-      const data = await api(`/api/mx-views/kol/${kolId}?day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(_mxv.at || "")}`);
+      const data = await api(`/api/mx-views/kol/${kolId}?day=${encodeURIComponent(reqDay)}&at=${encodeURIComponent(reqAt)}`);
       if (!_mxv.drawer || _mxv.drawer.kolId !== kolId) return;
+      if (_mxv.day !== reqDay || (_mxv.at || "") !== reqAt) return;
       _mxv.drawer.data = data;
       _mxv.drawer.title = data.kol.name;
       const h = document.getElementById("mxv-drawer-title");

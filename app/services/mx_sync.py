@@ -114,32 +114,37 @@ class MXRoomSyncService:
             raise
 
     def _sync_room(self, room: dict):
-        """Sync a single room to KOL."""
+        """Sync a single room to KOL.
+
+        单房间失败（如 DB 异常）只跳过该房间，不中断整轮同步——与
+        _create_kol/_update_kol 的隔离口径一致。"""
         room_id = str(room.get("id", ""))
         if not room_id:
             return
+        try:
+            # Get extra data
+            extra_data = {
+                "teaname": room.get("teaname", ""),
+                "introduce": room.get("introduce", ""),
+                "message_today": room.get("message_today", 0),
+                "msgtime": room.get("msgtime", ""),
+                "createtime": room.get("createtime", ""),
+                "star": room.get("star", 0) == 1,
+                "enabled": True,
+                "show_in_plaza": True,
+            }
 
-        # Get extra data
-        extra_data = {
-            "teaname": room.get("teaname", ""),
-            "introduce": room.get("introduce", ""),
-            "message_today": room.get("message_today", 0),
-            "msgtime": room.get("msgtime", ""),
-            "createtime": room.get("createtime", ""),
-            "star": room.get("star", 0) == 1,
-            "enabled": True,
-            "show_in_plaza": True,
-        }
-
-        if self.db:
-            # Check if KOL exists
-            existing = self.db.get_kol_by_external("mx", room_id)
-            if existing:
-                # Update existing KOL
-                self._update_kol(existing["id"], room, extra_data)
-            else:
-                # Create new KOL
-                self._create_kol(room, extra_data)
+            if self.db:
+                # Check if KOL exists
+                existing = self.db.get_kol_by_external("mx", room_id)
+                if existing:
+                    # Update existing KOL
+                    self._update_kol(existing["id"], room, extra_data)
+                else:
+                    # Create new KOL
+                    self._create_kol(room, extra_data)
+        except Exception as e:  # noqa: BLE001 - 单房间失败不中断整轮
+            logger.error(f"Failed to sync MX room {room_id}: {e}", exc_info=True)
 
     def _create_kol(self, room: dict, extra_data: dict):
         """Create a new KOL from MX room."""
