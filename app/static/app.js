@@ -93,6 +93,8 @@ const state = {
   newsTopic: "",
   newsListKey: "",
   newsScrollY: 0,
+  newsRtScrollY: 0,
+  newsResearchScrollY: 0,
   newsRtItems: [],
   newsRtOffset: 0,
   newsRtHasMore: false,

@@ -4926,7 +4926,7 @@ def test_news_filter_changes_refresh_list_without_full_redraw():
     reset = _fn_body("loadFinancialNews", NEWS_JS)
     # 唯一允许清列表的位置是周刊书架分支（切换视图形态本就整页重绘），常规 reset 路径不得清列表
     assert reset.index("state.newsItems = []") > reset.index('picked.kind === "magazine"')
-    assert 'if (!list.querySelector(".news-list-item, .empty-state")) list.innerHTML = newsListSkeletonHtml();' in reset
+    assert 'if (!list.querySelector(".news-list-item, .empty")) list.innerHTML = newsListSkeletonHtml();' in reset
 
 
 def test_news_mark_all_read_reattaches_images():
@@ -4958,6 +4958,96 @@ def test_news_pagination_appends_without_replacing_existing_thumbnails():
     body = _fn_body("loadFinancialNews", NEWS_JS)
     assert "insertAdjacentHTML" in body
     assert "state.newsItems.map(newsListItemHtml)" not in body
+
+
+def test_news_append_dedupes_and_pending_insert_shifts_offset():
+    """追加按 id 去重、新稿胶囊置顶后分页窗口同步后移：滚动加载不再出现重复条目。"""
+    body = _fn_body("loadFinancialNews", NEWS_JS)
+    assert "new Set(state.newsItems.map((item) => Number(item.id)))" in body
+    assert "items.filter((item) => !have.has(Number(item.id)))" in body
+    assert "newsListHtml(fresh" in body
+    show = _fn_body("showPendingNews", NEWS_JS)
+    assert "state.newsOffset += items.length" in show
+
+
+def test_stream_feed_failure_keeps_loaded_list():
+    """实时/调研流追加失败保留已加载列表，重试入口进 sentinel（与财经新闻同口径）。"""
+    body = _fn_body("load", NEWS_JS)
+    catch = body[body.index("} catch (err)"):]
+    assert 'if (!reset && S("items").length)' in catch
+    assert "sentinel.innerHTML" in catch
+    assert "加载失败，点击重试" in catch
+
+
+def test_stream_feed_reset_keeps_list_and_reuses_tab_cache():
+    """筛选变化不清列表（空/骨架态才置骨架）；tab 往返复用缓存并恢复滚动、增量补新。"""
+    body = _fn_body("load", NEWS_JS)
+    assert "if (!list.querySelector(`.${cfg.itemClass}, .empty`)) list.innerHTML = skeletonHtml();" in body
+    render = _fn_body("render", NEWS_JS)
+    assert 'const reusable = S("items").length && !(S("query") || "").trim();' in render
+    assert "state[cfg.keys.scrollY]" in render
+    assert "pollUpdates(seq)" in render
+
+
+def test_news_source_filter_groups_and_marks():
+    """来源下拉按 group_name 分组、停用源立「已暂停」组；未读数与周刊标识进文案并随轮询刷新。"""
+    opts = _fn_body("newsSourceFilterOptions", NEWS_JS)
+    assert "optgroup" in opts
+    assert "已暂停" in opts
+    assert "周刊书架" in opts
+    assert "unread_count" in opts
+    refresh = _fn_body("refreshUnreadCount", NEWS_JS)
+    assert "select.innerHTML = newsSourceFilterOptions()" in refresh
+    assert "news-source-rail" not in refresh
+
+
+def test_news_list_click_opens_modal_without_route_change():
+    """整卡点击原地开弹窗：必须 stopPropagation 拦下 document 级 SPA 锚点转发（它不看 defaultPrevented）。"""
+    bind = _fn_body("bindNewsListClickDelegation", NEWS_JS)
+    assert 'event.target.closest("button")' in bind
+    assert 'event.target.closest("[data-news-id]")' in bind
+    assert "event.preventDefault()" in bind and "event.stopPropagation()" in bind
+    assert "bindNewsListClickDelegation()" in _fn_body("renderFinancialNewsShell", NEWS_JS)
+    assert 'data-news-id="${article.id}"' in _fn_body("magazineShelfHtml", NEWS_JS)
+
+
+def test_news_modal_progress_bar_and_detail_prefetch():
+    """弹窗补渲染阅读进度条（CSS 契约已有）；文章详情预取缓存，翻篇命中不再等骨架。"""
+    modal = _fn_body("openNewsArticleModal", NEWS_JS)
+    assert "news-read-progress" in modal
+    assert "bindNewsReadProgress(mask)" in modal
+    assert "articleDetailCache.get(id)" in modal
+    assert "cacheArticleDetail(id, article)" in modal
+    assert "articleDetailCache.clear()" in _fn_body("clearNewsReaderState", NEWS_JS)
+
+
+def test_news_tab_switch_saves_scroll_positions():
+    """切栏目记录滚动位置（各栏目独立键），切回由复用路径恢复；离开页面清零。"""
+    switch = _fn_body("selectNewsTab", NEWS_JS)
+    assert "state.newsScrollY = window.scrollY" in switch
+    assert "state.newsRtScrollY = window.scrollY" in switch
+    assert "state.newsResearchScrollY = window.scrollY" in switch
+    clear = _fn_body("clearNewsReaderState", NEWS_JS)
+    assert "state.newsRtScrollY = 0" in clear
+    assert "state.newsResearchScrollY = 0" in clear
+
+
+def test_news_list_time_drops_seconds():
+    """卡片时间降噪：秒位对长文列表冗余（时间线的秒位存序用途不动）。"""
+    body = _fn_body("newsListItemHtml", NEWS_JS)
+    assert "fmtNewsListTime(item.published_at)" in body
+    assert "fmtPublished(item.published_at, true)" not in body
+
+
+def test_news_dead_styles_removed_and_toolbar_flex_added():
+    """main 分叉残留死样式已清理（hmf 无侧栏/来源弹窗）；工具栏有明确 flex 规则。"""
+    css = STYLE_CSS.read_text()
+    for dead in (".news-stream-layout", ".news-stream-head", ".news-stream-search",
+                 ".news-source-rail", ".news-source-modal", ".news-source-row",
+                 ".news-search-toggle", ".news-filter-summary", ".news-source-group-label"):
+        assert dead not in css, dead
+    assert ".news-list-toolbar { display: flex" in css
+    assert ".news-toolbar-filters { display: flex" in css
 
 
 def test_news_stream_uses_shared_line_icons_and_handlers():
