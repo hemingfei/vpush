@@ -1080,9 +1080,10 @@ def migrate_split_combined_target_names(db) -> bool:
         for day in sorted(days):
             rebuilt_by_day[day] = _rebuild_split_day_rows(db, day)[1]
     else:
-        # 第一阶段：全量扫描检测（必须在改写前完成），先落清单再改写
-        for meta in db.mx_view_days():
-            day = str(meta["trading_day"])
+        # 第一阶段：全量扫描检测（必须在改写前完成），先落清单再改写。
+        # 用无 LIMIT 的全量日清单：mx_view_days 只回最近 60 天，观点保留期
+        # 是 120 天，超出的老日会漏拆且完成标记照落、永不重跑
+        for day in db.mx_opinion_days():
             dirty, rebuilt = _rebuild_split_day_rows(db, day)
             if dirty:
                 days.add(day)

@@ -202,6 +202,7 @@ class MxFetcher(Fetcher):
                 logger.warning("MX 第 %d 页追平失败 room=%s err=%s", page, room_id, exc)
                 break
             if not batch:
+                caught_up = True  # 游标越过房间历史起点：天然无缺口
                 break
             posts = self._build_posts(kol, batch)
             seen = self.db.existing_post_keys([(platform, p.external_id) for p in posts])
@@ -217,6 +218,7 @@ class MxFetcher(Fetcher):
                 break  # 游标未前移，避免原地死循环
             cursor = min(batch_ids)
             if len(batch) < self.page_size:
+                caught_up = True  # 不足一页=已到历史起点：天然无缺口
                 break
 
         if not caught_up:

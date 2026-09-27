@@ -369,3 +369,26 @@ def test_holdings_views_summary_kols_and_actions():
     names = {(t["target_type"], t["target_name"])
              for t in client.get("/api/my/holdings/views", headers=admin).json()["summary"]["targets"]}
     assert ("topic", "液冷") not in names
+
+
+def test_holdings_views_evidence_excludes_blocked_and_hidden_posts():
+    """证据原帖被拦截/隐藏后不得经观点流复活：evidence_post_ids 是研判时
+    固化的，帖子事后被拦截/隐藏，原文不能随 evidence 下发给普通用户。"""
+    client = make_client()
+    admin = auth_headers(client)
+    db = client.app.state.db
+    kol = db.add_kol("mx", "王哥", "room1")
+    ok = _mk_post(db, kol, "p_ok", "正常原帖", _ts(hours=-2))
+    blocked = _mk_post(db, kol, "p_blocked", "被拦截帖", _ts(hours=-2))
+    hidden = _mk_post(db, kol, "p_hidden", "被隐藏帖", _ts(hours=-2))
+    db._execute("UPDATE posts SET blocked = 1 WHERE id = ?", (blocked,))
+    db.set_post_hidden(hidden, True)
+
+    assert client.post("/api/my/holdings", headers=admin,
+                       json={"target_type": "topic", "target_name": "固态电池"}).status_code == 201
+    _add_opinion(db, kol, "topic", "固态电池", "bull", _ts(hours=-1), "摘要",
+                 evidence=[ok, blocked, hidden])
+
+    data = client.get("/api/my/holdings/views", headers=admin).json()
+    ev = data["items"][0]["evidence"]
+    assert [e["post_id"] for e in ev] == [ok]  # 拦截/隐藏帖不出现，正常帖照常内联

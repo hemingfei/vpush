@@ -37,7 +37,8 @@ export function createMxKolHoldingsView(dependencies) {
   };
 
   function mxcTeardown() {
-    Object.assign(_mxc, { data: null, pnl: null, drawerEl: null, drawerBody: null, actsOpen: {} });
+    Object.assign(_mxc, { data: null, pnl: null, drawerEl: null, drawerBody: null, actsOpen: {},
+      returnFocus: null });
     // closedExpanded 不重置：换大V/换窗口回来时保持用户上次的展开选择
     // recent（最近观点天数）/view（时间线筛选）/sort（排序）跨路由保留：
     // 回来时还是用户上次调的口径；
@@ -49,7 +50,9 @@ export function createMxKolHoldingsView(dependencies) {
   function mxcStale(token, seq) {
     if (token !== _mxc.token) return true;
     if (_mxc.drawerEl) return !_mxc.drawerEl.isConnected;
-    return seq != null && !routeStillActive(seq);
+    // 抽屉宿主响应（seq=null）必须在抽屉存活期落地：抽屉已关（drawerEl 已清）
+    // 而响应还在途时判 stale，防止走非抽屉分支把当前页面的 #main 整体改写
+    return seq != null ? !routeStillActive(seq) : true;
   }
 
   // 统一取数+落盘：初次加载失败出整屏错误；换窗口失败只 flash 并回显旧数据。
@@ -153,7 +156,7 @@ export function createMxKolHoldingsView(dependencies) {
     const shell = document.createElement("div");
     shell.innerHTML = `
       <div class="mxc-drawer-mask" onclick="mxcCloseDrawer()"></div>
-      <aside class="mxc-drawer hd-root" role="dialog" aria-label="预估持仓">
+      <aside class="mxc-drawer hd-root" role="dialog" aria-modal="true" aria-label="预估持仓">
         <div class="mxc-drawer-top">
           <b>预估持仓</b>
           <button type="button" class="full" onclick="go('/mx-kol/${kolId}')" title="打开独立持仓页">完整页</button>
@@ -167,15 +170,21 @@ export function createMxKolHoldingsView(dependencies) {
     _mxc.drawerBody = aside.querySelector(".mxc-drawer-body");
     document.body.appendChild(mask);
     document.body.appendChild(aside);
+    _mxc.returnFocus = document.activeElement; // 焦点管理：关闭时还复触发点
+    aside.querySelector("button")?.focus(); // aria-modal 惯例：移焦进抽屉，Tab 不再穿透背景
     mxcLoad(kolId, ++_mxc.token, null);
   }
 
   function mxcCloseDrawer() {
+    ++_mxc.token; // 失效在途响应：慢回放数据在抽屉关闭后到达，不得改写当前页面
     const mask = document.querySelector(".mxc-drawer-mask");
     const drawer = document.querySelector(".mxc-drawer");
+    const rf = _mxc.returnFocus;
+    _mxc.returnFocus = null;
     if (mask) mask.remove();
     if (drawer) drawer.remove();
     mxcTeardown();
+    if (rf && rf.isConnected) rf.focus(); // 键盘/读屏用户焦点回到打开前的位置
   }
 
   async function mxcChangeDays(days) {

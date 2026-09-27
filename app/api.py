@@ -7159,22 +7159,29 @@ def create_api_router(
         payload 不再冗余存 new_opinions）。最新批次在前、批内按发生时间倒序
         （最新在上），每条观点带回所属批次 snapshot_at；seq/kind 由轻量快照元数据拼回。
 
-        after_id 可选增量拉取：只返回 id > after_id 的观点，响应带 max_id（当日
-        观点当前最大 id，客户端存下它作为下次的 after_id）；不传时行为不变（全量，
-        响应也不带 max_id），旧前端零改动。
+        after_id 可选增量拉取：只返回 id > after_id 的观点，响应带 max_id（本次
+        实际下发观点的最大 id，无下发则不带——客户端维持旧游标下轮再取）；不传时
+        行为不变（全量，响应也不带 max_id），旧前端零改动。
         同步 def 走线程池：前端 30s 轮询 + SSE 触发，async def 里同步查库会卡事件循环。
         """
         meta = {str(r["snapshot_at"]): r for r in db.list_mx_view_snapshot_meta(day)}
         grouped: dict = {}
         # after_id 下推进 SQL：增量客户端不为过滤付全量加载的成本
         all_opinions = db.list_mx_opinions(day, after_id=after_id)
-        max_id = db.max_mx_opinion_id(day) if after_id > 0 else None
         for o in all_opinions:
             grouped.setdefault(str(o["snapshot_at"]), []).append(o)
+        # max_id 只推进到本次实际下发的最大 id：批次进行中「观点已落库、快照 meta
+        # 未落库」的窗口里，无 meta 的观点本轮跳过（快照落库后下轮自然补上）；
+        # 若按表内最大 id 推进，客户端存下游标会把这整批观点永久跳过
+        max_id = None
+        if after_id > 0:
+            delivered = [int(o["id"]) for at, ops in grouped.items() if at in meta
+                         for o in ops]
+            max_id = max(delivered) if delivered else None
         batches = []
         for at in sorted(grouped.keys(), reverse=True):
             m = meta.get(at)
-            if not m:  # 无批次记录的孤儿观点（理论不发生）：无 seq 可带，跳过
+            if not m:  # 批次进行中（观点已落库、meta 未落）：无 seq 可带，本轮跳过
                 continue
             ops = [
                 {"kol_id": int(o["kol_id"]), "kol_name": o.get("kol_name") or "",
@@ -7500,10 +7507,13 @@ def create_api_router(
         raise HTTPException(status_code=422, detail="type 须为 stock|topic")
 
     @router.get("/my/holdings/views")
-    async def my_holding_views(after_id: int = 0, before_id: int = 0,
-                               before_at: str = "", limit: int = 50, holder: str = "",
-                               current_user: dict = Depends(get_current_user)):
+    def my_holding_views(after_id: int = 0, before_id: int = 0,
+                         before_at: str = "", limit: int = 50, holder: str = "",
+                         current_user: dict = Depends(get_current_user)):
         """相关观点流 + 全窗口聚合。
+
+        同步 def 走线程池：兜底轮询端点带全窗口聚合/证据批量取等重查询，
+        async def 里同步查库会卡事件循环（SSE 等长连接被周期性卡住）。
 
         after_id 增量拉新（SSE 版本变更后带游标来取）；
         翻旧页（加载更多）传复合游标 before_at+before_id（列表最底行的
@@ -7558,10 +7568,13 @@ def create_api_router(
         }
 
     @router.get("/my/holdings/tag-posts")
-    async def my_holding_tag_posts(after_id: int = 0, before_id: int = 0,
-                                   before_at: str = "", limit: int = 50, holder: str = "",
-                                   current_user: dict = Depends(get_current_user)):
+    def my_holding_tag_posts(after_id: int = 0, before_id: int = 0,
+                             before_at: str = "", limit: int = 50, holder: str = "",
+                             current_user: dict = Depends(get_current_user)):
         """关注标的标签命中的快讯流 + 全窗口标签提及聚合。
+
+        同步 def 走线程池：与 /my/holdings/views 同口径（tags 全帖 LIKE 扫描
+        是本端点最重的一步，async def 里同步查库会卡事件循环）。
 
         与 /my/holdings/views 同参语义（after_id 增量拉新 / 翻旧页传复合游标
         before_at+before_id / holder=type:名称 单标的下钻，summary 恒为全窗口
@@ -8606,7 +8619,12 @@ def create_api_router(
             # DB 层出 *_cn 列，这里映射回原字段名，前端 fmtDbTime 零改动
             r["updated_at"] = r.pop("updated_at_cn", "")
             r["created_at"] = r.pop("created_at_cn", "")
-        effective = resolve_effective_marks(rows, cfg)
+        # 生效判定用涉及帖的全量标注行：recent 按 updated_at 倒序截断，某标的达到
+        # agree_n 的另一张标注可能落在窗口外，按截断集判定会把已生效误显示为
+        # 「未生效」诱导重复补标（回放生效逻辑 effective_marks_for_kol 本就走全量）
+        mark_post_ids = sorted({int(r["post_id"]) for r in rows})
+        effective = resolve_effective_marks(
+            db.list_mx_action_marks_for_posts(mark_post_ids), cfg)
         for r in rows:
             eff_rows = [e for e in effective.get(int(r["post_id"]), [])
                         if e["target_name"] == str(r["target_name"])]

@@ -232,7 +232,8 @@ def test_mx_views_feed_after_id_incremental():
 
     none = client.get(f"/api/mx-views/feed?day=2026-09-04&after_id={max_id}",
                       headers=headers).json()
-    assert none["batches"] == [] and none["max_id"] == max_id
+    # 无下发不带 max_id：客户端维持旧游标（不再按表内最大 id 推进，防跳过未落快照的批次）
+    assert none["batches"] == [] and "max_id" not in none
 
 
 def test_mx_view_version_cache_shares_db_reads(monkeypatch):
@@ -364,3 +365,36 @@ def test_mx_views_admin_candidates_adopt_and_dismiss():
     assert "可控核聚变" in client.get("/api/admin/mx-views/config", headers=admin).json()["topic_hints"]
     assert client.get("/api/admin/mx-views/topic-candidates", headers=admin).json()["candidates"] == []
     client.post("/api/admin/mx-views/topic-candidates/dismiss", headers=admin, json={"name": "x"})
+
+
+def test_mx_views_feed_after_id_orphan_batch_not_skipped():
+    """批次进行中（观点已落库、快照 meta 未落）的孤儿观点：本轮跳过且游标不
+    越过它，快照落库后下一轮照常补上——max_id 按表内最大 id 推进会永久跳批。"""
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    post_id, kol = _seed_feed_batches(db)
+
+    # 模拟批次中间态：观点已 replace 落库，快照 meta 尚未 upsert
+    bid = db.upsert_mx_view_batch("2026-09-04", "10:30", "live")
+    db.replace_mx_opinions(bid, [{
+        "trading_day": "2026-09-04", "snapshot_at": "10:30", "kol_id": kol,
+        "target_type": "topic", "target_name": "固态电池", "direction": "bull",
+        "action": "", "confidence": "high", "summary": "孤儿批次",
+        "evidence_post_ids": [post_id], "occurred_at": "2026-09-04 10:25:00",
+    }])
+
+    table_max = db.max_mx_opinion_id("2026-09-04")
+    inc = client.get(f"/api/mx-views/feed?day=2026-09-04&after_id={table_max - 2}",
+                     headers=headers).json()
+    # 孤儿批本轮跳过；游标只推进到实际下发的最大 id（09:40 批那条，
+    # id=table_max-1 < table_max——若按表内最大 id 推进就会跨过孤儿批）
+    assert [b["snapshot_at"] for b in inc["batches"]] == ["09:40"]
+    assert inc["max_id"] == table_max - 1
+
+    # 快照落库后下一轮照常补上，不被上一轮的游标永久跳过
+    db.upsert_mx_view_snapshot("2026-09-04", "10:30", 3, "live", {"message_count": 1}, bid)
+    inc2 = client.get(f"/api/mx-views/feed?day=2026-09-04&after_id={inc['max_id']}",
+                      headers=headers).json()
+    assert [b["snapshot_at"] for b in inc2["batches"]] == ["10:30"]
+    assert inc2["batches"][0]["opinions"][0]["summary"] == "孤儿批次"

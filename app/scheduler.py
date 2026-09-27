@@ -2289,6 +2289,9 @@ class Scheduler:
         self._mx_ws_task = None
         self._mx_ws_on_message = None
         self._mx_ws_on_give_up = None
+        # _mx_schedule_ws_abort 的 fire-and-forget 任务持引用：事件循环只持
+        # 弱引用，不持有可能被 GC 中途取消，导致「WS 已掐断」动作静默丢失
+        self._mx_ws_abort_tasks: set = set()
         # 每日多窗口管理：WS 会话只在窗口内运行（每日三段随机时段，见 mx_window.py）
         self._mx_window_task: asyncio.Task | None = None
         # MX 消息 LLM 打标循环：独立于 MX 会话（只读 posts 表），MX 未启用也照常调度
@@ -2603,11 +2606,16 @@ class Scheduler:
         except RuntimeError:
             loop = None
         if loop is not None:
-            loop.create_task(self._mx_abort_ws(task, ws_client))
+            abort = loop.create_task(self._mx_abort_ws(task, ws_client))
         elif self._loop is not None and not self._loop.is_closed():
-            asyncio.run_coroutine_threadsafe(self._mx_abort_ws(task, ws_client), self._loop)
-        elif task is not None:
-            task.cancel()  # 兜底：拿不到事件循环时至少取消任务
+            abort = asyncio.run_coroutine_threadsafe(self._mx_abort_ws(task, ws_client), self._loop)
+        else:
+            if task is not None:
+                task.cancel()  # 兜底：拿不到事件循环时至少取消任务
+            return
+        # 任务持引用防 GC（事件循环只持弱引用），完成即出集合
+        self._mx_ws_abort_tasks.add(abort)
+        abort.add_done_callback(self._mx_ws_abort_tasks.discard)
 
     async def _mx_abort_ws(self, task, ws_client):
         """掐断 WS：取消运行任务 + 关标签页式断开（不发任何关闭包）。"""

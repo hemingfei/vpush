@@ -135,6 +135,7 @@ export function createMxViewsView(dependencies) {
     Object.assign(_mxv, { day: null, payload: null, at: null, drawer: null, hasNew: false, sseOk: false,
       feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
       feedKolOpen: false, feedKolSearch: "", feedFreshPending: false, actionTags: [], // 筛选集不清：跨路由保留
+      drawerReturnFocus: null,
       tlDrag: false, tlPreviewIdx: -1, hlKey: "", hlPinned: false, cal: null,
       boardStep: 1 });
   }
@@ -275,19 +276,21 @@ export function createMxViewsView(dependencies) {
   }
 
   async function mxvRefreshLatest() {
-    if (!routeStillActive(_mxv.seq)) return;
+    const seq = _mxv.seq; // 入口捕获：守卫读捕获值而非可变单例——换交易日重渲染
+    // 后 _mxv.seq 已更新，读单例会把旧响应放行、旧日快照污染新渲染（同 mxvLoadDay 口径）
+    if (!routeStillActive(seq)) return;
     if (_mxv.tlDrag) return; // 拖动时间轴中：SSE/兜底轮询都不顶掉拖动预览（松手 mxvTlUp 自然再对齐）
     if (!_mxv.day) { // 空态停留：live 首个快照落库后自动恢复
       try {
         const daysData = await api("/api/mx-views/days");
-        if (!routeStillActive(_mxv.seq)) return;
+        if (!routeStillActive(seq)) return;
         _mxv.days = (daysData.days || []).map((d) => d.trading_day);
-        if (_mxv.days.length) await mxvLoadDay(_mxv.days[0], _mxv.seq);
+        if (_mxv.days.length) await mxvLoadDay(_mxv.days[0], seq);
       } catch (e) { /* 无数据保持空态 */ }
       return;
     }
     const dayData = await api(`/api/mx-views/day?day=${encodeURIComponent(_mxv.day)}`).catch(() => null);
-    if (!dayData || !routeStillActive(_mxv.seq)) return;
+    if (!dayData || !routeStillActive(seq)) return;
     _mxv.snapshots = dayData.snapshots || [];
     if (Array.isArray(dayData.action_tags)) _mxv.actionTags = dayData.action_tags.map(String);
     if (dayData.latest_at && dayData.latest_at !== _mxv.at) await mxvApplySnapshot(dayData.latest_at);
@@ -941,6 +944,7 @@ export function createMxViewsView(dependencies) {
 
   function mxvKolMore() {
     _mxv.kolExpanded = !_mxv.kolExpanded;
+    mxvSaveFilters(); // 即时落盘：点完直接离开（无 SSE/feed 重渲染顺带落盘）也不丢
     mxvRenderKols();
   }
 
@@ -1440,6 +1444,9 @@ export function createMxViewsView(dependencies) {
     if (mask) mask.remove();
     if (drawer) drawer.remove();
     _mxv.drawer = null;
+    const rf = _mxv.drawerReturnFocus;
+    _mxv.drawerReturnFocus = null;
+    if (rf && rf.isConnected) rf.focus(); // 焦点还复触发点：键盘/读屏不被留在 body
   }
 
   // 观点流大V下拉收起（返回键/外部入口用；面板显隐由 feedKolOpen 状态渲染）
@@ -1475,7 +1482,7 @@ export function createMxViewsView(dependencies) {
   function mxvDrawerShell(title, subHtml) {
     return `
       <div class="mxv-drawer-mask" onclick="mxvCloseDrawer()"></div>
-      <aside class="mxv-drawer" role="dialog" aria-label="${escapeHtml(title)}">
+      <aside class="mxv-drawer" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
         <button class="close" onclick="mxvCloseDrawer()" aria-label="关闭">✕</button>
         <h3 id="mxv-drawer-title">${escapeHtml(title)}</h3>
         <div id="mxv-drawer-body">${subHtml || `<div class="mxv-empty">加载中…</div>`}</div>
@@ -1694,6 +1701,8 @@ export function createMxViewsView(dependencies) {
       mxvInitDrawerFilters(fromFeed);
       slot.innerHTML = mxvDrawerShell(name);
       mxvBindDrawerFilters();
+      _mxv.drawerReturnFocus = document.activeElement; // 关闭时还复；移焦进抽屉（aria-modal 惯例）
+      slot.querySelector(".mxv-drawer .close")?.focus();
     }
     // 请求时刻捕获 day/at：换快照后旧 at 的慢响应不得回退抽屉数据
     const reqDay = _mxv.day, reqAt = _mxv.at || "";
@@ -1719,6 +1728,8 @@ export function createMxViewsView(dependencies) {
       mxvInitDrawerFilters(fromFeed);
       slot.innerHTML = mxvDrawerShell("大V观点");
       mxvBindDrawerFilters();
+      _mxv.drawerReturnFocus = document.activeElement; // 关闭时还复；移焦进抽屉（aria-modal 惯例）
+      slot.querySelector(".mxv-drawer .close")?.focus();
     }
     // 请求时刻捕获 day/at：换快照后旧 at 的慢响应不得回退抽屉数据
     const reqDay = _mxv.day, reqAt = _mxv.at || "";

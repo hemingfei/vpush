@@ -122,6 +122,9 @@ class MxWsClient:
         self.last_message_at: datetime | None = None
         self._sio: Any = None
         self._task: Any = None
+        # give-up 回调的 fire-and-forget 任务持引用：事件循环只持弱引用，
+        # 不持有可能被 GC 中途取消（照搬 fetcher._ws_tasks 的防御）
+        self._giveup_tasks: set = set()
         self._should_stop = False
         # run_forever 存活期间为 True：供状态接口区分「连接中」与「已断线」
         self.running = False
@@ -366,7 +369,9 @@ class MxWsClient:
         try:
             result = self.on_give_up(reason, token_expired)
             if asyncio.iscoroutine(result):
-                asyncio.create_task(self._await_give_up(result))
+                task = asyncio.create_task(self._await_give_up(result))
+                self._giveup_tasks.add(task)
+                task.add_done_callback(self._giveup_tasks.discard)
         except Exception:
             logger.error("MX WebSocket 重连失败回调执行异常", exc_info=True)
 

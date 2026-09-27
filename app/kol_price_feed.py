@@ -111,6 +111,10 @@ def fetch_remote(requests: list[dict]) -> dict[tuple[str, str], dict]:
     base, token = _load_price_api_config()
     if not requests:
         return {}
+    if not base or not token:
+        # 桩模式（未配置/半套配置）：不发起任何网络请求（docstring 契约），
+        # 也不逐批刷「price fetch failed」告警——小时级重算一晚能刷上百条
+        return {}
     out: dict[tuple[str, str], dict] = {}
     with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
         for i in range(0, len(requests), BATCH_MAX):

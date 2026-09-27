@@ -7330,6 +7330,16 @@ class DB:
             "GROUP BY trading_day ORDER BY trading_day DESC LIMIT 60"
         )
 
+    def mx_opinion_days(self) -> list[str]:
+        """全部含观点的交易日（无 LIMIT，mx_opinions 保留期内全量）。
+
+        标的名拆分迁移等一次性全量扫描必须用这个，不能用 mx_view_days：
+        那个带 LIMIT 60（页面下拉用），迁移只扫 60 天会让更老的天漏拆、
+        且完成标记照落永不重跑。"""
+        return [str(r["trading_day"]) for r in self._rows(
+            "SELECT DISTINCT trading_day FROM mx_opinions ORDER BY trading_day DESC"
+        )]
+
     def get_mx_view_cursor(self) -> int:
         raw = self.get_setting("mx_view_cursor")
         try:
@@ -7791,7 +7801,10 @@ class DB:
         return int(rows[0]["m"]) if rows else 0
 
     def get_posts_brief_by_ids(self, post_ids) -> dict[int, dict]:
-        """证据原帖简要信息（作者/时间/正文截断），按 id 索引；不存在的 id 跳过。"""
+        """证据原帖简要信息（作者/时间/正文截断），按 id 索引；不存在的 id 跳过。
+
+        blocked/hidden 帖一律排除：观点行的 evidence_post_ids 是研判时固化的，
+        帖子事后被拦截/隐藏后 id 仍留在观点里，不能经任何出口把原文带出来。"""
         unique_ids = list(dict.fromkeys(int(i) for i in post_ids or []))
         if not unique_ids:
             return {}
@@ -7799,7 +7812,8 @@ class DB:
         out: dict[int, dict] = {}
         for p in self._rows(
             f"SELECT p.id, p.content, p.published_at, k.name AS author FROM posts p "
-            f"JOIN kols k ON k.id = p.kol_id WHERE p.id IN ({marks})",
+            f"JOIN kols k ON k.id = p.kol_id WHERE p.id IN ({marks}) "
+            f"AND COALESCE(p.blocked, 0) = 0 AND COALESCE(p.hidden, 0) = 0",
             tuple(unique_ids),
         ):
             out[int(p["id"])] = {
