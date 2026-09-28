@@ -33,6 +33,11 @@ llm:
 price_api_base: ""
 price_api_token: ""
 
+# MX 观点截图页 token：配置后开放 GET /api/mx-shot/{token}（自包含 HTML，供外部
+# 无头浏览器按交易时段截图转发）与 /api/mx-shot/{token}/manifest（时段清单 JSON）。
+# token 即凭据（会进反代访问日志，泄露后轮换即可）；留空 = 功能整体关闭（404）
+mx_shot_token: ""
+
 sources:
   ima:
     cookie: ''          # 网页 x-ima-cookie（列表/摘要）

@@ -59,10 +59,10 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import auth, kol_requests, user_quota, wechat, xincai
+from . import auth, kol_requests, mx_shot_page, user_quota, wechat, xincai
 from .avatar_cache import cache_avatar
 from .bot_core import BIND_CODE_TTL, new_bind_code
 from .db import (
@@ -1633,6 +1633,7 @@ def create_api_router(
     turnstile_site_key: str = "",
     turnstile_secret: str = "",
     turnstile_hostnames: str = "",
+    mx_shot_token: str = "",
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
     market_quotes = MarketQuotes()
@@ -7198,6 +7199,60 @@ def create_api_router(
         if max_id is not None:
             result["max_id"] = max_id
         return result
+
+    # ---- MX 观点截图页：token 即凭据、无登录态，供外部无头浏览器截图/轮询 ----
+    # 边界见 mx_shot_page 模块 docstring：本系统只出静态 HTML 与时段清单，
+    # 截图排程、图片生成、发布到知识星球等平台全部由外部系统完成。
+    _shot_token = (mx_shot_token or "").strip()
+    _shot_day_re = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+    def _mx_shot_guard(token: str) -> None:
+        # 同 kol-webhook 的取舍：token 在 URL 里会进访问日志，泄露后改配置轮换即可；
+        # 未配置 token = 功能整体关闭，一律 404 不暴露存在性。
+        if (not _shot_token or len(token) > 128
+                or not secrets.compare_digest(str(token), _shot_token)):
+            raise HTTPException(status_code=404, detail="页面不存在")
+
+    def _mx_shot_day(day: str) -> str:
+        day = str(day or "").strip()
+        if not day:
+            days = db.mx_view_days()
+            return str(days[0]["trading_day"]) if days else ""
+        if not _shot_day_re.fullmatch(day):
+            raise HTTPException(status_code=422, detail="day 须为 YYYY-MM-DD")
+        return day
+
+    @router.get("/mx-shot/{token}/manifest")
+    def mx_shot_manifest(token: str, day: str = ""):
+        """时段清单：外部排程据此挑时段、跳过空时段，并判断研判覆盖（存在
+        snapshot_at 晚于时段结束的批次≈该时段观点已齐，再加缓冲即可截图）。"""
+        _mx_shot_guard(token)
+        shot_day = _mx_shot_day(day)
+        return mx_shot_page.build_manifest(
+            day=shot_day,
+            opinions=db.list_mx_opinions(shot_day) if shot_day else [],
+            batches=db.list_mx_view_snapshot_meta(shot_day) if shot_day else [],
+            days=db.mx_view_days(),
+        )
+
+    @router.get("/mx-shot/{token}")
+    def mx_shot_page_view(token: str, day: str = "", slot: str = "", theme: str = "dark"):
+        """截图页：零 JS 静态 HTML，视觉与现网观点流一致（同源 CSS + 同构行 DOM）。
+        slot=HHMM 时段起点（0930 = [09:30,10:00)），缺省渲染全天所有时段（各带
+        id="slot-0930"，外部对单时段做元素截图）；视口宽需 >760px 保持两列（推荐 1280）。"""
+        _mx_shot_guard(token)
+        shot_day = _mx_shot_day(day)
+        slot_key = mx_shot_page.normalize_slot(slot)
+        if slot_key is None:
+            raise HTTPException(status_code=422, detail="slot 须为 HHMM 时段起点（00/30 分）")
+        return HTMLResponse(
+            mx_shot_page.render_page(
+                day=shot_day, slot=slot_key,
+                theme="light" if str(theme).strip().lower() == "light" else "dark",
+                opinions=db.list_mx_opinions(shot_day) if shot_day else [],
+            ),
+            headers={"Cache-Control": "no-store"},
+        )
 
     @router.get("/mx-views/target")
     def mx_views_target(type: str, name: str, day: str, at: str = "",

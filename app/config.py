@@ -210,6 +210,10 @@ class Config:
     # 两者留空（或只填其一）即桩模式：盈亏页显示「行情数据未接入」。
     price_api_base: str = ""
     price_api_token: str = ""
+    # MX 观点截图页 token（/api/mx-shot/{token}）：供外部无头浏览器截图与时段
+    # 清单轮询，token 即凭据（同 kol-webhook 取舍：进访问日志，泄露后轮换即可）。
+    # 留空 = 功能整体关闭（一律 404）。
+    mx_shot_token: str = ""
     # 管理员告警总开关：false 时不发任何告警、不启动 TG/飞书 bot 长轮询。
     # 本地开发/测试实例务必置 false，避免用生产 config 误发告警、抢生产 bot 轮询。
     alerts_enabled: bool = True
@@ -281,6 +285,7 @@ _ENV_MAP = {
     "ALERTS_ENABLED": ("alerts_enabled",),
     "PRICE_API_BASE": ("price_api_base",),
     "PRICE_API_TOKEN": ("price_api_token",),
+    "MX_SHOT_TOKEN": ("mx_shot_token",),
     "IMGBED_BASE_URL": ("imgbed", "base_url"),
     "IMGBED_TOKEN": ("imgbed", "token"),
     "IMGBED_CHANNEL": ("imgbed", "channel"),
