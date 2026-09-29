@@ -90,7 +90,14 @@ python scripts/mx_login.py --captcha-key <key> --code <答案>   # 用该答案�
 
 凭据全部放 Jenkins 凭据库（Secret Text），仓库与聊天不落任何凭据：
 `mx-account`、`mx-password`、`mx-vision-api-base`、`mx-vision-api-key`、
-`mx-vision-model`、`vpush-url`、`vpush-admin-user`、`vpush-admin-password`。
+`mx-vision-model`、`vpush-url`、`vpush-admin-user`、`vpush-admin-password`、
+`mx-notify-webhook-url`、`mx-notify-webhook-secret`。
+
+**结果回调**：脚本自身在成功（token 写回完成）与失败（登录熔断/写回失败）时
+回调 vpush 的 KOL webhook（`MX_NOTIFY_WEBHOOK_URL`/`_SECRET`，飞书同款签名
+`sign = base64(hmac_sha256(key="{ts}\n{secret}))`，走 url_safety 安全体）——
+Jenkins 凭据注入后即推到订阅了该 KOL 的手机。未配置时失败回落 Bark/飞书。
+容器拉起/pip 安装等脚本外的基础设施级失败不触发回调，由 Jenkins 标红兜底。
 
 防风控口径与风险边界：
 

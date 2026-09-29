@@ -12,6 +12,7 @@ import importlib.util
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -425,6 +426,66 @@ def test_main_ai_ocr_requires_vision_config(monkeypatch, capsys):
 
 
 # ---- 失败告警（安全体：仅公网 webhook） ----
+
+def _patch_safe_request(monkeypatch):
+    import app.url_safety as url_safety_mod
+
+    sent = []
+
+    def fake_safe(client, method, url, **kw):
+        sent.append({"method": method, "url": url, "content": kw.get("content"),
+                     "headers": kw.get("headers")})
+        return None
+
+    monkeypatch.setattr(url_safety_mod, "safe_request_limited", fake_safe)
+    return sent
+
+
+def test_notify_vpush_feishu_style_sign(monkeypatch):
+    """vpush KOL webhook 回调：飞书同款签名（base64(hmac_sha256(key="{ts}\\n{secret}))），
+    timestamp+sign 在 body，URL 未配置时静默不发。"""
+    import base64 as b64
+    import hashlib
+    import hmac as hmac_mod
+    import json as jsonlib
+
+    sent = _patch_safe_request(monkeypatch)
+    monkeypatch.setenv("MX_NOTIFY_WEBHOOK_URL", "http://8.8.4.4/api/kol-webhook/tok")
+    monkeypatch.setenv("MX_NOTIFY_WEBHOOK_SECRET", "sec1")
+
+    before = time.time()
+    mx_login_script.notify_vpush("标题", "内容")
+    after = time.time()
+
+    assert len(sent) == 1 and sent[0]["method"] == "POST"
+    body = jsonlib.loads(sent[0]["content"])
+    assert body["title"] == "标题" and body["text"] == "内容"
+    assert int(before) <= body["timestamp"] <= int(after) + 1
+    expect = b64.b64encode(hmac_mod.new(
+        f"{body['timestamp']}\nsec1".encode(), digestmod=hashlib.sha256).digest()).decode()
+    assert body["sign"] == expect
+    assert sent[0]["headers"]["Content-Type"] == "application/json"
+
+    # URL 未配置 → 不发
+    sent.clear()
+    monkeypatch.delenv("MX_NOTIFY_WEBHOOK_URL")
+    mx_login_script.notify_vpush("t", "x")
+    assert sent == []
+
+
+def test_notify_failure_prefers_vpush_webhook(monkeypatch):
+    sent = _patch_safe_request(monkeypatch)
+    monkeypatch.setenv("MX_NOTIFY_WEBHOOK_URL", "http://8.8.4.4/hook")
+    monkeypatch.setenv("MX_NOTIFY_WEBHOOK_SECRET", "s")
+    monkeypatch.setenv("BARK_SERVER", "http://8.8.8.8")
+    monkeypatch.setenv("BARK_KEY", "k1")
+
+    mx_login_script.notify_failure("登录连续失败")
+    # 只走 vpush webhook 一条，不再叠加 Bark
+    assert len(sent) == 1
+    body = json.loads(sent[0]["content"])
+    assert "登录连续失败" in body["text"] and body["title"] == "MX 换 token 失败"
+
 
 def test_notify_failure_bark_and_private_rejected(monkeypatch):
     import app.url_safety as url_safety_mod

@@ -26,6 +26,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -33,6 +35,7 @@ import sys
 import time
 from pathlib import Path
 from urllib.parse import quote
+import base64
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -150,12 +153,50 @@ def ai_ocr(image_bytes: bytes) -> str | None:
     return ai_read_captcha(image_bytes)
 
 
+def notify_vpush(title: str, text: str) -> None:
+    """把换 token 结果回调到 vpush 的 KOL webhook（签名协议与飞书同款：
+    sign = base64(hmac_sha256(key="{ts}\\n{secret}))，timestamp+sign 放 body）。
+
+    端点与密钥来自 MX_NOTIFY_WEBHOOK_URL / MX_NOTIFY_WEBHOOK_SECRET（Jenkins
+    凭据注入）；URL 走 app.url_safety 安全体（仅公网、IP 固定、不跟随重定向）。
+    未配置或失败一律静默——构建结果另有 Jenkins 标红兜底。
+    """
+    url = (os.environ.get("MX_NOTIFY_WEBHOOK_URL") or "").strip()
+    secret = (os.environ.get("MX_NOTIFY_WEBHOOK_SECRET") or "").strip()
+    if not url:
+        return
+    try:
+        import httpx
+
+        from app.url_safety import is_safe_http_url, safe_request_limited
+
+        if not is_safe_http_url(url):
+            return
+        ts = int(time.time())
+        sign = base64.b64encode(
+            hmac.new(f"{ts}\n{secret}".encode(), digestmod=hashlib.sha256).digest()
+        ).decode()
+        body = json.dumps({"title": title, "text": text, "timestamp": ts, "sign": sign},
+                           ensure_ascii=False).encode()
+        with httpx.Client() as client:
+            safe_request_limited(client, "POST", url, max_bytes=65536,
+                                 headers={"Content-Type": "application/json"},
+                                 content=body, timeout=15.0, follow_redirects=False)
+    except Exception:  # noqa: BLE001 - 回调尽力而为
+        pass
+
+
 def notify_failure(summary: str) -> None:
-    """换 token 失败时尽力通知（Bark / 飞书 webhook，配置自环境变量/.env）。
+    """换 token 失败时尽力通知：优先 vpush KOL webhook（MX_NOTIFY_*），
+    未配置时回落 Bark / 飞书 webhook（配置自环境变量/.env）。
 
     webhook 地址走 app.url_safety 安全体：仅公网 http(s)、拒绝内网/环回、
     IP 固定、不跟随重定向；任何失败静默——退出码非 0 已能让 Jenkins 标红。
     """
+    if (os.environ.get("MX_NOTIFY_WEBHOOK_URL") or "").strip():
+        notify_vpush("MX 换 token 失败",
+                     f"{summary}——请人工执行 python scripts/mx_login.py 兜底")
+        return
     try:
         import httpx
 
@@ -444,10 +485,22 @@ def main(argv=None) -> int:
                 ws_url=(ws_url_of(switch_base) if switch_base else None),
             )
             print(f"✓ 已通过管理 API 写回（键：{sorted(body)}），服务已热应用")
+            notify_vpush(
+                "MX TOKEN 已更换",
+                f"新 TOKEN {mask(new_token)} 已写回生产并热应用"
+                + (f"，api_base 切换为 {switch_base}" if switch_base else "")
+                + f"（hosturl：{result['hosturl'] or '未下发'}）",
+            )
         elif mode == "config":
             path = write_local_config(new_token, switch_base,
                                       ws_url_of(switch_base) if switch_base else None)
             print(f"✓ 已直写 {path}；运行中的服务不热应用——重启或在后台点「登录」")
+            notify_vpush(
+                "MX TOKEN 已更换",
+                f"新 TOKEN {mask(new_token)} 已直写 {path}"
+                + (f"，api_base 切换为 {switch_base}" if switch_base else "")
+                + "；需重启或后台点「登录」热应用",
+            )
         else:
             print(f"\nTOKEN（已复制到剪贴板可直接粘贴）：\n{new_token}\n")
             copy_to_clipboard(new_token)
