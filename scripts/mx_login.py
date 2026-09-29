@@ -414,6 +414,7 @@ def main(argv=None) -> int:
     password = os.environ.get("MX_PASSWORD", "")
     if not account or not password:
         print("缺少 MX_ACCOUNT / MX_PASSWORD（写入根目录 .env，参考 .env.example）")
+        notify_failure("缺少 MX_ACCOUNT / MX_PASSWORD 凭据（Jenkins 凭据或 .env 未配置）")
         client.close()
         return 2
 
