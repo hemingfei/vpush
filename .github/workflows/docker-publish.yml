@@ -2,9 +2,13 @@ name: Publish Docker image
 
 # 触发模型：提交不等于发版。
 # - push（main / hmf）：只跑测试门禁，不构建镜像、不部署；
-# - 发版（构建 :hmf 镜像 + 触发 Jenkins 部署）：手动触发——Actions 页
-#   「Run workflow」选 hmf，或 `gh workflow run -R hemingfei/vpush docker-publish.yml --ref hmf`；
-# - tag v*：照旧发正式版本镜像（amd64 + arm64 清单），不碰 :hmf 与部署。
+# - 发版（构建 :hmf 镜像 + 触发 Jenkins 部署）两个入口任选：
+#   1) 手动——Actions 页「Run workflow」选 hmf，或
+#      `gh workflow run -R hemingfei/vpush docker-publish.yml --ref hmf`；
+#   2) 推 v* tag——tag 打在哪个提交就构建部署哪个提交，所以发版 tag 必须打在
+#      hmf 提交上；upstream 带来的 main 侧 tag 不要 push 上来
+#      （那会把没有 hmf 口径的代码部署到现网）；
+# - 推 tag 时同时照旧发正式版本镜像（amd64 + arm64 清单）。
 on:
   push:
     branches: ["main", "hmf"]
@@ -283,9 +287,9 @@ jobs:
               "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:${GITHUB_REF_NAME}-arm64"
           fi
 
-  # hmf 发版：只由手动触发（workflow_dispatch）执行，push 不再构建——
-  # 提交只跑上面的测试门禁，攒够改动再统一发版。
-  # 复用 test 作业做门禁（dispatch 时 changes 车道全开 = 全量测试），通过后构建
+  # hmf 发版：push 不再构建（提交只跑上面的测试门禁），只在两个发版入口执行——
+  # 手动 dispatch 或推 v* tag（入口与约束见文件头注释）。
+  # 复用 test 作业做门禁（dispatch 与 tag 时 changes 车道全开 = 全量测试），通过后构建
   # amd64 单架构镜像，固定推 :hmf tag（Docker Hub 用仓库级
   # DOCKERHUB_USERNAME/TOKEN，即本人账号），不动版本 tag / latest，arm64 与
   # 多架构清单仍只保留给 v* tag 正式发布；
@@ -299,9 +303,11 @@ jobs:
     # 表达式不求值直接跳过、镜像不构建（5696412 只加 needs.test.result 仍被跳过，实测）。
     # !cancelled() 打破 skipped 传播；test 汇总作业已把 failure/cancelled 兜成红，
     # 这里只需再卡 needs.test.result == 'success'。
-    # 只认手动触发：dispatch 在 hmf 分支上发起时 github.ref 恰为 refs/heads/hmf，
-    # push（回归「提交即构建」）与 tag（v* 正式发版口径）都进不来。
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/hmf' && needs.test.result == 'success' }}
+    # 发版入口二选一（详见文件头注释）：push 了 v* tag（tag 事件的 event_name 也是
+    # push，只能靠 ref 前缀识别），或手动 dispatch 且选 hmf 分支（dispatch 若选了
+    # tag ref 会命中 tag 前缀，等价于重发该历史版本）。分支 push 两条都不满足，
+    # 永不构建。
+    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/hmf')) && needs.test.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
