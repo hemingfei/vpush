@@ -1090,6 +1090,65 @@ def test_update_mx_config_endpoint_hot_applies(monkeypatch):
     assert "mx" not in sched.fetchers
 
 
+def test_update_mx_config_endpoint_hot_apply_false_saves_only(monkeypatch):
+    """PUT /admin/sources/mx 带 hot_apply=false：配置落盘但不热应用（无人值守
+    回填口径——写回后由 Jenkins 重启容器冷启动生效，避免写回链路立刻登录）。"""
+    import os
+
+    import yaml
+    from fastapi.testclient import TestClient
+
+    import app.scheduler as sched_mod
+    from app.config import Config
+    from app.main import create_app
+
+    tmp = tempfile.mkdtemp()
+    config_path = Path(tmp) / "config.yaml"
+    monkeypatch.setenv("CONFIG_PATH", str(config_path))
+    monkeypatch.delenv("DAV_UI_ONLY", raising=False)
+
+    calls = []
+
+    async def spy(self, mx_config):
+        calls.append((self, mx_config))
+
+    monkeypatch.setattr(sched_mod.Scheduler, "apply_mx_config", spy)
+
+    app = create_app(config=Config(), db_path=Path(tmp) / "t.db")
+    client = TestClient(app)
+
+    code = "TESTMX02"
+    client.app.state.db.add_register_code(code)
+    data = client.post(
+        "/api/auth/register",
+        json={"username": "mxdefer", "password": "secret1234", "code": code},
+    ).json()
+    client.app.state.db.update_user(data["user"]["id"], is_admin=True)
+    headers = {"Authorization": f"Bearer {data['token']}"}
+
+    resp = client.put(
+        "/api/admin/sources/mx",
+        json={"enabled": True, "token": "tok-defer", "hot_apply": False},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    # 配置落盘（token 更新时间照常刷新），但热应用一次都没被调用
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["sources"]["mx"]["token"] == "tok-defer"
+    assert calls == []
+
+    # 对照：同端点不带 hot_apply=false 仍走热应用（spy 接线有效，跳过只因 flag）
+    resp = client.put(
+        "/api/admin/sources/mx",
+        json={"enabled": True, "token": "tok-hot"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(calls) == 1
+    assert calls[0][1].token == "tok-hot"
+
+
 def test_mx_token_updated_at_recorded_only_on_change(monkeypatch):
     """MX 设置页展示的 Token 更新时间：仅 token 实际变化才刷新，其余字段保存不影响。"""
     import time as time_mod

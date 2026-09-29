@@ -49,7 +49,7 @@ python scripts/mx_login.py --captcha-key <key> --code <答案>   # 用该答案�
 
 | 模式 | 行为 | 适用 |
 |---|---|---|
-| `api`（auto 默认尝试） | `POST /api/auth/login` + `PUT /api/admin/sources/mx`——与后台手粘**完全同一条热应用链路**（触发 `on_mx_config_changed` 重建抓取器/重启 WS） | 生产开了 Turnstile 时会被 403，回落 print |
+| `api`（auto 默认尝试） | `POST /api/auth/login` + `PUT /api/admin/sources/mx`——与后台手粘**完全同一条热应用链路**（触发 `on_mx_config_changed` 重建抓取器/重启 WS）；`--no-hot-apply` 时 body 带 `hot_apply=false` 只保存不热应用，由调用方重启容器生效 | 生产开了 Turnstile 时会被 403，回落 print |
 | `config` | 直写本机 `config.yaml` + DB `mx_token_updated_at` | 与服务同机且不便走 API；**不热应用**，需重启或后台点「登录」 |
 | `print` | 打印完整 token（Windows 顺带复制剪贴板） | 兜底，手粘后台 |
 
@@ -82,11 +82,21 @@ python scripts/mx_login.py --captcha-key <key> --code <答案>   # 用该答案�
 
 架构：Jenkins 定时触发（每 2 天）→ `docker run python:3.12-slim` 内
 `pip install -r requirements.txt` → `python scripts/mx_login.py --ai-ocr
---origin https://mx.2026.foodtop1.com` → SVG 验证码经 resvg-py 栅格化 →
-视觉模型（OpenAI 兼容，`MX_VISION_*` 三键，须具备视觉能力）识码 → 登录 →
-探针校验 → `VPUSH_URL` 管理 API 自动写回（热应用）。失败（识码连续错/接口
-异常）退出码非 0，Jenkins 标红；配了 `BARK_*`/`FEISHU_WEBHOOK_URL` 时脚本
-还会直接推告警（webhook 走 `app.url_safety` 安全体，仅公网地址）。
+--no-hot-apply --origin https://mx.2026.foodtop1.com` → SVG 验证码经 resvg-py
+栅格化 → 视觉模型（OpenAI 兼容，`MX_VISION_*` 三键，须具备视觉能力）识码 →
+登录 → 探针校验 → `VPUSH_URL` 管理 API 自动写回（`--no-hot-apply`：只保存
+不热应用）→ 写回成功后流水线在宿主机 `docker restart vpush` 冷启动生效。
+失败（识码连续错/接口异常）退出码非 0，Jenkins 标红；配了
+`BARK_*`/`FEISHU_WEBHOOK_URL` 时脚本还会直接推告警（webhook 走
+`app.url_safety` 安全体，仅公网地址）。
+
+**写回后重启而非热应用（2026-09-29 起）**：无人值守写回带 `hot_apply=false`
+（端点默认热应用，仅脚本显式关闭）——vpush 只保存新 token，随后流水线在
+宿主机 `docker restart vpush`（容器名以 `docker ps` 为准）冷启动生效。
+重启落在工作日 08:00-22:00 且 TOKEN 未超 49h 时效门槛时，窗口循环 30s 内
+自动补登一次（官方冷启动序列 + 新 token）；周末/超龄则等下个运行时段。
+若重启步骤失败：新 token 已落盘但运行中的服务仍持旧 token（内存态），
+下次服务重启生效；急用可到后台重存一次配置立即热应用，或手动「登录」。
 
 凭据全部放 Jenkins 凭据库（Secret Text），仓库与聊天不落任何凭据：
 `mx-account`、`mx-password`、`mx-vision-api-base`、`mx-vision-api-key`、
@@ -108,7 +118,10 @@ Jenkins 凭据注入后即推到订阅了该 KOL 的手机。未配置时失败�
 
 基础设施现状（2026-09-29 搭建，jenkins.hegame.tech）：任务 `vpush-mx-token`
 照本 Jenkins 家规实现——流水线内 `ssh root@172.22.0.1` 到宿主机，curl 拉
-仓库 tarball 后 `docker run python:3.12-slim` 执行；凭据由 Jenkins
+仓库 tarball 后 `docker run python:3.12-slim` 执行；随「写回后重启」口径，
+任务需同步两处：脚本命令追加 `--no-hot-apply`，`docker run` 退出码 0 后
+同一 ssh 会话追加 `docker restart vpush`（重启失败跟随该 stage 标红，
+token 已落盘不丢）。凭据由 Jenkins
 credentials() 注入、经 stdin 写宿主机临时 env-file 交给
 `docker run --env-file`（不落在进程命令行），跑完即删。**不要**在流水线
 environment 块里覆写 PATH 指向 /var/jenkins_home/bin 再直接调 docker——

@@ -6221,12 +6221,18 @@ def create_api_router(
             save_config(config)
             logger.info("Config saved successfully")
 
-            # 热应用到运行中的调度器：重建抓取器、重启房间同步与 WebSocket
-            if on_mx_config_changed is not None:
-                try:
-                    await on_mx_config_changed(config.sources.mx)
-                except Exception:
-                    logger.exception("MX 配置热应用失败（配置已保存，重启后生效）")
+            # 热应用到运行中的调度器：重建抓取器、重启房间同步与 WebSocket。
+            # body 带 hot_apply=false 时只保存不热应用（无人值守回填用：写回后由
+            # Jenkins 重启容器冷启动生效，避免写回链路立刻登录；重启失败时运行中的
+            # 服务仍持旧 token，后台重存一次配置可立即热应用）
+            if bool(raw_body.get("hot_apply", True)):
+                if on_mx_config_changed is not None:
+                    try:
+                        await on_mx_config_changed(config.sources.mx)
+                    except Exception:
+                        logger.exception("MX 配置热应用失败（配置已保存，重启后生效）")
+            else:
+                logger.info("MX 配置已保存（hot_apply=false，跳过热应用，待重启生效）")
 
             _audit(admin, "update_mx_config", "", f"enabled={raw_body.get('enabled', False)}")
             return {"ok": True}

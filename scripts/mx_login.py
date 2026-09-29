@@ -286,8 +286,11 @@ def _push_detail(exc_response) -> str:
 
 def push_via_api(base_url: str, admin_user: str, admin_password: str,
                  new_token: str, api_base: str | None = None,
-                 ws_url: str | None = None, transport=None) -> dict:
-    """登录 vpush 管理 API 并 PUT 新 token——与后台手粘完全同一条热应用链路。
+                 ws_url: str | None = None, transport=None,
+                 hot_apply: bool = True) -> dict:
+    """登录 vpush 管理 API 并 PUT 新 token。默认与后台手粘完全同一条热应用链路；
+    hot_apply=False 时 body 带 hot_apply=false 只保存不热应用——由调用方重启
+    容器冷启动生效（Jenkins 无人值守回填口径）。
     VPUSH_URL 须为公网 http(s) 地址（安全体拒绝内网/环回）；transport 供测试注入。"""
     from app.url_safety import is_safe_http_url
 
@@ -314,6 +317,8 @@ def push_via_api(base_url: str, admin_user: str, admin_password: str,
         if api_base and ws_url:
             body["api_base"] = api_base
             body["ws_url"] = ws_url
+        if not hot_apply:
+            body["hot_apply"] = False
         resp = http.put("/api/admin/sources/mx", headers=headers, json=body)
         if resp.status_code != 200:
             raise MXLoginError(f"写入 MX 配置失败：{_push_detail(resp)}")
@@ -376,6 +381,9 @@ def main(argv=None) -> int:
                         help="无人值守：视觉模型自动识别验证码"
                              "（需 MX_VISION_* 或 LLM_* 指向具备视觉能力的模型）")
     parser.add_argument("--attempts", type=int, default=3, help="验证码重试次数（默认 3）")
+    parser.add_argument("--no-hot-apply", action="store_true",
+                        help="写回只保存不热应用（Jenkins 无人值守用：写回后由流水线"
+                             "重启 vpush 容器冷启动生效，避免写回链路立刻登录）")
     parser.add_argument("--show-captcha", action="store_true",
                         help="只拉一张验证码并出图/题面与 captcha-key（配合两段式），无需账密")
     parser.add_argument("--captcha-key", default=None,
@@ -484,11 +492,16 @@ def main(argv=None) -> int:
                 new_token,
                 api_base=switch_base,
                 ws_url=(ws_url_of(switch_base) if switch_base else None),
+                hot_apply=not args.no_hot_apply,
             )
-            print(f"✓ 已通过管理 API 写回（键：{sorted(body)}），服务已热应用")
+            print(f"✓ 已通过管理 API 写回（键：{sorted(body)}），"
+                  + ("服务已热应用" if not args.no_hot_apply
+                     else "未热应用，待容器重启生效"))
             notify_vpush(
                 "MX TOKEN 已更换",
-                f"新 TOKEN {mask(new_token)} 已写回生产并热应用"
+                f"新 TOKEN {mask(new_token)} 已写回生产"
+                + ("并热应用" if not args.no_hot_apply
+                   else "（未热应用，容器重启后冷启动生效）")
                 + (f"，api_base 切换为 {switch_base}" if switch_base else "")
                 + f"（hosturl：{result['hosturl'] or '未下发'}）",
             )

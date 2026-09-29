@@ -292,6 +292,60 @@ def test_push_via_api_includes_switched_base(monkeypatch):
     assert body["ws_url"] == "wss://alt.test/business-api/5"
 
 
+def test_push_via_api_hot_apply_false_marks_body(monkeypatch):
+    """hot_apply=False：PUT body 带 hot_apply=false（无人值守回填——保存后由
+    Jenkins 重启容器生效），默认不带该键（与后台手粘同一条热应用链路）。"""
+    import httpx
+
+    _skip_url_gate(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth/login":
+            return httpx.Response(200, json={"token": "bearer-t"})
+        return httpx.Response(200, json={"ok": True})
+
+    body = mx_login_script.push_via_api(
+        "https://vpush.test", "admin", "pw", "tok",
+        transport=httpx.MockTransport(handler), hot_apply=False,
+    )
+    assert body["hot_apply"] is False
+
+
+def test_main_api_write_no_hot_apply_flag(monkeypatch, capsys):
+    """--no-hot-apply：api 写回落 hot_apply=False，输出与回调都说明待容器重启生效。"""
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+    monkeypatch.setenv("MX_ACCOUNT", "acct")
+    monkeypatch.setenv("MX_PASSWORD", "pw")
+    monkeypatch.setenv("VPUSH_URL", "https://vpush.test")
+    monkeypatch.setenv("VPUSH_ADMIN_USER", "admin")
+    monkeypatch.setenv("VPUSH_ADMIN_PASSWORD", "vp-pw")
+    monkeypatch.delenv("MX_LOGIN_ORIGIN", raising=False)
+    fake = _fake_client_for_main([
+        {"code": 200, "token": "tok-defer", "hosturl": "", "info": None},
+    ])
+    monkeypatch.setattr(mx_login_script, "MXClient", lambda *a, **k: fake)
+    monkeypatch.setattr(mx_login_script, "probe_token", lambda *a, **k: True)
+    seen = {}
+
+    def fake_push(base_url, user, pw, token, **kwargs):
+        seen["hot_apply"] = kwargs.get("hot_apply")
+        return {"token": token, "hot_apply": False}
+
+    monkeypatch.setattr(mx_login_script, "push_via_api", fake_push)
+    monkeypatch.setattr(mx_login_script, "notify_vpush",
+                        lambda title, text: seen.setdefault("notify", (title, text)))
+
+    rc = mx_login_script.main(
+        ["--captcha-key", "kk-1", "--code", "9x6", "--write", "api", "--no-hot-apply"]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert seen["hot_apply"] is False
+    assert "待容器重启生效" in out
+    assert "容器重启后冷启动生效" in seen["notify"][1]
+    assert "未热应用" in seen["notify"][1]
+
+
 def test_push_via_api_turnstile_hint(monkeypatch):
     import httpx
 
