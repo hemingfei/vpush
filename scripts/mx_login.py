@@ -47,6 +47,10 @@ from app.fetchers.mx.login import (  # noqa: E402
 
 DEFAULT_API_BASE = "https://mx.2026.naaifu.cn/business-api/5"
 
+# 登录失败 msg 里的「致命」特征：换验证码重试毫无意义，只会积累连续失败
+# 登录的风控信号——命中即熔断本轮，剩余次数不烧，等人工处置
+_FATAL_LOGIN_MSG_MARKERS = ("密码", "账号", "锁定", "冻结", "封禁", "禁止", "不存在")
+
 
 def mask(token: str) -> str:
     return f"{token[:4]}…{token[-4:]}" if len(token) > 12 else "***"
@@ -221,8 +225,12 @@ def run_login_flow(client, account: str, password: str, *, attempts: int = 3,
             return login(client, account, password, cap["key"], code)
         except MXLoginError as exc:
             last_err = str(exc)
+            if any(marker in last_err for marker in _FATAL_LOGIN_MSG_MARKERS):
+                raise MXLoginError(
+                    f"{last_err}（致命错误，熔断本轮重试——请人工检查账号状态后重跑）"
+                ) from None
             present(f"失败：{last_err}，换一张验证码重试")
-    raise MXLoginError(f"连续 {attempts} 次未成功：{last_err or '未输入验证码'}")
+    raise MXLoginError(f"连续 {attempts} 次未成功：{last_err or '未识别出验证码'}")
 
 
 # ---- token 写回 ----

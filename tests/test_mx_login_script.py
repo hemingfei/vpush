@@ -183,6 +183,27 @@ def test_run_login_flow_exhausts_attempts():
     assert "连续 3 次未成功" in str(exc_info.value)
 
 
+def test_run_login_flow_fatal_error_breaks_retry():
+    """熔断：密码/账号类致命错误立即中止，不烧剩余重试次数
+    （换码重试毫无意义，只会积累连续失败登录的风控信号）。"""
+    payloads = [
+        {"code": 200, "captcha": "data:image/png;base64," + _b64_png(), "key": "k1"},
+        {"code": 400, "msg": "账号或密码错误"},
+        # 若未熔断会继续消费这两个 payload——断言用
+        {"code": 200, "captcha": "data:image/png;base64," + _b64_png(), "key": "k2"},
+        {"code": 200, "token": "should-not-reach", "hosturl": "", "info": None},
+    ]
+    client, session = _client(payloads)
+    with pytest.raises(MXLoginError) as exc_info:
+        mx_login_script.run_login_flow(
+            client, "acct", "pw", attempts=3,
+            prompt=lambda _p: "x", present=lambda *_a: None,
+        )
+    assert "熔断" in str(exc_info.value)
+    # 只发生了一轮（1 次拉码 + 1 次登录），重试机会未消耗
+    assert len(session.requests) == 2
+
+
 def test_run_login_flow_text_captcha_prompts_answer():
     payloads = [
         {"code": 200, "captcha": "3+5=?", "key": "k9"},
