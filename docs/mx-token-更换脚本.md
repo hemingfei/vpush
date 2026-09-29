@@ -106,6 +106,7 @@ credentials() 注入、经 stdin 写宿主机临时 env-file 交给
 `docker run --env-file`（不落在进程命令行），跑完即删。**不要**在流水线
 environment 块里覆写 PATH 指向 /var/jenkins_home/bin 再直接调 docker——
 实测该写法会导致构建启动即消亡（nextBuildNumber 递增但无构建目录）。
-定时 `H 9 1,3,5,...,29 * *`（隔天 9 点），构建保留 30 次。8 个 Secret Text
+定时 `H(30-59) 8 1,3,5,...,29 * *`（隔天 8:30–9:00 之间随机一分钟，
+`H(30-59)` 按任务名哈希取定值——避开整点的机器人特征），构建保留 30 次。8 个 Secret Text
 凭据：mx-account / mx-password / mx-vision-api-{base,key} / mx-vision-model /
 vpush-{url,admin-user,admin-password}。
