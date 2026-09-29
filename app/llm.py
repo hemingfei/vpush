@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
@@ -288,6 +289,22 @@ def _chat(
     finally:
         if owns_client:
             client.close()
+
+
+def vision_read_text(prompt: str, image_png: bytes, llm_config, timeout: float = 60) -> str | None:
+    """视觉模型读图（现用于 MX 验证码识别）：OpenAI 兼容 image_url 消息走 _chat。
+
+    llm_config 需 api_key/api_base/model；user_supplied=True 时复用
+    safe_request_limited 安全体（公网端点校验、IP 固定、响应体受限）。
+    """
+    if not image_png:
+        return None
+    b64 = base64.b64encode(image_png).decode()
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+    ]}]
+    return _chat(llm_config, messages, max_tokens=20, temperature=0, timeout=timeout)
 
 
 def list_models(llm_config) -> list[str] | None:

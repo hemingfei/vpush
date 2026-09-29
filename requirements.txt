@@ -8,6 +8,8 @@ pypdf>=5
 qrcode==8.0
 pypng==0.20220715.0
 curl_cffi==0.16.0
+# MX 验证码 SVG 栅格化（scripts/mx_login.py --ai-ocr 需要；纯 wheel 无系统依赖）
+resvg-py==0.5.0
 python-multipart==0.0.20
 python-socketio[asyncio-client]==5.11.0
 lzstring==1.0.4

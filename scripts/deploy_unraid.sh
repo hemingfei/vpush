@@ -12,6 +12,7 @@ cd "$(git rev-parse --show-toplevel)"
 runtime_files() {
   git ls-files | awk '
     /^app\// || /^waf-bot\// || /^deploy\// || /^scripts\/backup/ ||
+    /^scripts\/mx_login\.py$/ ||
     $0 == "Dockerfile" || $0 == "requirements.txt" || $0 == ".dockerignore" ||
     $0 == "docker-compose.unraid.yml" || $0 == "README.md" { print }
   '
