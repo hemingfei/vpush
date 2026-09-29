@@ -99,9 +99,13 @@ python scripts/mx_login.py --captcha-key <key> --code <答案>   # 用该答案�
 - 视觉模型有误读率（实测约一成），单次失败属正常，靠重试与告警兜底；
 - 登录请求与现网同一 Chrome impersonate 人格与头形态（见第四节）。
 
-基础设施现状（2026-09-29 搭建）：Jenkins 容器（VPS 106.15.153.53，
-jenkins.hegame.tech）本身无 python/docker CLI；docker CLI 静态二进制放
-`/var/jenkins_home/bin/docker`（bind 卷内，随 jenkins_home 持久化），
-流水线内 `docker run` 挂载 workspace 跑 python:3.12-slim。sock 已挂载。
-若 Jenkins 容器重建，只需确认 `/root/workspace/jenkins/jenkins_home/bin/docker`
-仍在（bind 卷持久）。
+基础设施现状（2026-09-29 搭建，jenkins.hegame.tech）：任务 `vpush-mx-token`
+照本 Jenkins 家规实现——流水线内 `ssh root@172.22.0.1` 到宿主机，curl 拉
+仓库 tarball 后 `docker run python:3.12-slim` 执行；凭据由 Jenkins
+credentials() 注入、经 stdin 写宿主机临时 env-file 交给
+`docker run --env-file`（不落在进程命令行），跑完即删。**不要**在流水线
+environment 块里覆写 PATH 指向 /var/jenkins_home/bin 再直接调 docker——
+实测该写法会导致构建启动即消亡（nextBuildNumber 递增但无构建目录）。
+定时 `H 9 1,3,5,...,29 * *`（隔天 9 点），构建保留 30 次。8 个 Secret Text
+凭据：mx-account / mx-password / mx-vision-api-{base,key} / mx-vision-model /
+vpush-{url,admin-user,admin-password}。
