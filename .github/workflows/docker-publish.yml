@@ -1,9 +1,15 @@
 name: Publish Docker image
 
+# 触发模型：提交不等于发版。
+# - push（main / hmf）：只跑测试门禁，不构建镜像、不部署；
+# - 发版（构建 :hmf 镜像 + 触发 Jenkins 部署）：手动触发——Actions 页
+#   「Run workflow」选 hmf，或 `gh workflow run -R hemingfei/vpush docker-publish.yml --ref hmf`；
+# - tag v*：照旧发正式版本镜像（amd64 + arm64 清单），不碰 :hmf 与部署。
 on:
   push:
     branches: ["main", "hmf"]
     tags: ["v*"]
+  workflow_dispatch:
 
 env:
   IMAGE_NAME: vpush
@@ -277,9 +283,12 @@ jobs:
               "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:${GITHUB_REF_NAME}-arm64"
           fi
 
-  # hmf 开发分支：每次 push 复用 test 作业做门禁后，构建 amd64 单架构开发镜像，
-  # 固定推 :hmf tag（Docker Hub 用仓库级 DOCKERHUB_USERNAME/TOKEN，即本人账号），
-  # 不动版本 tag / latest，arm64 与多架构清单仍只保留给 v* tag 正式发布；
+  # hmf 发版：只由手动触发（workflow_dispatch）执行，push 不再构建——
+  # 提交只跑上面的测试门禁，攒够改动再统一发版。
+  # 复用 test 作业做门禁（dispatch 时 changes 车道全开 = 全量测试），通过后构建
+  # amd64 单架构镜像，固定推 :hmf tag（Docker Hub 用仓库级
+  # DOCKERHUB_USERNAME/TOKEN，即本人账号），不动版本 tag / latest，arm64 与
+  # 多架构清单仍只保留给 v* tag 正式发布；
   # 推送成功后触发 Jenkins 把 VPS 上的 :hmf 容器滚动到新镜像。
   # 依赖 secrets：JENKINS_URL（基地址，支持 https——强烈建议套 TLS，Basic Auth 不过明文）、
   # JENKINS_TOKEN（openclaw 账号 API Token）、VPUSH_WEBHOOK_URL/SECRET（系统通知预告）。
@@ -290,7 +299,9 @@ jobs:
     # 表达式不求值直接跳过、镜像不构建（5696412 只加 needs.test.result 仍被跳过，实测）。
     # !cancelled() 打破 skipped 传播；test 汇总作业已把 failure/cancelled 兜成红，
     # 这里只需再卡 needs.test.result == 'success'。
-    if: ${{ !cancelled() && github.ref == 'refs/heads/hmf' && needs.test.result == 'success' }}
+    # 只认手动触发：dispatch 在 hmf 分支上发起时 github.ref 恰为 refs/heads/hmf，
+    # push（回归「提交即构建」）与 tag（v* 正式发版口径）都进不来。
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/hmf' && needs.test.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -400,8 +411,8 @@ jobs:
           fi
 
           echo "==> deploy queued, waiting to start..."
-          # 排队等待与部署预算同量级（~10 分钟）：hmf 每 push 都部署，上一轮
-          # 未结束时新 build 会排队；等不到就取消排队项再红叉，保证
+          # 排队等待与部署预算同量级（~10 分钟）：两次发版挨得近时，上一轮
+          # 未结束新 build 会排队；等不到就取消排队项再红叉，保证
           # 「Actions 报失败 = 真的没部署」，避免部署脱管照跑。
           BUILD_URL=""
           for i in $(seq 1 300); do
