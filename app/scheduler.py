@@ -2656,6 +2656,11 @@ class Scheduler:
     # 可能整夜在线；按「最近一次会话启动时刻」滚动兜底，30s 循环里超时即强断
     _MX_MAX_SESSION_HOURS = 4
 
+    # MX TOKEN 时效门槛（秒）：超过即系统提醒更换，且重启不自动登录。平台并不
+    # 在 48h 硬性过期（2 天轮换是防风控卫生要求，见 docs/mx-token-更换脚本.md），
+    # 2026-09-29 起放宽到 49h 才提示，避免贴线误报；提醒与重启门禁共用本口径
+    _MX_TOKEN_MAX_AGE_SECONDS = 49 * 3600
+
     def _mx_windows_today(self) -> list:
         """取（必要时生成）当天的运行窗口与兜底预约时刻，生成后当天固定。"""
         today = datetime.now(CN_TZ).date()
@@ -2667,7 +2672,8 @@ class Scheduler:
             # 不自动续连，只能管理员「登录」手动拉起，或等下一个未到点的窗口。
             # 例外（2026-09-16 起）：工作日 08:00-22:00 内重启允许自动登录——
             # 正处的窗口重新武装（下个 tick 到点补登）；落在窗口间隙时置一次性
-            # 补登标记，窗口循环立即拉起。前提是 TOKEN 在 2 天时效内：超龄
+            # 补登标记，窗口循环立即拉起。前提是 TOKEN 未超时效门槛
+            # （_MX_TOKEN_MAX_AGE_SECONDS）：超龄
             # TOKEN 不自动登录（也不重武装），并发系统消息提醒管理员更换
             token_fresh = self._mx_token_age_fresh()
             restart_login = restart_login_allowed(now) and token_fresh
@@ -3092,11 +3098,12 @@ class Scheduler:
             )
 
     def _mx_token_age_fresh(self) -> bool:
-        """MX TOKEN 是否在 2 天时效内（未知年龄按过期处理，缺省保守）。
+        """MX TOKEN 是否在时效门槛内（未知年龄按过期处理，缺省保守）。
 
-        与 _mx_check_token_age 的时效口径一致：超过 2 天即视为过期。重启自动
-        登录以此为准绳——超龄 TOKEN 不自动登录，避免拿大概率已失效的凭据
-        撞出鉴权失败流量（真实失效由熔断链路另行兜底）。
+        与 _mx_check_token_age 的时效口径一致（_MX_TOKEN_MAX_AGE_SECONDS，
+        49 小时）：超龄即视为过期。重启自动登录以此为准绳——超龄 TOKEN 不
+        自动登录，避免拿大概率已失效的凭据撞出鉴权失败流量（真实失效由熔断
+        链路另行兜底）。
         时间戳缺失（换库/恢复备份/settings 被清）说明 TOKEN 年龄未知：按
         过期处理并提醒管理员换 TOKEN，不允许「未知 = 新鲜」绕过门禁。
         """
@@ -3106,10 +3113,10 @@ class Scheduler:
             updated = 0
         if not updated:
             return False
-        return int(time.time()) - updated < 2 * 86400
+        return int(time.time()) - updated < self._MX_TOKEN_MAX_AGE_SECONDS
 
     def _mx_check_token_age(self):
-        """TOKEN 时效检查：超过 2 天未更换 → V平台 KOL 提醒手动更换（每轮一次）。"""
+        """TOKEN 时效检查：超过时效门槛（49 小时）未更换 → V平台 KOL 提醒手动更换（每轮一次）。"""
         now_ts = int(time.time())
         try:
             updated = int(self.db.get_setting("mx_token_updated_at") or 0)
@@ -3119,7 +3126,7 @@ class Scheduler:
             # 首次运行：以当前时间作为 TOKEN 起用时间
             self.db.set_setting("mx_token_updated_at", str(now_ts))
             return
-        if now_ts - updated < 2 * 86400:
+        if now_ts - updated < self._MX_TOKEN_MAX_AGE_SECONDS:
             return
         if not _cooldown_ok(self.db, "mx_token_reminder", 2 * 86400):
             return
@@ -3431,7 +3438,7 @@ class Scheduler:
 
         self.fetchers["mx"] = MxFetcher(mx_config, self.db)
         if (mx_config.token or "") != (old_token or ""):
-            # TOKEN 更换：重置 2 天时效计时（仅 token 实际变化才刷新更新时间）
+            # TOKEN 更换：重置时效计时（仅 token 实际变化才刷新更新时间）
             self.db.set_setting("mx_token_updated_at", str(int(time.time())))
             logger.info("MX TOKEN 已更换，重置时效计时")
         await self._init_mx()

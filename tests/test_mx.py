@@ -1732,8 +1732,9 @@ def test_publish_mx_error_token_expired_sets_circuit_breaker():
     scheduler.stop()
 
 
-def test_token_age_reminder_after_two_days():
-    """TOKEN 超过 2 天 → 系统通知 KOL 提醒更换，且节流期内不重复提醒。"""
+def test_token_age_reminder_after_49_hours():
+    """TOKEN 超过 49 小时（2026-09-29 起，原 48 小时）→ 系统通知 KOL 提醒更换，
+    且节流期内不重复提醒。"""
     import time as timelib
 
     from app.scheduler import Scheduler
@@ -1745,6 +1746,11 @@ def test_token_age_reminder_after_two_days():
     scheduler._mx_check_token_age()
     kol = db.get_kol_by_external("system", "system_alert")
     assert kol is None
+
+    # 48 小时（旧门槛）：不提醒——门槛已放宽到 49 小时
+    db.set_setting("mx_token_updated_at", str(int(timelib.time()) - 48 * 3600 - 60))
+    scheduler._mx_check_token_age()
+    assert db.get_kol_by_external("system", "system_alert") is None
 
     # 回填 3 天前的 TOKEN 起用时间：应发提醒
     db.set_setting("mx_token_updated_at", str(int(timelib.time()) - 3 * 86400))
@@ -2796,6 +2802,15 @@ def test_restart_login_gated_by_token_age(monkeypatch):
     scheduler._mx_windows_today()
     assert scheduler._mx_armed == [False, False, True]
     assert scheduler._mx_restart_login_pending is False
+
+    # TOKEN 48.5 小时前更新（旧 48h 门槛下已超龄）：门槛放宽到 49h 后仍算新鲜，
+    # 当前段重新武装放行，且不新增重启告警
+    db.set_setting("mx_token_updated_at", str(int(timelib.time()) - 48 * 3600 - 1800))
+    scheduler._mx_window_date = None
+    scheduler._mx_windows_today()
+    assert scheduler._mx_armed == [False, True, True]
+    assert scheduler._mx_restart_login_pending is False
+    assert len([p for p in alert_posts() if "未自动登录" in p["content"]]) == 1
 
     # TOKEN 新鲜（1 天前更新）：当前段重新武装放行，且不新增重启告警
     db.set_setting("mx_token_updated_at", str(int(timelib.time()) - 86400))
