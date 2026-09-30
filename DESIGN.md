@@ -20,6 +20,14 @@ colors:
   night-surface: "#171a20"
   night-ink: "#e4e6eb"
   white: "#ffffff"
+  overlay-dark: "rgba(0, 0, 0, 0.55)"
+  overlay-light: "rgba(255, 255, 255, 0.14)"
+  overlay-light-hover: "rgba(255, 255, 255, 0.26)"
+  overlay-subtle: "rgba(0, 0, 0, 0.4)"
+  overlay-muted: "rgba(217, 217, 217, 0.2)"
+  overlay-muted-strong: "rgba(217, 217, 217, 0.25)"
+  ink-shadow: "rgba(15, 23, 42, 0.45)"
+  ink-shadow-soft: "rgba(15, 23, 42, 0.18)"
 typography:
   display:
     fontFamily: "SF Pro SC, SF Pro Display, PingFang SC, Helvetica Neue, Helvetica, Arial, sans-serif"
@@ -42,19 +50,56 @@ typography:
     fontSize: "12px"
     fontWeight: 600
     letterSpacing: "1px"
+  brandMark:
+    fontSize: "26px"
+    fontWeight: 600
+  heading:
+    fontSize: "28px"
+    fontWeight: 600
+  article:
+    fontSize: "17px"
+    fontWeight: 400
+  articleSmall:
+    fontSize: "15px"
+    fontWeight: 400
+  articleLarge:
+    fontSize: "19px"
+    fontWeight: 400
+  compact:
+    fontSize: "10px"
+    fontWeight: 500
+  micro:
+    fontSize: "11px"
+    fontWeight: 500
+  ui:
+    fontSize: "16px"
+    fontWeight: 400
+  toolbar:
+    fontSize: "18px"
+    fontWeight: 500
+  section:
+    fontSize: "22px"
+    fontWeight: 600
+  articleHeading:
+    fontSize: "24px"
+    fontWeight: 600
 rounded:
   2xs: "6px"
   xs: "10px"
+  compact: "2px"
+  tag: "4px"
+  thumb: "8px"
   control: "12px"
   sm: "14px"
   md: "18px"
-  card: "20px"
+  card: "16px"
   pill: "999px"
 spacing:
   2: "8px"
   3: "12px"
   4: "16px"
   5: "20px"
+  6: "24px"
 components:
   button-primary:
     backgroundColor: "{colors.duty-blue}"
@@ -95,7 +140,7 @@ components:
     padding: "10px 12px"
     typography: "{typography.label}"
   nav-item-active:
-    backgroundColor: "rgba(22, 119, 255, 0.12)"
+    backgroundColor: "{colors.duty-blue}"
     textColor: "{colors.duty-blue-text}"
     rounded: "{rounded.control}"
     padding: "10px 12px"
@@ -224,7 +269,7 @@ V Push 是值班台，不是内容社区，也不是营销落地页。界面服�
 
 ## Shapes
 
-控件 12px（control），卡片 20px（card），胶囊与头像 999px（pill）。中间档 6 / 10 / 14 / 18 给图标钮、小组件、软角容器。边是 1px 实线，不虚线、不双描、不厚边框当装饰。
+控件 12px（control），卡片 16px（card），胶囊与头像 999px（pill）。中间档 6 / 10 / 14 / 18 给图标钮、小组件、软角容器。边是 1px 实线，不虚线、不双描、不厚边框当装饰。
 
 选中胶囊变实底，圆角不变。侧栏项圆角同控件，不做成胶囊。
 
@@ -246,7 +291,7 @@ V Push 是值班台，不是内容社区，也不是营销落地页。界面服�
 - **State:** Hover 描边与字变 Duty Blue Text。Selected 实底 Duty Blue、图标反白。
 
 ### Cards / Containers
-- **Corner Style:** 卡片圆角（20px）。
+- **Corner Style:** 卡片圆角（16px）。
 - **Background:** Surface，坐在 Paper 上。
 - **Shadow Strategy:** 无。见 Flat-By-Default。
 - **Border:** 默认 1px 线。

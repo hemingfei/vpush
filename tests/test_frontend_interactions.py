@@ -6009,6 +6009,20 @@ def test_browser_and_pwa_brand_name_match_vpush():
     assert 'data.title || "VPush"' in (APP_JS.parent / "sw.js").read_text()
 
 
+def test_design_tokens_define_shared_shape_and_touch_scale():
+    tokens = (APP_JS.parent / "vendor/design-tokens.css").read_text()
+    light = tokens.split(":root.theme-dark")[0]
+    dark = tokens[tokens.index(":root.theme-dark"):]
+
+    assert "--radius-card: 16px;" in light
+    assert "--space-6: 24px;" in light
+    assert "--control-height-2xl: 42px;" in light
+    assert "--control-height-touch: 44px;" in light
+    assert "--radius-card:" in dark
+    assert "--space-6:" in dark
+    assert "--control-height-touch:" in dark
+
+
 def test_success_token_is_muted_sage():
     """成功色用鼠尾草绿，不用高饱和交通灯绿。"""
     tokens = (APP_JS.parent / "vendor" / "design-tokens.css").read_text()

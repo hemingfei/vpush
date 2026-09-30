@@ -48,6 +48,13 @@ def make_tree(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def test_shell_background_defined_for_both_themes():
+    tokens = (Path(__file__).resolve().parents[1] / "app/static/vendor/design-tokens.css").read_text()
+    light, dark = tokens.split(":root.theme-dark", 1)
+    assert "--color-bg: #f5f5f7;" in light
+    assert "--color-bg: #0f1115;" in dark
+
+
 def test_sync_then_check(tmp_path: Path):
     root = make_tree(tmp_path)
     digest = bump_assets.sync_assets(root)
