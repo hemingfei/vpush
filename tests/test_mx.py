@@ -678,6 +678,121 @@ def test_ws_gives_up_when_retry_after_clean_drop_fails(monkeypatch):
     assert give_ups and give_ups[0][1] is False and "reconnect refused" in give_ups[0][0]
 
 
+def test_ws_gives_up_when_reconnect_kicked_within_grace(monkeypatch):
+    """「连上即被踢」风暴：重连后宽限期内再断视为没站住，第二轮即永久放弃。
+
+    回归 2026-10-09 午后事故：旧逻辑 connect() 一返回就恢复重连额度，被服务端
+    毫秒级踢断反而每轮满血，实测 13 次重连 12 次被秒踢、固定 ~30s 节拍无限循环。
+    """
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+    attempts = {"n": 0}
+
+    async def connect():
+        attempts["n"] += 1
+
+        async def kicked_immediately():
+            pass  # wait() 立即返回 = 连上即被服务端掐断
+
+        client._sio = SimpleNamespace(wait=kicked_immediately)
+
+    client.connect = connect
+    asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
+
+    assert attempts["n"] == 2  # 首连被踢 + 唯一一次重连再被踢，绝没有第三次
+    assert client.gave_up is True
+    assert give_ups and give_ups[0][1] is False
+
+
+def test_ws_standing_connection_restores_reconnect_credit(monkeypatch):
+    """站住的连接（存活超过宽限期）恢复重连额度：健康断线每轮都有一次重连机会。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "CONNECTION_GRACE_SECONDS", 0.05)
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+    attempts = {"n": 0}
+
+    async def connect():
+        attempts["n"] += 1
+
+        async def stand_then_drop():
+            await asyncio.sleep(0.1)  # 存活超过宽限期后被正常断开
+
+        client._sio = SimpleNamespace(wait=stand_then_drop)
+
+    client.connect = connect
+
+    async def scenario():
+        task = asyncio.create_task(client.run_forever())
+        await asyncio.sleep(0.5)
+        assert attempts["n"] >= 3  # 多轮「站住→断开→重连」，额度每轮都恢复
+        assert client.gave_up is False
+        assert give_ups == []
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+
+
+def test_ws_kick_recovered_by_standing_retry(monkeypatch):
+    """首连被秒踢仍有一次重连机会；重连站住则恢复监听，不触发放弃。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+    attempts = {"n": 0}
+
+    async def connect():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            async def kicked_immediately():
+                pass  # 首连即被服务端秒踢
+
+            client._sio = SimpleNamespace(wait=kicked_immediately)
+        else:
+            client.connected = True
+
+            async def wait_forever():
+                await asyncio.Event().wait()
+
+            client._sio = SimpleNamespace(wait=wait_forever)
+
+    client.connect = connect
+
+    async def scenario():
+        task = asyncio.create_task(client.run_forever())
+        await asyncio.sleep(0.15)
+        assert attempts["n"] == 2
+        assert client.gave_up is False
+        assert give_ups == []
+        assert client.connected is True
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+
+
 def test_ws_manual_disconnect_no_give_up(monkeypatch):
     """等待重连窗口内管理员手动断开：正常退出，不触发放弃回调。"""
     import app.fetchers.mx.ws as mx_ws
