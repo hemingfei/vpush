@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -15,9 +16,27 @@ from app.fetchers.truth import (
     status_to_entry,
 )
 
+CN_TZ = timezone(timedelta(hours=8))
+
+
+def _utc_z(days_ago: int, hour: int = 12) -> str:
+    """相对当下的 created_at（Z 结尾）：首次基线按 BASELINE_DAYS=30 天裁剪，
+    静态日期会随时间老化出窗（2026-09-04 于 2026-10-09 首爆 CI），必须跟时钟。"""
+    t = (datetime.now(timezone.utc) - timedelta(days=days_ago)).replace(
+        hour=hour, minute=0, second=0, microsecond=0
+    )
+    return t.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _cn_time(created_at: str) -> str:
+    """entry_published_at 的期望值：created_at 转 CN 时区的 %Y-%m-%d %H:%M。"""
+    dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    return dt.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M")
+
+
 NEW = {
     "id": "1789999999999999999",
-    "created_at": "2026-09-04T12:00:00.000Z",
+    "created_at": _utc_z(days_ago=5),
     "content": "A big announcement!",
     "url": "https://truthsocial.com/@realDonaldTrump/1789999999999999999",
     "media": ["https://static-assets.truthsocial.com/x/original/pic.jpg", "https://static-assets.truthsocial.com/x/original/clip.mp4"],
@@ -78,7 +97,7 @@ def test_entry_helpers_filter_images_and_format_time():
         "https://static-assets.truthsocial.com/x/original/clip.mp4",  # 视频链接保留
     ]
     assert entry_images({"media": []}) == []
-    assert entry_published_at(NEW) == "2026-09-04 20:00"
+    assert entry_published_at(NEW) == _cn_time(NEW["created_at"])
 
 
 def test_status_to_entry_strips_html_and_filters_media():
@@ -188,7 +207,7 @@ def test_first_fetch_is_baseline_only_recent_30d(db, monkeypatch):
     assert [p.external_id for p in posts] == [NEW["id"]]
     assert posts[0].platform == "truth"
     assert posts[0].title == "A big announcement!"
-    assert posts[0].published_at == "2026-09-04 20:00"
+    assert posts[0].published_at == _cn_time(NEW["created_at"])
     assert posts[0].images == [
         NEW["media"][0],
         NEW["media"][1],  # 视频链接（clip.mp4）也入库
