@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from pathlib import Path
 
 import httpx
@@ -257,8 +258,25 @@ def test_submitted_unexpected_failure_is_recorded_and_releases_lock(tmp_path, mo
     db.close()
 
 
+def _fresh_rss_payload() -> bytes:
+    """fixture 的静态 pubDate（2026-09-01）已老化出 stats_posts_retention_days
+    （默认 30 天）过滤窗，刷新入库场景改为相对当下的时间戳，测试永不过期
+    （2026-10-09 CI 首爆：文章 38 天龄被 retention 过滤，articles=0）。"""
+    stamps = [
+        format_datetime(datetime.now(UTC) - timedelta(hours=2)),
+        format_datetime(datetime.now(UTC) - timedelta(hours=3)),
+    ]
+    payload = (FIXTURES / "news_rss.xml").read_text(encoding="utf-8")
+    for old, new in zip(
+        ("Tue, 01 Sep 2026 10:00:00 GMT", "Tue, 01 Sep 2026 09:00:00 GMT"), stamps
+    ):
+        assert old in payload, f"fixture 模板已变化，找不到 {old!r}"
+        payload = payload.replace(old, new)
+    return payload.encode()
+
+
 def test_refresh_feed_upserts_articles_and_recovers_failure(tmp_path, monkeypatch):
-    payload = (FIXTURES / "news_rss.xml").read_bytes()
+    payload = _fresh_rss_payload()
     monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
     service, db, client, feed_id = make_news_service(
         tmp_path, lambda request: httpx.Response(200, headers={"etag": '"fresh"'}, content=payload)
