@@ -130,5 +130,13 @@ environment 块里覆写 PATH 指向 /var/jenkins_home/bin 再直接调 docker�
 **真随机延迟 0–30 分钟**（`/dev/urandom` 取秒数，每次执行点都不同，实际落在
 8:30–9:00 窗口内）；手动「立即构建」自动跳过延迟（按构建原因识别
 TimerTrigger）。总超时 40 分钟容纳 sleep。构建保留 30 次。8 个 Secret Text
-凭据：mx-account / mx-password / mx-vision-api-{base,key} / mx-vision-model /
+凭据：mx-account / mx-password / mx-vision-{base,key} / mx-vision-model /
 vpush-{url,admin-user,admin-password}。
+
+**pip 缓存挂载（2026-10-09 起）**：任务里的 `docker run` 追加
+`-v /root/workspace/mx-pipcache:/root/.cache/pip`——缓存目录刻意放在 `$D`
+（每轮 `rm -rf` 的 /root/workspace/mx-token）之外，不受清理影响；requirements
+全量 20 包的 wheel 首轮下载后常驻，之后每轮命中缓存只做解包安装。
+此前每轮都在全新无缓存容器里重新下载全部依赖，构建时长随镜像源速度
+在 1.5–16 分钟间波动（pip 占 95% 以上，登录识码本身仅约 50 秒）；
+命中缓存后预计收敛到 1–2 分钟左右。
