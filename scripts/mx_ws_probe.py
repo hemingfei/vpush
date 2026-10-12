@@ -53,8 +53,16 @@ EIO_QUERY = "EIO=4&transport=websocket"
 JSONL_PATH = REPO / ".scratch" / "mx_ws_probe.jsonl"
 
 
+def _sanitize(text: str) -> str:
+    """清洗不可编码字符：socket.io 密文载荷里会出现孤立代理对（如 \\ud804），
+    直接 print/写 UTF-8 会 UnicodeEncodeError 掀翻整个探测进程（实测教训）。
+    backslashreplace 把它们转成字面 \\udXXX 转义，其余内容原样保留。"""
+    return text.encode("utf-8", errors="backslashreplace").decode("utf-8")
+
+
 def log_event(variant: str, ev: str, **detail) -> None:
     """统一事件输出：控制台一行 + JSONL 落盘（供事后分析时序）。"""
+    detail = {key: _sanitize(str(value)) for key, value in detail.items()}
     record = {
         "ts": datetime.now().isoformat(timespec="milliseconds"),
         "mono": round(time.monotonic(), 3),
@@ -62,18 +70,20 @@ def log_event(variant: str, ev: str, **detail) -> None:
         "ev": ev,
         **detail,
     }
-    parts = [f"[{variant}] {ev}"]
+    parts = [f"[{variant}] {_sanitize(ev)}"]
     for key, value in detail.items():
-        text = str(value)
-        if len(text) > 160:
-            text = text[:160] + "…"
+        text = value if len(value) <= 160 else value[:160] + "…"
         parts.append(f"{key}={text}")
-    print(" ".join(parts), flush=True)
+    line = " ".join(parts)
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:  # 控制台代码页装不下时降级，不让日志杀进程
+        print(line.encode("ascii", errors="backslashreplace").decode("ascii"), flush=True)
     try:
         JSONL_PATH.parent.mkdir(exist_ok=True)
         with JSONL_PATH.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-    except OSError:
+    except Exception:  # noqa: BLE001 - 落盘尽力而为；UnicodeEncodeError 非 OSError 也接住
         pass
 
 
@@ -385,7 +395,8 @@ async def probe_aiohttp(ws_url: str, namespace: str, token: str,
                     else:
                         stats.close_info = stats.close_info or "stream_end"
                     if ws.closed:
-                        stats.close_info = f"ws_close code={ws.close_code} reason={ws.close_reason!r}"
+                        # aiohttp 客户端只有 close_code，没有 close_reason（实测 AttributeError）
+                        stats.close_info = f"ws_close code={ws.close_code}"
             except aiohttp.WSServerHandshakeError as exc:
                 stats.err = f"handshake {exc.status} {exc.message}"
                 stats.close_info = "handshake_rejected"
