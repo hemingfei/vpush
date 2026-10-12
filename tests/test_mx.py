@@ -683,9 +683,9 @@ def test_ws_gives_up_when_reconnect_kicked_within_grace(monkeypatch):
     """「连上即被踢」的互踢战：三档退避逐级升档，第四轮仍未站住才永久放弃。
 
     2026-10-12 诊断（scripts/mx_ws_probe.py 实测）：平台同账号单 WS 会话互踢，
-    新连接接入毫秒级踢掉旧连接且静默不发 close。立即抢回只会与对方（通常是
-    网页端，socket.io-js 无限自动重连）互踢，故按 2-3/5-7/10-15 分钟阶梯退避；
-    三档耗尽才放弃告警。
+    新连接接入毫秒级踢掉旧连接且静默不发 close。立即抢回只会与同 token 的
+    另一客户端（2026-10-12 勘误：非本人网页，幻影客户端待定位）互踢，
+    故按 2-3/5-7/10-15 分钟阶梯退避；三档耗尽才放弃告警。
     """
     import app.fetchers.mx.ws as mx_ws
 
