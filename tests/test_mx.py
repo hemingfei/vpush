@@ -560,6 +560,7 @@ def test_ws_gives_up_after_one_failed_reconnect(monkeypatch):
     import app.fetchers.mx.ws as mx_ws
 
     monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "_revival_delay", lambda: 0.01)
     give_ups = []
     client = MxWsClient(
         SimpleNamespace(), lambda m: None,
@@ -574,7 +575,8 @@ def test_ws_gives_up_after_one_failed_reconnect(monkeypatch):
     client.connect = failing_connect
     asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
 
-    assert attempts["n"] == 2  # 首连 + 唯一一次重连，绝没有第三次
+    # 3 轮「首连 + 唯一一次快速重连」（2 次复活额度隔开），绝没有第七次
+    assert attempts["n"] == 6
     assert client.gave_up is True
     assert client.running is False
     assert give_ups == [("connect refused", False)]
@@ -585,6 +587,7 @@ def test_ws_give_up_supports_async_callback(monkeypatch):
     import app.fetchers.mx.ws as mx_ws
 
     monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "_revival_delay", lambda: 0.01)
     results = []
 
     async def on_give_up(reason, token_expired=False):
@@ -654,6 +657,7 @@ def test_ws_gives_up_when_retry_after_clean_drop_fails(monkeypatch):
 
     monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
     monkeypatch.setattr(mx_ws, "_kick_backoff_delay", lambda level: 0.01)
+    monkeypatch.setattr(mx_ws, "_revival_delay", lambda: 0.01)
     give_ups = []
     client = MxWsClient(
         SimpleNamespace(), lambda m: None,
@@ -674,7 +678,8 @@ def test_ws_gives_up_when_retry_after_clean_drop_fails(monkeypatch):
     client.connect = connect
     asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
 
-    assert attempts["n"] == 3  # 首连断开 + 退避重连失败 + 唯一一次快速重连失败
+    assert attempts["n"] == 7  # 首连断开 + 退避重连失败 + 快速重连失败，
+    # 之后两轮复活（各含退避重连失败 + 快速重连失败），复活耗尽才放弃
     assert client.gave_up is True
     assert give_ups and give_ups[0][1] is False and "reconnect refused" in give_ups[0][0]
 
@@ -690,6 +695,7 @@ def test_ws_gives_up_when_reconnect_kicked_within_grace(monkeypatch):
     import app.fetchers.mx.ws as mx_ws
 
     monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "_revival_delay", lambda: 0.01)
     backoff_levels = []
     monkeypatch.setattr(mx_ws, "_kick_backoff_delay",
                         lambda level: backoff_levels.append(level) or 0.01)
@@ -711,8 +717,8 @@ def test_ws_gives_up_when_reconnect_kicked_within_grace(monkeypatch):
     client.connect = connect
     asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
 
-    assert attempts["n"] == 5  # 首连 + 四档退避各一次，绝没有第六次
-    assert backoff_levels == [0, 1, 2, 3]  # 档位逐级递增
+    assert attempts["n"] == 15  # 每轮「首连 + 四档退避 + 末档检查连接」×3 轮（2 次复活隔开）
+    assert backoff_levels == [0, 1, 2, 3] * 3  # 每轮档位逐级递增，复活从第 0 档重来
     assert client.gave_up is True
     assert give_ups and give_ups[0][1] is False
     assert "single-session" in give_ups[0][0]
@@ -878,6 +884,114 @@ def test_kick_backoff_delay_bounds():
     # 档位设计：首档快速（常态回收 ~30s 恢复）+ 三档分钟级退避（风暴期），
     # 总跨度约 16s-15 分钟，绝不无限重试
     assert len(mx_ws.KICK_BACKOFF_LEVELS) == 4
+    # 复活等待：20-30 分钟区间内随机
+    for _ in range(20):
+        lo, hi = mx_ws.REVIVAL_DELAY_RANGE
+        assert lo <= mx_ws._revival_delay() <= hi
+    assert mx_ws.REVIVAL_BUDGET == 2
+
+
+def test_ws_revival_exhaustion_is_bounded_per_session(monkeypatch):
+    """复活额度有界：纯失败场景总共 REVIVAL_BUDGET 次复活，之后的失败直接放弃。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    revivals = []
+
+    def fake_revival_delay():
+        revivals.append(1)
+        return 0.01
+
+    monkeypatch.setattr(mx_ws, "_revival_delay", fake_revival_delay)
+    client = MxWsClient(SimpleNamespace(), lambda m: None)
+    attempts = {"n": 0}
+
+    async def failing_connect():
+        attempts["n"] += 1
+        raise RuntimeError("down")
+
+    client.connect = failing_connect
+    asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
+
+    assert len(revivals) == mx_ws.REVIVAL_BUDGET
+    assert client.gave_up is True
+
+
+def test_ws_revival_wait_interrupted_by_stop(monkeypatch):
+    """复活等待期间 stop（关标签页语义）：秒级退出，不算放弃、不触发告警。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "_revival_delay", lambda: 300.0)  # 复活等待 5 分钟
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+
+    async def failing_connect():
+        raise RuntimeError("down")
+
+    client.connect = failing_connect
+
+    async def scenario():
+        task = asyncio.create_task(client.run_forever())
+        # 等到进入复活等待（首次快速重连失败之后）
+        for _ in range(100):
+            if client.running and not client.connected:
+                await asyncio.sleep(0.05)
+                if not client.connected:
+                    break
+            await asyncio.sleep(0.02)
+        await client.stop()
+        await asyncio.wait_for(task, timeout=3)
+
+    asyncio.run(scenario())
+    assert client.gave_up is False
+    assert client.manually_stopped is True
+    assert give_ups == []
+
+
+def test_ws_revival_budget_restored_after_standing(monkeypatch):
+    """复活一次后连接站住：额度全额恢复——再次耗尽仍可复活两轮才放弃。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "_kick_backoff_delay", lambda level: 0.01)
+    monkeypatch.setattr(mx_ws, "_revival_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "CONNECTION_GRACE_SECONDS", 0.05)
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+    attempts = {"n": 0}
+
+    async def connect():
+        attempts["n"] += 1
+        # 第 1、2 次失败（耗掉快速重连 + 一次复活）；第 3 次站住后正常断开；
+        # 之后全部失败：站住已恢复额度，应再走满两轮复活才放弃
+        if attempts["n"] == 3:
+            async def stand():
+                await asyncio.sleep(0.1)
+
+            client._sio = SimpleNamespace(wait=stand)
+            return
+
+        async def fail():
+            raise RuntimeError("down")
+
+        client._sio = SimpleNamespace(wait=fail)
+        raise RuntimeError("down")
+
+    client.connect = connect
+    asyncio.run(asyncio.wait_for(client.run_forever(), timeout=10))
+
+    assert client.gave_up is True
+    # 快速路径两轮失败（2 次尝试）+ 站住一轮（1 次）+ 恢复后的
+    # 「首连+快速重连 ×(1+REVIVAL_BUDGET) 轮」= 2 + 1 + 6
+    assert attempts["n"] == 9
+    assert give_ups and give_ups[0][1] is False
 
 
 def test_ws_manual_disconnect_no_give_up(monkeypatch):
@@ -942,6 +1056,202 @@ def test_ws_stop_aborts_like_tab_close():
     assert client.manually_stopped is True
     assert client.connected is False
     assert client._sio is None
+
+
+# ---- WS 原生传输（curl_cffi EIO4/SIO5 栈，默认实现）----
+
+class _FakeNativeWs:
+    """AsyncWebSocket 替身：脚本化帧队列，terminate 后收帧即报错（同真实语义）。"""
+
+    def __init__(self, frames=()):
+        self._frames = list(frames)
+        self.sent = []
+        self.terminated = False
+        self.closed = False
+        self._wake = None
+
+    async def recv_str(self, timeout=None):
+        if self._frames:
+            return self._frames.pop(0)
+        if self.terminated:
+            raise RuntimeError("connection terminated")
+        self._wake = asyncio.Event()
+        await self._wake.wait()
+        raise RuntimeError("connection terminated")
+
+    async def send_str(self, text):
+        self.sent.append(text)
+
+    def terminate(self):
+        self.terminated = True
+        if self._wake is not None:
+            self._wake.set()
+
+    async def close(self):
+        self.closed = True  # 优雅关闭帧——原生栈的关标签页语义绝不能走到
+
+
+def _native_config(token="t", **kw):
+    cfg = SimpleNamespace(
+        ws_url="wss://mx.test/business-api/4",
+        ws_path="/socket.io",
+        ws_namespace="/msg",
+        token=token,
+    )
+    for k, v in kw.items():
+        setattr(cfg, k, v)
+    return cfg
+
+
+def _install_fake_ws(monkeypatch, frames=()):
+    import app.fetchers.mx.ws as mx_ws
+
+    ws = _FakeNativeWs(frames)
+    opener = SimpleNamespace(url=None, headers=None)
+
+    async def fake_open(url, headers):
+        opener.url = url
+        opener.headers = headers
+        return None, ws
+
+    monkeypatch.setattr(mx_ws, "_open_native_ws", fake_open)
+    return ws, opener
+
+
+def test_native_ws_handshake_and_event_dispatch(monkeypatch):
+    """握手：EIO open → 单帧 40/msg,{紧凑 auth} → 40 确认；随后事件正确分发。"""
+    import json as _json
+
+    import pytest
+
+    ws, opener = _install_fake_ws(monkeypatch, [
+        '0{"sid":"s1","pingInterval":25000,"pingTimeout":20000}',
+        '40/msg,{"sid":"n1"}',
+        '2["room_msg",{"rid":"5","msg":"x"}]',
+        "41/msg",
+    ])
+    got = []
+    client = MxWsClient(_native_config(), got.append)
+    asyncio.run(asyncio.wait_for(client.connect(), timeout=3))
+
+    assert client.connected is True
+    assert opener.url == (
+        "wss://mx.test/business-api/4/socket.io/?EIO=4&transport=websocket"
+    )
+    # 握手头来自 _browser_handshake_headers（Chrome 形态）
+    assert opener.headers and opener.headers.get("User-Agent")
+    # auth 帧与官方网页端同形态：单帧、紧凑 JSON
+    assert ws.sent and ws.sent[0].startswith('40/msg,{"tt":')
+    auth = _json.loads(ws.sent[0].split(",", 1)[1])
+    assert auth == {"tt": auth["tt"], "token": "t", "version": "web"}
+    # open 帧的心跳参数写进收帧空闲上限（25+20+5）
+    assert client._native_idle_limit == 50.0
+
+    with pytest.raises(RuntimeError, match="DISCONNECT"):
+        asyncio.run(asyncio.wait_for(client._sio.wait(), timeout=3))
+    assert got and got[0]["rid"] == "5"
+
+
+def test_native_ws_ping_pong_and_multi_payload_event(monkeypatch):
+    import pytest
+
+    ws, _ = _install_fake_ws(monkeypatch, [
+        "0{}",
+        '40/msg,{"sid":"n"}',
+        "2",
+        '2["ev",{"a":1},{"b":2}]',
+        "1",
+    ])
+    got = []
+    client = MxWsClient(_native_config(), got.append)
+    asyncio.run(asyncio.wait_for(client.connect(), timeout=3))
+    with pytest.raises(RuntimeError, match="CLOSE"):
+        asyncio.run(asyncio.wait_for(client._sio.wait(), timeout=3))
+    assert "3" in ws.sent  # EIO ping → pong
+    # 多参事件载荷逐条分发（同旧 catch-all 的批语义），各带 _receivedAt
+    assert len(got) == 2
+    assert got[0]["a"] == 1 and got[1]["b"] == 2
+    assert all("_receivedAt" in m for m in got)
+
+
+def test_native_ws_connect_error_maps_to_token_expired(monkeypatch):
+    """44 连接被拒（含鉴权强特征文案）→ run_forever 判 TOKEN 过期立即放弃。"""
+    _install_fake_ws(monkeypatch, [
+        "0{}",
+        '44/msg,{"message":"请重新登录"}',
+    ])
+    give_ups = []
+    client = MxWsClient(
+        _native_config(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+    asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
+    assert client.gave_up is True
+    assert give_ups and give_ups[0][1] is True
+    assert "请重新登录" in give_ups[0][0]
+
+
+def test_native_ws_handshake_failure_cleans_up(monkeypatch):
+    import pytest
+
+    ws, _ = _install_fake_ws(monkeypatch, ["0{}", "41"])
+    client = MxWsClient(_native_config(), lambda m: None)
+    with pytest.raises(RuntimeError, match="握手期间"):
+        asyncio.run(asyncio.wait_for(client.connect(), timeout=3))
+    assert client.connected is False
+    assert client._native_ws is None  # 失败路径句柄已掐，不留残留
+    assert ws.terminated is True
+
+
+def test_native_ws_stop_terminates_without_close_frame(monkeypatch):
+    """stop = 关标签页语义：terminate 掐 TCP，绝不发优雅关闭帧。"""
+    ws, _ = _install_fake_ws(monkeypatch, ["0{}", '40/msg,{"sid":"n"}'])
+    client = MxWsClient(_native_config(), lambda m: None)
+    asyncio.run(asyncio.wait_for(client.connect(), timeout=3))
+    asyncio.run(client.stop())
+    assert ws.terminated is True
+    assert ws.closed is False
+    assert client._sio is None
+    assert client.manually_stopped is True
+
+
+def test_native_ws_heartbeat_timeout_raises(monkeypatch):
+    """pingInterval+pingTimeout 内无任何帧 → 心跳超时（僵尸假死兜底），走断线路径。"""
+    from curl_cffi.requests import WebSocketTimeout
+
+    import pytest
+
+    class TimeoutWs(_FakeNativeWs):
+        async def recv_str(self, timeout=None):
+            raise WebSocketTimeout("no frame")
+
+    client = MxWsClient(_native_config(), lambda m: None)
+    client._native_ws = TimeoutWs()
+    client._native_idle_limit = 50.0
+    with pytest.raises(RuntimeError, match="心跳超时"):
+        asyncio.run(asyncio.wait_for(client._native_recv_loop(), timeout=3))
+
+
+def test_ws_impl_config_dispatch(monkeypatch):
+    """ws_impl=socketio 走回退实现；默认/其他值走原生栈。"""
+    calls = []
+    client = MxWsClient(_native_config(ws_impl="socketio"), lambda m: None)
+
+    async def fake_socketio():
+        calls.append("socketio")
+
+    client._connect_socketio = fake_socketio
+    asyncio.run(client.connect())
+    assert calls == ["socketio"]
+
+    client2 = MxWsClient(_native_config(), lambda m: None)
+
+    async def fake_native():
+        calls.append("native")
+
+    client2._connect_native = fake_native
+    asyncio.run(client2.connect())
+    assert calls == ["socketio", "native"]
 
 
 # ---- 房间同步 ----
@@ -1550,6 +1860,7 @@ def test_ws_non_auth_connect_error_still_retries_once(monkeypatch):
     import app.fetchers.mx.ws as mx_ws
 
     monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "_revival_delay", lambda: 0.01)
     give_ups = []
     client = MxWsClient(
         SimpleNamespace(), lambda m: None,
@@ -1564,7 +1875,8 @@ def test_ws_non_auth_connect_error_still_retries_once(monkeypatch):
     client.connect = failing_connect
     asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
 
-    assert attempts["n"] == 2
+    # 3 轮「首连+快速重连」后复活额度耗尽放弃，且不带 token_expired
+    assert attempts["n"] == 6
     assert give_ups == [("connection refused", False)]
 
 
@@ -2534,8 +2846,7 @@ def _arm_manual_window(scheduler, ahead_minutes=5, span_minutes=60):
         (now - timedelta(minutes=ahead_minutes), now + timedelta(minutes=span_minutes))
     ]
     scheduler._mx_armed = [True]
-    scheduler._mx_fallback_at = None
-    scheduler._mx_fallback_done = False
+    scheduler._mx_fallback_slots = None
     scheduler._mx_manual_attempted_idx = None
 
 
@@ -2691,6 +3002,142 @@ def test_pick_daily_fallback_slot_only_from_armed_windows():
     assert any(start <= slot < stop for start, stop in windows)
 
 
+def test_pick_daily_fallback_slots_bounds_and_spread():
+    """每天 1~3 个兜底槽：数量有界、每窗口最多一槽（槽分属不同窗口）、离关窗 ≥60s。"""
+    from datetime import date
+
+    from app.services.mx_window import generate_mx_daily_windows, pick_daily_fallback_slots
+
+    windows = generate_mx_daily_windows(date(2026, 9, 1))
+    for _ in range(30):
+        slots = pick_daily_fallback_slots(windows)
+        assert 1 <= len(slots) <= 3
+        assert slots == sorted(slots)
+        # 每槽落在某个窗口内（离关窗 ≥60s），且各槽所在窗口互不相同
+        owners = []
+        for slot in slots:
+            owners.append(
+                next(
+                    i for i, (s, e) in enumerate(windows)
+                    if s <= slot < e
+                )
+            )
+        assert len(owners) == len(set(owners))
+    # armed 过滤：只从未武装排除后剩余窗口取槽；全部未武装返回空
+    for _ in range(10):
+        slots = pick_daily_fallback_slots(windows, [False, True, False])
+        assert 1 <= len(slots) <= 1
+        w2 = windows[1]
+        assert all(w2[0] <= t < w2[1] for t in slots)
+    assert pick_daily_fallback_slots(windows, [False, False, False]) == []
+
+
+def test_daily_plan_roundtrip_and_validation():
+    """MXDailyPlan 序列化往返：同日还原一致；跨日/坏数据返回 None 而非报错。"""
+    from datetime import date
+
+    from app.services.mx_window import (
+        MXDailyPlan,
+        build_daily_plan,
+        dumps_plan,
+        loads_plan,
+    )
+
+    day = date(2026, 10, 12)
+    plan = build_daily_plan(day)
+    assert plan.windows and plan.fallback_slots and 1 <= len(plan.fallback_slots) <= 3
+    assert plan.force_close_at.hour == 23 and 30 <= plan.force_close_at.minute <= 55
+
+    restored = loads_plan(dumps_plan(plan), day)
+    assert restored == plan
+
+    # 跨日：昨天的计划不能用于今天
+    assert loads_plan(dumps_plan(plan), date(2026, 10, 13)) is None
+    # 坏数据：空串/非 JSON/缺字段/空窗口都不炸，返回 None
+    assert loads_plan("", day) is None
+    assert loads_plan("not-json", day) is None
+    assert loads_plan('{"day": "2026-10-12"}', day) is None
+    assert loads_plan(
+        dumps_plan(MXDailyPlan(day, (), (), plan.force_close_at)), day
+    ) is None
+
+
+def test_windows_today_persists_plan_across_restart():
+    """当日计划持久化：同库重启（重置内存态）后窗口/兜底槽/强关时刻完全一致。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+
+    first = scheduler._mx_windows_today()
+    slots1 = list(scheduler._mx_fallback_slots)
+    fc1 = scheduler._mx_force_close_at
+
+    # 模拟重启：内存态清空，db 仍在
+    scheduler._mx_window_date = None
+    scheduler._mx_windows = None
+    scheduler._mx_fallback_slots = None
+    scheduler._mx_armed = None
+
+    second = scheduler._mx_windows_today()
+    assert second == first
+    assert scheduler._mx_fallback_slots == slots1
+    assert scheduler._mx_force_close_at == fc1
+    assert scheduler._mx_fallback_settled == set()
+    scheduler.stop()
+
+
+def test_daily_fallback_multi_slot_settles_independently():
+    """多槽兜底：到期会话存活即执行并结算；会话未活到时段结束则放弃该槽；
+    每个 tick 至多执行一次。"""
+    from datetime import datetime, timedelta
+
+    from app.services.mx_window import CN_TZ
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+
+    now = datetime.now(CN_TZ)
+    scheduler._mx_window_date = now.date()
+    # 单窗口（now-10min ~ now+50min），两个已到期槽
+    scheduler._mx_windows = [(now - timedelta(minutes=10), now + timedelta(minutes=50))]
+    scheduler._mx_armed = [True]
+    scheduler._mx_fallback_slots = [now - timedelta(minutes=5), now - timedelta(minutes=1)]
+    scheduler._mx_fallback_settled = set()
+    scheduler._mx_force_close_at = None
+    scheduler._mx_window_open = True
+
+    pulls = []
+
+    async def fake_pull():
+        pulls.append(datetime.now(CN_TZ))
+
+    async def fake_ws_control(action, source="manual"):
+        return "ok"
+
+    scheduler._mx_fallback_pull_once = fake_pull
+    scheduler.mx_ws_control = fake_ws_control
+
+    # 会话在线：第一个 tick 只执行第一个到期槽
+    async def scenario():
+        scheduler._mx_ws_task = asyncio.create_task(asyncio.sleep(3600))
+        await scheduler._mx_maybe_daily_fallback()
+        await scheduler._mx_maybe_daily_fallback()
+
+    asyncio.run(scenario())
+    assert len(pulls) == 2  # 两个 tick 各执行一个槽
+    assert scheduler._mx_fallback_settled == {0, 1}
+    scheduler._mx_ws_task.cancel()
+
+    # 出窗后到期的新槽：直接放弃不再拉
+    scheduler._mx_windows = [(now - timedelta(hours=3), now - timedelta(hours=2))]
+    scheduler._mx_fallback_slots = [now - timedelta(minutes=90)]
+    scheduler._mx_fallback_settled = set()
+    asyncio.run(scheduler._mx_maybe_daily_fallback())
+    assert scheduler._mx_fallback_settled == {0}
+    assert len(pulls) == 2
+    scheduler.stop()
+
+
 def test_fallback_external_id_ignores_runtime_injected_fields():
     """_receivedAt 等运行时注入字段不参与兜底键：WS 先到、HTTP 兜底再到同键去重。"""
     db = make_db()
@@ -2739,6 +3186,7 @@ def test_ws_weak_auth_word_does_not_give_up(monkeypatch):
     import app.fetchers.mx.ws as mx_ws
 
     monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "_revival_delay", lambda: 0.01)
     give_ups = []
     client = MxWsClient(
         SimpleNamespace(), lambda m: None,
@@ -2753,8 +3201,8 @@ def test_ws_weak_auth_word_does_not_give_up(monkeypatch):
     client.connect = failing_connect
     asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
 
-    # 弱词不熔断：仍走唯一一次自动重连；重连也失败才放弃，且不带 token_expired
-    assert attempts["n"] == 2
+    # 弱词不熔断：走满快速重连 + 复活额度后才放弃，且不带 token_expired
+    assert attempts["n"] == 6
     assert give_ups and give_ups[0][1] is False
 
 
@@ -2900,8 +3348,7 @@ def test_restart_login_pending_consumed_under_token_breaker(monkeypatch):
     scheduler._mx_window_date = now.date()
     scheduler._mx_windows = [(now + timedelta(hours=1), now + timedelta(hours=2))]
     scheduler._mx_armed = [True]
-    scheduler._mx_fallback_at = None
-    scheduler._mx_fallback_done = False
+    scheduler._mx_fallback_slots = None
     scheduler._mx_force_close_at = None
     scheduler._mx_restart_login_pending = True
     scheduler._mx_token_expired = True
@@ -2919,6 +3366,20 @@ def test_restart_login_pending_consumed_under_token_breaker(monkeypatch):
     assert scheduler._mx_restart_login_pending is False  # 标记照常消费，不重试
     assert not [r for r in db.list_admin_logs(limit=10) if r["action"] == "mx_auto_login"]
     scheduler.stop()
+
+
+def _plan_with_windows(day, windows):
+    """真实 build_daily_plan 的窗口替身：窗口取测试固定值，兜底槽/强关时刻
+    复用真实现（含随机），供 monkeypatch sched_mod.build_daily_plan 使用。"""
+    from app.services import mx_window as mxw
+
+    plan = mxw.build_daily_plan(day)
+    return mxw.MXDailyPlan(
+        day=plan.day,
+        windows=tuple(windows),
+        fallback_slots=plan.fallback_slots,
+        force_close_at=plan.force_close_at,
+    )
 
 
 def test_windows_today_sets_restart_login_state(monkeypatch):
@@ -2944,9 +3405,7 @@ def test_windows_today_sets_restart_login_state(monkeypatch):
 
     monkeypatch.setattr(sched_mod, "datetime", FixedDatetime)
     # 窗口生成必须用同一份随机结果，否则固定时刻与生成窗口错位导致断言不定
-    monkeypatch.setattr(
-        sched_mod, "generate_mx_daily_windows", lambda d: list(windows)
-    )
+    monkeypatch.setattr(sched_mod, "build_daily_plan", lambda d: _plan_with_windows(d, windows))
     monkeypatch.setattr(sched_mod, "restart_login_allowed", lambda now: True)
 
     # TOKEN 新鲜（重启自动登录的另一个前提；缺失按过期处理见
@@ -2991,9 +3450,7 @@ def test_windows_today_no_restart_login_outside_hours(monkeypatch):
             return value.astimezone(tz) if tz else value.replace(tzinfo=None)
 
     monkeypatch.setattr(sched_mod, "datetime", FixedDatetime)
-    monkeypatch.setattr(
-        sched_mod, "generate_mx_daily_windows", lambda d: list(windows)
-    )
+    monkeypatch.setattr(sched_mod, "build_daily_plan", lambda d: _plan_with_windows(d, windows))
     db = make_db()
     scheduler = _make_scheduler(db)
     scheduler._mx_window_date = None
@@ -3027,9 +3484,7 @@ def test_restart_login_gated_by_token_age(monkeypatch):
             return value.astimezone(tz) if tz else value.replace(tzinfo=None)
 
     monkeypatch.setattr(sched_mod, "datetime", FixedDatetime)
-    monkeypatch.setattr(
-        sched_mod, "generate_mx_daily_windows", lambda d: list(windows)
-    )
+    monkeypatch.setattr(sched_mod, "build_daily_plan", lambda d: _plan_with_windows(d, windows))
     monkeypatch.setattr(sched_mod, "restart_login_allowed", lambda now: True)
 
     async def tick():
@@ -3102,8 +3557,7 @@ def test_restart_login_pending_fires_once_between_windows():
     scheduler._mx_window_date = now.date()
     scheduler._mx_windows = [(now + timedelta(hours=1), now + timedelta(hours=2))]
     scheduler._mx_armed = [True]
-    scheduler._mx_fallback_at = None
-    scheduler._mx_fallback_done = False
+    scheduler._mx_fallback_slots = None
     scheduler._mx_force_close_at = None
     scheduler._mx_restart_login_pending = True
 
@@ -3145,8 +3599,7 @@ def test_restart_login_pending_skips_when_session_active_or_gave_up():
     scheduler._mx_window_date = now.date()
     scheduler._mx_windows = [(now + timedelta(hours=1), now + timedelta(hours=2))]
     scheduler._mx_armed = [True]
-    scheduler._mx_fallback_at = None
-    scheduler._mx_fallback_done = False
+    scheduler._mx_fallback_slots = None
     scheduler._mx_force_close_at = None
 
     starts = {"n": 0}

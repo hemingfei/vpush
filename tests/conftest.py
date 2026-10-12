@@ -46,3 +46,12 @@ def _stub_xueqiu_app_identity(monkeypatch):
     }
     monkeypatch.setattr("app.xq_identity.identity", lambda: dict(fake_identity))
     monkeypatch.setattr("app.xq_identity.rotate_identity", lambda: dict(fake_identity))
+
+
+@pytest.fixture(autouse=True)
+def _disable_mx_human_jitter(monkeypatch):
+    """关闭 MX 人形时间抖动：启动序列/进房路径的秒级随机睡不进回归计时。
+
+    抖动本身的行为由 tests/test_mx.py 的专项用例显式改回环境变量验证。
+    """
+    monkeypatch.setenv("VPUSH_MX_JITTER", "0")

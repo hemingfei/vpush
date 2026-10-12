@@ -115,3 +115,97 @@ def test_cache_image_file_distinguishes_html_from_failure(tmp_path):
     # 合法图片缓存需 > 2048 字节（过小按坏图退回原 URL）
     local = cache_image_file(db, "https://img.example/real.png", "mx_images", "/mx-images", client=client)
     assert local and local.startswith("/mx-images/")
+
+
+# ---- MX 域名图片走 curl_cffi Chrome 人格 ----
+
+class _FakeCffiResponse:
+    def __init__(self, status_code=200, content=b"", headers=None):
+        self.status_code = status_code
+        self.content = content
+        self.headers = headers or {}
+
+
+def test_mx_image_get_follows_same_domain_redirects_only(monkeypatch):
+    """重定向只跟随 MX 域名：同域跳转照常跟，出域一律中止抛错。"""
+    import app.avatar_cache as ac
+
+    calls = []
+
+    class FakeSession:
+        def get(self, url, **kw):
+            calls.append(url)
+            if url.endswith("/a.png"):
+                return _FakeCffiResponse(
+                    302, headers={"location": "https://cdn.mx.2026.foodtop1.com/b.png"}
+                )
+            return _FakeCffiResponse(
+                200, content=b"\x89PNG" * 10, headers={"content-type": "image/png"}
+            )
+
+    monkeypatch.setattr(ac, "_get_mx_image_session", lambda: FakeSession())
+    resp = ac.mx_image_get("https://mx.2026.foodtop1.com/up/a.png")
+    assert resp.status_code == 200
+    assert calls == [
+        "https://mx.2026.foodtop1.com/up/a.png",
+        "https://cdn.mx.2026.foodtop1.com/b.png",
+    ]
+
+    class EvilSession:
+        def get(self, url, **kw):
+            return _FakeCffiResponse(302, headers={"location": "https://evil.example.com/c.png"})
+
+    monkeypatch.setattr(ac, "_get_mx_image_session", lambda: EvilSession())
+    with pytest.raises(ValueError):
+        ac.mx_image_get("https://mx.2026.foodtop1.com/up/a.png")
+
+
+def test_mx_image_get_redirect_budget(monkeypatch):
+    """同域重定向超过 3 次也中止（首跳 + 3 跳上限）。"""
+    import app.avatar_cache as ac
+
+    class LoopSession:
+        def get(self, url, **kw):
+            return _FakeCffiResponse(302, headers={"location": url + "x"})
+
+    monkeypatch.setattr(ac, "_get_mx_image_session", lambda: LoopSession())
+    with pytest.raises(ValueError):
+        ac.mx_image_get("https://mx.2026.foodtop1.com/a")
+
+
+def test_cache_image_file_mx_domain_uses_cffi_persona(tmp_path, monkeypatch):
+    """MX 域名 URL（不传 client）走 curl_cffi 人格下载并落盘；非 MX 域名不受影响。"""
+    import app.avatar_cache as ac
+
+    db = make_db(tmp_path)
+    seen = {}
+
+    def fake_mx_get(url, timeout=15):
+        seen["url"] = url
+        return _FakeCffiResponse(
+            200, content=b"\x89PNG" * 600, headers={"content-type": "image/png"}
+        )
+
+    monkeypatch.setattr(ac, "mx_image_get", fake_mx_get)
+    local = ac.cache_image_file(
+        db, "https://mx.2026.foodtop1.com/Uploads/x.png", "mx_images", "/mx-images"
+    )
+    assert local and local.startswith("/mx-images/")
+    assert seen["url"] == "https://mx.2026.foodtop1.com/Uploads/x.png"
+
+
+def test_cache_avatar_mx_domain_uses_cffi_persona(tmp_path, monkeypatch):
+    import app.avatar_cache as ac
+
+    db = make_db(tmp_path)
+    kid = db.add_kol("mx", "KOL", "9")
+
+    def fake_mx_get(url, timeout=15):
+        return _FakeCffiResponse(
+            200, content=b"\xff\xd8\xff" * 40, headers={"content-type": "image/jpeg"}
+        )
+
+    monkeypatch.setattr(ac, "mx_image_get", fake_mx_get)
+    url = ac.cache_avatar(db, kid, "https://mx.2026.naaifu.cn/avatar/9.jpg")
+    assert url == f"/avatars/{kid}.jpg"
+    assert (tmp_path / "avatars" / f"{kid}.jpg").exists()

@@ -10,6 +10,7 @@ from datetime import datetime
 from ..avatar_cache import cache_avatar
 from ..config import MxConfig
 from ..fetchers.mx.client import MXClient, MXTokenExpiredError
+from ..fetchers.mx.human import human_pause
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,10 @@ class MXRoomSyncService:
              lambda r: f"{len((r or {}).get('list') or [])} 条平台公告"),
         )
         for name, fn, detail_fn in steps:
+            if report:
+                # 相邻启动请求之间补人形随机间隔（真人打开网页时被页面渲染
+                # 天然拉开）；首步之前与 TOKEN 过期抛出路径都不睡
+                human_pause("boot_step")
             started = time.monotonic()
             try:
                 result = fn()

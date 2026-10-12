@@ -135,6 +135,9 @@ class MxConfig:
     ws_path: str = "/socket.io"
     ws_namespace: str = "/msg"
     ws_enabled: bool = True
+    # WS 传输实现：curl_cffi=原生 EIO4/SIO5 栈（Chrome TLS 指纹，2026-10-12
+    # 起默认）；socketio=旧 python-socketio/aiohttp 路径（协议异常时回滚开关）
+    ws_impl: str = "curl_cffi"
     # 官方 msg/list 的 pagesize 实测为 30（2026-09-02 抓包）
     page_size: int = 30
     max_history_pages: int = 100
@@ -257,6 +260,7 @@ _ENV_MAP = {
     "MX_WS_URL": ("sources", "mx", "ws_url"),
     "MX_WS_PATH": ("sources", "mx", "ws_path"),
     "MX_WS_ENABLED": ("sources", "mx", "ws_enabled"),
+    "MX_WS_IMPL": ("sources", "mx", "ws_impl"),
     "MX_PAGE_SIZE": ("sources", "mx", "page_size"),
     "MX_MAX_HISTORY_PAGES": ("sources", "mx", "max_history_pages"),
     "POLLING_INTERVAL_SECONDS": ("polling", "interval_seconds"),

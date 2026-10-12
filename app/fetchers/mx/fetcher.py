@@ -19,6 +19,7 @@ from ..base import (
     warn_timeline_gap,
 )
 from .client import MXClient, MXTokenExpiredError
+from .human import human_pause
 from .ws import MxWsClient
 
 logger = logging.getLogger(__name__)
@@ -161,6 +162,10 @@ class MxFetcher(Fetcher):
             raise
         except Exception:  # noqa: BLE001 - 上报失败不影响拉取
             logger.warning("MX room/view 上报失败 room=%s", room_id, exc_info=True)
+
+        # 进房上报与拉历史之间补人形间隔（房间页挂载时两个 XHR 的天然时差）；
+        # fetch 全程跑在线程池，阻塞睡不影响事件循环
+        human_pause("room_open")
 
         try:
             # 直接获取最新消息

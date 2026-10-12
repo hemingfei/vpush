@@ -21,8 +21,9 @@ logger = logging.getLogger(__name__)
 sio_logger = logging.getLogger(__name__ + ".socketio")
 sio_logger.setLevel(logging.WARNING)
 
-# MX 对外人格常量：HTTP（curl_cffi impersonate）、WS 握手（aiohttp）、图片下载
-# 三处必须同形，否则「同一个 token 多个客户端人格」就是风控的现成特征。
+# MX 对外人格常量：HTTP（curl_cffi impersonate）、WS 握手与收帧（curl_cffi
+# AsyncWebSocket）、图片下载（curl_cffi Session）三处必须同形，否则「同一个
+# token 多个客户端人格」就是风控的现成特征。
 # UA / sec-ch-ua 取自 curl_cffi chrome146 模板实测值（2026-09 当前版本），
 # 改动任何一项都要同步三处并跑 tests/test_mx.py 的人格契约测试。
 IMPERSONATE_TARGET = "chrome146"
@@ -34,6 +35,47 @@ SEC_CH_UA = '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"'
 SEC_CH_UA_MOBILE = "?0"
 SEC_CH_UA_PLATFORM = '"macOS"'
 ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9"
+
+# ---- 原生 Engine.IO v4 / Socket.IO v5 传输（默认实现）----
+# 2026-10-12 前 WS 走 python-socketio → aiohttp：请求头是 Chrome 形态、TLS
+# 指纹却是 Python/OpenSSL——同一个 token，API 是 Chrome 指纹、WS 是 aiohttp
+# 指纹，可被关联。现在默认走 curl_cffi AsyncSession.ws_connect(impersonate)，
+# 握手 TLS（JA3/JA4）与 HTTP 完全同形；协议栈为最小 EIO4+SIO5 手写实现
+# （帧语义移植自 scripts/mx_ws_probe.py 的实测 A/B 探针）。
+# 回退开关：配置 ws_impl=socketio 走旧 python-socketio 路径（兜底回滚用）。
+EIO_QUERY = "EIO=4&transport=websocket"
+# EIO/SIO 握手单帧超时：open 帧 / ns 连接确认都应在数秒内到达
+HANDSHAKE_FRAME_TIMEOUT = 20.0
+# 收帧空闲上限兜底值（open 帧缺失 pingInterval 时使用）：服务端 ping 周期
+# 25s + 宽限 20s + 5s 余量
+DEFAULT_IDLE_LIMIT = 50.0
+
+try:  # curl_cffi 为 MX 硬依赖（client.py 已顶层依赖），此处仅防御性容错
+    from curl_cffi.requests import WebSocketTimeout as _CffiWebSocketTimeout
+except Exception:  # noqa: BLE001
+    _CffiWebSocketTimeout = None
+
+
+async def _open_native_ws(url: str, headers: dict[str, str]):
+    """建立 curl_cffi AsyncWebSocket 连接（Chrome TLS 指纹）。
+
+    独立成模块级函数是测试注入点：单测整体替身，不依赖真实网络与库内部。
+    返回 (AsyncSession, AsyncWebSocket)；调用方负责 terminate/close 收尾。
+    """
+    from curl_cffi.requests import AsyncSession
+
+    session = AsyncSession(impersonate=IMPERSONATE_TARGET)
+    try:
+        ws = await session.ws_connect(
+            url, headers=headers, default_headers=False
+        )
+    except Exception:
+        try:
+            await session.close()
+        except Exception:  # noqa: BLE001 - 尽力收尾
+            pass
+        raise
+    return session, ws
 
 # 断线后的重连策略分两条路径（2026-10-12 诊断后重构，scripts/mx_ws_probe.py
 # 可复现）：
@@ -53,6 +95,14 @@ KICK_BACKOFF_LEVELS = (
 )
 RECONNECT_DELAY_RANGE = (16.0, 36.0)
 
+# 复活额度（2026-10-12 起）：退避/快速重连耗尽不再立即永久放弃——风暴期
+# （下午盘实测新会话 1ms 即被处决）可能持续一小时以上，一次耗尽就放弃会让
+# 整段运行时段空转到关窗。改为「耗尽 → 等 20-30 分钟随机 → 从第 0 档重来」，
+# 有界复活 REVIVAL_BUDGET 次，仍然全败才真正放弃告警；「用户过半小时回来看
+# 一眼」正是真人会有的行为。连接站住（≥ 宽限期）即全额恢复复活额度。
+REVIVAL_DELAY_RANGE = (1200.0, 1800.0)
+REVIVAL_BUDGET = 2
+
 # 连接存活宽限期：连上后存活不足此时长即断开，视为连接「没站住」，不恢复
 # 重连额度。服务端踢连是毫秒级（实测 1-24ms），正常断线间隔在分钟级以上，
 # 60s 足以干净区分两者。
@@ -68,6 +118,11 @@ def _kick_backoff_delay(level: int) -> float:
     """被单会话策略踢后的第 level 档（0 起）退避秒数：档位区间内随机。"""
     level = min(level, len(KICK_BACKOFF_LEVELS) - 1)
     return random.uniform(*KICK_BACKOFF_LEVELS[level])
+
+
+def _revival_delay() -> float:
+    """复活等待秒数：20-30 分钟之间随机。"""
+    return random.uniform(*REVIVAL_DELAY_RANGE)
 
 # 连接阶段被拒时，判定「确定是鉴权失败」的精确信号：
 # - 握手状态码 401/403（aiohttp 报错形如 "Unexpected status code 401 in server response"）
@@ -120,6 +175,22 @@ def _browser_handshake_headers(config) -> dict:
     return headers
 
 
+class _NativeTransport:
+    """原生传输对 run_forever 的 _sio 替身：wait() 即收帧循环，直到连接断开。
+
+    保持 ``await self._sio.wait()`` 这一等待点不变，run_forever 的断线/退避/
+    复活策略与传输实现完全解耦（单测也因此能整体替身 connect 与 wait）。
+    """
+
+    __slots__ = ("_client",)
+
+    def __init__(self, client: "MxWsClient"):
+        self._client = client
+
+    async def wait(self):
+        await self._client._native_recv_loop()
+
+
 class MxWsClient:
     """MX Socket.IO WebSocket client."""
 
@@ -146,6 +217,10 @@ class MxWsClient:
         self.last_message_at: datetime | None = None
         self._sio: Any = None
         self._task: Any = None
+        # 原生传输（默认）：底层 AsyncWebSocket/AsyncSession 与收帧空闲上限
+        self._native_ws: Any = None
+        self._native_session: Any = None
+        self._native_idle_limit: float = DEFAULT_IDLE_LIMIT
         # give-up 回调的 fire-and-forget 任务持引用：事件循环只持弱引用，
         # 不持有可能被 GC 中途取消（照搬 fetcher._ws_tasks 的防御）
         self._giveup_tasks: set = set()
@@ -160,7 +235,171 @@ class MxWsClient:
         self.stop_reason = ""
 
     async def connect(self):
-        """Connect to MX WebSocket server."""
+        """按配置选传输实现：curl_cffi（默认，Chrome TLS 指纹）/ socketio（回退）。"""
+        impl = str(getattr(self.config, "ws_impl", "") or "curl_cffi").strip().lower()
+        if impl == "socketio":
+            await self._connect_socketio()
+        else:
+            await self._connect_native()
+
+    # ---- 原生 EIO4/SIO5 over curl_cffi ----
+
+    def _native_url(self) -> str:
+        base = str(getattr(self.config, "ws_url", "")).rstrip("/")
+        path = str(getattr(self.config, "ws_path", "") or "/socket.io")
+        if not path.startswith("/"):
+            path = "/" + path
+        return f"{base}{path}/?{EIO_QUERY}"
+
+    async def _connect_native(self):
+        """原生握手：WS 建立 → EIO open → SIO ns CONNECT（带 auth）→ 确认。"""
+        # 防御：上一连接的残留句柄先掐掉（正常路径由收帧循环退出时清理）
+        await self._close_native()
+        namespace = str(
+            getattr(self.config, "ws_namespace", self.NAMESPACE) or self.NAMESPACE
+        )
+        url = self._native_url()
+        session, ws = await _open_native_ws(url, _browser_handshake_headers(self.config))
+        self._native_session = session
+        self._native_ws = ws
+        try:
+            frame = await ws.recv_str(timeout=HANDSHAKE_FRAME_TIMEOUT)
+            if not frame.startswith("0"):
+                raise RuntimeError(f"EIO 握手异常首帧：{frame[:80]}")
+            meta = {}
+            try:
+                meta = json.loads(frame[1:]) if frame[1:].strip() else {}
+            except json.JSONDecodeError:
+                logger.warning("MX WS open 帧解析失败（按默认心跳参数续用）：%s", frame[:120])
+            ping_interval = float(meta.get("pingInterval") or 25000) / 1000
+            ping_timeout = float(meta.get("pingTimeout") or 20000) / 1000
+            self._native_idle_limit = ping_interval + ping_timeout + 5.0
+
+            # SIO ns CONNECT：40<ns>,<紧凑 JSON auth>（单帧，与官方网页端一致）
+            auth = {
+                "tt": int(time.time() * 1000),
+                "token": self.config.token,
+                "version": "web",
+            }
+            await ws.send_str(
+                f"40{namespace}," + json.dumps(auth, separators=(",", ":"))
+            )
+            while True:
+                frame = await ws.recv_str(timeout=HANDSHAKE_FRAME_TIMEOUT)
+                if frame.startswith("2"):
+                    if frame == "2":
+                        await ws.send_str("3")
+                        continue
+                    # 2[...]：握手期间即有事件推送，直接分发
+                    await self._dispatch_sio_event(frame)
+                    continue
+                if frame.startswith("44"):
+                    raise RuntimeError(f"Socket.IO 连接被拒：{frame[:200]}")
+                if frame.startswith("41"):
+                    raise RuntimeError(f"握手期间被服务端断开：{frame[:120]}")
+                if frame.startswith("40"):
+                    break  # ns 连接确认（40<ns>,{"sid":...}）
+                if frame == "1":
+                    raise RuntimeError("握手期间服务端关闭连接（EIO CLOSE）")
+                logger.debug("MX WS 握手期忽略帧：%s", frame[:100])
+            self.connected = True
+            logger.info(
+                "MX WebSocket connected（curl_cffi 原生栈，ns=%s）", namespace
+            )
+            self._sio = _NativeTransport(self)
+        except Exception:
+            await self._close_native()
+            raise
+
+    async def _native_recv_loop(self):
+        """收帧循环（_NativeTransport.wait 的实体）：心跳应答 + 事件分发。
+
+        任何导致连接不可用的情况都抛异常交给 run_forever 的断线策略：
+        服务端断开（41/1）、传输错误、以及「pingInterval+pingTimeout 内无任何
+        帧」的心跳超时——后者正是 2026-10-09 事故里僵尸假死的兜底。
+        """
+        ws = self._native_ws
+        if ws is None:
+            raise RuntimeError("MX WS 原生传输未初始化")
+        while True:
+            try:
+                frame = await ws.recv_str(timeout=self._native_idle_limit)
+            except Exception as exc:
+                if _CffiWebSocketTimeout is not None and isinstance(
+                    exc, _CffiWebSocketTimeout
+                ):
+                    raise RuntimeError(
+                        f"WS 心跳超时（{self._native_idle_limit:.0f}s 无任何帧，"
+                        "疑似僵尸连接）"
+                    ) from exc
+                raise
+            if frame == "2":
+                await ws.send_str("3")
+                continue
+            if not frame:
+                continue
+            head = frame[0]
+            if head == "2":  # SIO EVENT：2["event",payload,...]
+                await self._dispatch_sio_event(frame)
+            elif head == "4":
+                sub = frame[1:2]
+                if sub == "4":
+                    raise RuntimeError(f"Socket.IO 连接错误帧：{frame[:200]}")
+                if sub == "1":
+                    raise RuntimeError("服务端发送 Socket.IO DISCONNECT（41）")
+                if sub == "5":
+                    logger.warning(
+                        "MX WS 二进制附件事件暂不支持，已跳过：%s", frame[:120]
+                    )
+                # 40 确认重放及其他子类型：忽略
+            elif head == "1":
+                raise RuntimeError("服务端发送 Engine.IO CLOSE（1）")
+            elif head == "3":
+                continue  # ACK：本客户端不发起需确认的请求
+            elif head == "0":
+                continue  # 重复 open 帧（不应出现）
+            else:
+                logger.debug("MX WS 未识别帧：%s", frame[:100])
+
+    async def _dispatch_sio_event(self, frame: str):
+        """解析 SIO EVENT 帧并分发（对齐旧实现 room_msg + catch-all 语义）。"""
+        body = None
+        if frame.startswith("2["):
+            body = frame[1:]  # 剥掉类型数字，保留 '['：剩余即 JSON 数组
+        elif frame.startswith("42["):  # Socket.IO v2 形态容错
+            body = frame[2:]
+        if body is None:
+            return
+        try:
+            args = json.loads(body)
+        except json.JSONDecodeError:
+            logger.warning("MX WS 事件载荷非 JSON：%s", frame[:120])
+            return
+        if not isinstance(args, list) or len(args) < 2:
+            return
+        payloads = args[1:]
+        # 单载荷直接透传（room_msg 形态）；多参事件归一成列表（同旧 catch-all）
+        await self._handle_message(payloads[0] if len(payloads) == 1 else payloads)
+
+    async def _close_native(self):
+        """掐断原生传输：terminate 不发任何关闭帧（关标签页语义），与 stop 同口径。"""
+        ws, self._native_ws = self._native_ws, None
+        session, self._native_session = self._native_session, None
+        if ws is not None:
+            try:
+                ws.terminate()
+            except Exception:  # noqa: BLE001 - 尽力掐断
+                logger.debug("MX WS 原生句柄 terminate 失败（忽略）", exc_info=True)
+        if session is not None:
+            try:
+                await session.close()
+            except Exception:  # noqa: BLE001
+                logger.debug("MX WS 原生会话关闭失败（忽略）", exc_info=True)
+
+    # ---- python-socketio 传输（ws_impl=socketio 回退）----
+
+    async def _connect_socketio(self):
+        """python-socketio/aiohttp 传输（ws_impl=socketio 回退实现）。"""
         try:
             import socketio
 
@@ -329,14 +568,17 @@ class MxWsClient:
         return parsed
 
     async def run_forever(self):
-        """连接并监听 MX WebSocket，断线后按双路径策略自恢复。
+        """连接并监听 MX WebSocket，断线后按双路径策略 + 有界复活自恢复。
 
-        连接动作本身失败（非鉴权）：等待 16-36 秒随机延时后重连一次，再失败
-        永久放弃（旧语义不变）。连上后被断：走阶梯退避——平台会周期性回收 WS
-        连接（2026-10-12 21:57 实测：两个不同账号 2.8s 内先后被掐 TCP），常态
-        回收后服务端立即可重连，第 0 档 16-36s 快速恢复把空窗压到 ~30s；若
-        快速重连也没站住（风暴期新会话 1ms 即被处决），逐档拉长退避等风暴
-        过去；连接站住即归零，末档耗尽才放弃告警。
+        连接动作本身失败（非鉴权）：等待 16-36 秒随机延时后重连一次；再失败
+        不是立即放弃，而是进入复活等待（见 REVIVAL_BUDGET）。连上后被断：走
+        阶梯退避——平台会周期性回收 WS 连接（2026-10-12 21:57 实测：两个不同
+        账号 2.8s 内先后被掐 TCP），常态回收后服务端立即可重连，第 0 档 16-36s
+        快速恢复把空窗压到 ~30s；若快速重连也没站住（风暴期新会话 1ms 即被
+        处决），逐档拉长退避等风暴过去。退避耗尽进入复活等待（20-30 分钟随机
+        × REVIVAL_BUDGET 次）再从第 0 档重来——风暴可持续一小时以上，一次
+        耗尽就放弃会让整段运行时段空转；复活额度也耗尽才真正放弃告警。
+        连接站住（存活 ≥ 宽限期）即归零档位、恢复全部额度（两条路径通用）。
         连接阶段若被判定为 TOKEN 过期/无效，则不等待不重试，立即放弃。
         """
         self._should_stop = False
@@ -346,6 +588,8 @@ class MxWsClient:
         reconnect_pending = False
         # 互踢退避档位（0 起）：连接站住后归零
         kick_level = 0
+        # 复活额度：退避/快速重连耗尽后消耗一次进入长等待；站住即全额恢复
+        revivals_left = REVIVAL_BUDGET
         try:
             while not self._should_stop:
                 reason = ""
@@ -381,12 +625,28 @@ class MxWsClient:
                 )
                 stood = uptime is not None and uptime >= CONNECTION_GRACE_SECONDS
                 if stood:
-                    # 站住的连接：两条路径的额度/档位都恢复
+                    # 站住的连接：两条路径的额度/档位、复活额度全部恢复
                     reconnect_pending = False
                     kick_level = 0
+                    revivals_left = REVIVAL_BUDGET
                 if connect_attempt and uptime is None:
-                    # 连接动作本身失败（网络错误/端点 404 等）：唯一一次快速重连
+                    # 连接动作本身失败（网络错误/端点 404 等）：快速重连一次；
+                    # 再失败不再立即放弃，而是消耗复活额度等风暴过去
                     if reconnect_pending:
+                        if revivals_left > 0:
+                            revivals_left -= 1
+                            delay = _revival_delay()
+                            logger.error(
+                                "MX WebSocket 快速重连仍失败（%s），%.0f 分钟后复活"
+                                "重连（剩余 %d 次）",
+                                reason or "connection closed",
+                                delay / 60,
+                                revivals_left,
+                            )
+                            if await self._interruptible_sleep(delay):
+                                break  # 复活等待期间被 stop/窗口关闭
+                            reconnect_pending = False
+                            continue
                         self.gave_up = True
                         logger.error(
                             "MX WebSocket 重连失败（%s），已停止自动重连；请在管理后台手动接入",
@@ -397,7 +657,7 @@ class MxWsClient:
                     reconnect_pending = True
                     delay = _reconnect_delay()
                     logger.error(
-                        "MX WebSocket 连接失败（%s），%.0f 秒后重连一次；再失败将停止自动重连",
+                        "MX WebSocket 连接失败（%s），%.0f 秒后重连一次；再失败将进入长间隔复活重试",
                         reason or "connection closed",
                         delay,
                     )
@@ -405,14 +665,31 @@ class MxWsClient:
                     continue
                 # 「连上后被断」：阶梯退避（详见类注释/KICK_BACKOFF_LEVELS）
                 if kick_level >= len(KICK_BACKOFF_LEVELS):
+                    if revivals_left > 0:
+                        revivals_left -= 1
+                        delay = _revival_delay()
+                        logger.error(
+                            "MX WebSocket 退避重连仍未站住（%s）——疑似平台侧连接"
+                            "回收风暴或同 token 单会话互踢，%.0f 分钟后从第 0 档"
+                            "复活重连（剩余 %d 次）",
+                            reason or (
+                                f"存活 {uptime:.1f}s 后被断开" if uptime is not None else "connection closed"
+                            ),
+                            delay / 60,
+                            revivals_left,
+                        )
+                        if await self._interruptible_sleep(delay):
+                            break  # 复活等待期间被 stop/窗口关闭
+                        kick_level = 0
+                        reconnect_pending = False
+                        continue
                     self.gave_up = True
                     detail = reason or (
                         f"存活 {uptime:.1f}s 后被断开" if uptime is not None else "connection closed"
                     )
                     logger.error(
-                        "MX WebSocket 退避重连仍未站住（%s）——疑似平台侧连接回收"
-                        "风暴或同 token 单会话互踢，已停止自动重连；请稍后在管理"
-                        "后台手动接入",
+                        "MX WebSocket 复活重连仍未站住（%s），已停止自动重连；请稍后"
+                        "在管理后台手动接入",
                         detail,
                     )
                     self._fire_give_up(
@@ -432,6 +709,21 @@ class MxWsClient:
                 await asyncio.sleep(delay)
         finally:
             self.running = False
+
+    async def _interruptible_sleep(self, seconds: float) -> bool:
+        """分片睡眠（复活等待用）：期间被 stop 置位即提前醒来并返回 True。
+
+        20-30 分钟的复活等待不能裸睡：窗口关窗靠 task.cancel 能打断裸睡，但
+        stop()（关标签页语义）只置标志——分片睡眠保证两种退出路径都在秒级
+        响应，复活等待不会拖住会话收口。
+        """
+        deadline = time.monotonic() + seconds
+        while not self._should_stop:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(1.0, remaining))
+        return True
 
     def _fire_give_up(self, reason: str, token_expired: bool):
         """永久放弃自动重连时回调外部（发布系统告警等）；回调异常只记日志。"""
@@ -457,7 +749,8 @@ class MxWsClient:
 
         真实用户的退出不会发 socket.io `41`、engine.io CLOSE 包或 WS Close 帧
         ——服务端只会看到 TCP 连接消失（transport close）。因此这里不做任何
-        关闭握手，直接关闭底层 aiohttp 会话掐断连接；sio.disconnect() 会发送
+        关闭握手：原生栈直接 terminate 底层连接（同样不发关闭帧），socketio
+        回退栈直接关闭底层 aiohttp 会话掐断连接；sio.disconnect() 会发送
         优雅关闭包，绝不能用在「退出/关窗」语义上。
 
         reason 记录触发者（管理员手动 / 系统窗口自动），供状态页如实展示。
@@ -466,6 +759,7 @@ class MxWsClient:
         self.manually_stopped = True
         self.stop_reason = reason
         self.connected = False
+        await self._close_native()
         eio = getattr(self._sio, "eio", None)
         http = getattr(eio, "http", None)
         if http is not None and not getattr(http, "closed", True):

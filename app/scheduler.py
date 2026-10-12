@@ -73,12 +73,15 @@ from .wscn_flash import build_wscn_post
 # MX 相关导入
 try:
     from .fetchers.mx.client import MXTokenExpiredError
+    from .fetchers.mx.human import human_delay
     from .services.mx_sync import MXRoomSyncService
     from .services.mx_window import (
         arm_windows,
+        build_daily_plan,
+        dumps_plan,
         generate_mx_daily_windows,
         in_window as mx_in_window,
-        pick_daily_fallback_slot,
+        loads_plan,
         restart_login_allowed,
     )
     MX_AVAILABLE = True
@@ -89,10 +92,17 @@ except Exception as e:
     class MXTokenExpiredError(RuntimeError):
         """MX 模块不可用时的占位类型（仅供 except 匹配）。"""
 
+    def human_delay(kind: str) -> float:  # noqa: E704 - 占位：模块缺失时抖动不可用
+        return 0.0
+
 # 全局 MX 相关变量
 _mx_fetcher = None
 _mx_sync_service = None
 _mx_login_report = None
+
+# 当日运行计划（窗口+兜底槽+强关时刻）的 settings 键：单键当日覆盖，
+# 不累积历史键；值由 app.services.mx_window.dumps_plan/loads_plan 编解码
+MX_DAILY_PLAN_KEY = "mx_daily_plan"
 
 # MX 实时/兜底消息本地规则打标输入（词表/股票名/别名）的缓存时长：
 # WS 消息逐条打标，全量股票名单不能逐条查库；60 秒与管理员改词表的
@@ -2312,8 +2322,9 @@ class Scheduler:
         # 只置标记，_mx_window_tick 末尾 to_thread 异步推送 + 30 分钟节流）
         self._mx_stale_token_alert_pending = False
         # 每日一次兜底拉取的预约时刻（随窗口一起生成，当天固定；错过不补打）
-        self._mx_fallback_at: datetime | None = None
-        self._mx_fallback_done = False
+        # 每日兜底拉取：当天 1~3 个随机预约槽（每窗口最多一槽），槽独立结算
+        self._mx_fallback_slots: list | None = None
+        self._mx_fallback_settled: set = set()
         # 晚间兜底断开：23:30-23:55 之间随机一秒，若 MX 仍在线则强制断开（防手动登录忘关）
         self._mx_force_close_at: datetime | None = None
         self._mx_force_close_done = False
@@ -2662,12 +2673,28 @@ class Scheduler:
     _MX_TOKEN_MAX_AGE_SECONDS = 49 * 3600
 
     def _mx_windows_today(self) -> list:
-        """取（必要时生成）当天的运行窗口与兜底预约时刻，生成后当天固定。"""
+        """取（必要时生成并持久化）当天的运行计划，生成后当天固定。
+
+        2026-10-12 起：当日计划（窗口/兜底槽/强关时刻）整体持久化到 settings
+        （单键当日覆盖），服务重启后复用同一份——「真人日程当天固定」，多次
+        重启不再让窗口形状漂移。持久化失败只损失重启稳定性，不影响今天运行。
+        """
         today = datetime.now(CN_TZ).date()
         if self._mx_window_date != today or self._mx_windows is None:
             now = datetime.now(CN_TZ)
             self._mx_window_date = today
-            self._mx_windows = generate_mx_daily_windows(today)
+            plan = None
+            try:
+                plan = loads_plan(self.db.get_setting(MX_DAILY_PLAN_KEY), today)
+            except Exception:  # noqa: BLE001 - settings 读失败按无计划处理
+                logger.warning("MX 当日计划读取失败，将重新生成", exc_info=True)
+            if plan is None:
+                plan = build_daily_plan(today)
+                try:
+                    self.db.set_setting(MX_DAILY_PLAN_KEY, dumps_plan(plan))
+                except Exception:  # noqa: BLE001 - 持久化失败不影响今天
+                    logger.warning("MX 当日计划持久化失败（重启后将重新随机）", exc_info=True)
+            self._mx_windows = list(plan.windows)
             # 重启安全：生成时刻（≈重启时刻）已过开窗点的窗口不武装——重启后
             # 不自动续连，只能管理员「登录」手动拉起，或等下一个未到点的窗口。
             # 例外（2026-09-16 起）：工作日 08:00-22:00 内重启允许自动登录——
@@ -2681,18 +2708,17 @@ class Scheduler:
             self._mx_restart_login_pending = restart_login and not mx_in_window(
                 now, self._mx_windows
             )
-            # 兜底预约槽只从当天仍武装的窗口里挑：已错过开窗点的窗口不会自动
-            # 拉起会话，选中它们只会得到「时刻一到就放弃」的迟到执行
-            self._mx_fallback_at = pick_daily_fallback_slot(self._mx_windows, self._mx_armed)
-            self._mx_fallback_done = False
+            # 兜底预约槽随计划持久化（生成时全部窗口都未到点=全武装）：
+            # 重启后槽保持原时刻，对外可见的拉取日程不随重启漂移；个别槽落在
+            # 因重启错过开窗点的窗口里，到期会话未活即放弃，与旧口径一致
+            self._mx_fallback_slots = list(plan.fallback_slots)
+            self._mx_fallback_settled = set()
             # 新的一天重置「本窗口已手动登录尝试」标记（窗口下标跨天复用）
             self._mx_manual_attempted_idx = None
             # 晚间兜底断开时刻：23:30-23:55 之间随机（与晚间关窗同区间，先到者
             # 关窗并 disarm 当前窗口，见 _mx_maybe_nightly_force_close；这条额外
             # 兜住「关窗后手动登录忘关」的场景）
-            self._mx_force_close_at = datetime(
-                today.year, today.month, today.day, 23, 30, tzinfo=CN_TZ
-            ) + timedelta(seconds=random.randint(0, 1500))
+            self._mx_force_close_at = plan.force_close_at
             self._mx_force_close_done = False
             missed = [i + 1 for i, armed in enumerate(self._mx_armed) if not armed]
             restart_note = ""
@@ -2711,7 +2737,9 @@ class Scheduler:
                     f"{s.strftime('%H:%M:%S')}~{e.strftime('%H:%M:%S')}"
                     for s, e in self._mx_windows
                 ),
-                self._mx_fallback_at.strftime("%H:%M:%S") if self._mx_fallback_at else "无",
+                "、".join(
+                    t.strftime("%H:%M:%S") for t in self._mx_fallback_slots
+                ) or "无",
                 f"；第 {'、'.join(map(str, missed))} 段因重启错过登录时刻，今天不再自动登录"
                 if missed
                 else "",
@@ -2903,6 +2931,7 @@ class Scheduler:
                     f"⚠️ 登录时的启动序列/房间列表同步失败：{exc}",
                 )
             else:
+                await asyncio.sleep(human_delay("phase"))  # 页面加载 → 应用初始化的人形间隔
                 try:
                     count = await self._mx_sync_service.sync_rooms()
                     record("room/list", True, f"{count} 个房间")
@@ -2929,6 +2958,7 @@ class Scheduler:
                 )
                 return
         if self.mx_config.ws_enabled:
+            await asyncio.sleep(human_delay("phase"))  # 房间列表就绪 → 建立 WS 的人形间隔
             try:
                 message = await self.mx_ws_control("connect", source="auto")
                 record("websocket", True, message)
@@ -2957,28 +2987,36 @@ class Scheduler:
         logger.info("MX 平台已断开：运行时段结束，会话停止")
 
     async def _mx_maybe_daily_fallback(self):
-        """每日一次兜底拉取：到达当天预约时刻且会话存活时执行，每天最多 1 次。
+        """每日兜底拉取：当天 1~3 个随机预约槽，各槽独立结算、每 tick 至多执行一次。
 
-        兜底的存在意义只是防 WS 静默假死，量级必须压到真人水平：时刻一过
-        或会话未存活直到关窗，当天直接放弃，绝不补打。
+        兜底的存在意义只是防 WS 静默假死，量级必须压到真人水平：槽到期时会话
+        未活（已出运行时段）即放弃该槽，绝不补打；会话尚未起来则等下个 tick，
+        直到所在时段结束。每天总量有界（≤3 次），槽分布由计划生成时保证
+        每窗口最多一槽，不会背靠背连发。
         """
-        if self._mx_fallback_at is None or self._mx_fallback_done:
+        slots = self._mx_fallback_slots or []
+        if not slots or len(self._mx_fallback_settled) >= len(slots):
             return
         now = datetime.now(CN_TZ)
-        if now < self._mx_fallback_at:
+        for i, slot in enumerate(slots):
+            if i in self._mx_fallback_settled or now < slot:
+                continue
+            if not self._mx_in_window():
+                self._mx_fallback_settled.add(i)
+                logger.info("MX 兜底拉取第 %d/%d 槽放弃：预约时刻后会话未存活（运行时段已结束）",
+                            i + 1, len(slots))
+                continue
+            if self._mx_token_expired or not self._mx_session_active():
+                # 会话还没起来（或 TOKEN 刚过期）：等下一个 30s tick，直到时段结束
+                return
+            self._mx_fallback_settled.add(i)
+            logger.info(
+                "MX 兜底拉取第 %d/%d 槽开始（预约 %s）",
+                i + 1, len(slots), slot.strftime("%H:%M:%S"),
+            )
+            await self._mx_fallback_pull_once()
+            # 每 tick 至多执行一次：剩余到期槽顺延到下个 tick，天然拉开间隔
             return
-        if not self._mx_in_window():
-            self._mx_fallback_done = True
-            logger.info("MX 每日兜底拉取放弃：预约时刻后会话未存活（运行时段已结束）")
-            return
-        if self._mx_token_expired or not self._mx_session_active():
-            # 会话还没起来（或 TOKEN 刚过期）：等下一个 30s tick，直到窗口结束
-            return
-        self._mx_fallback_done = True
-        logger.info(
-            "MX 每日兜底拉取开始（预约 %s）", self._mx_fallback_at.strftime("%H:%M:%S")
-        )
-        await self._mx_fallback_pull_once()
 
     async def _mx_maybe_nightly_force_close(self):
         """晚间兜底断开：23:30-23:55 之间随机一秒，MX 若仍在线一律强制断开。
@@ -3335,6 +3373,7 @@ class Scheduler:
                     logger.error("MX 启动序列异常: %s", exc, exc_info=True)
                     record("启动序列", False, str(exc)[:100])
                 else:
+                    await asyncio.sleep(human_delay("phase"))  # 与自动开窗同款人形间隔
                     try:
                         count = await service.sync_rooms()
                         record("room/list", True, f"{count} 个房间")
@@ -3349,6 +3388,7 @@ class Scheduler:
             if self._mx_token_expired:
                 record("websocket", False, "TOKEN 已熔断，跳过连接")
             elif self.mx_config.ws_enabled:
+                await asyncio.sleep(human_delay("phase"))
                 try:
                     record("websocket", True, await self.mx_ws_control("connect"))
                 except Exception as exc:

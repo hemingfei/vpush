@@ -8,10 +8,11 @@ import hashlib
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -156,13 +157,70 @@ def _maybe_cleanup_part_files(dest: Path) -> None:
 def headers_for(url: str) -> dict[str, str]:
     if "zsxq.com" in (url or ""):
         return dict(ZSXQ_HEADERS)
-    netloc = urlparse(url or "").netloc
+    netloc = urlparse(url).netloc
     if any(netloc.endswith(domain) for domain in MX_SITE_DOMAINS):
         # 延迟导入：app.fetchers.mx 包初始化会反向导入本模块，顶层导入会成环
         from .fetchers.mx.ws import BROWSER_UA
 
         return {"User-Agent": BROWSER_UA, "Referer": f"https://{netloc}/"}
     return dict(DOWNLOAD_HEADERS)
+
+
+def is_mx_site_url(url: str) -> bool:
+    """URL 主机是否落在 MX 平台域名（头像/图片的浏览器人格下载判定）。"""
+    netloc = urlparse(url or "").netloc
+    return any(netloc.endswith(domain) for domain in MX_SITE_DOMAINS)
+
+
+# MX 图片/头像下载的共享 curl_cffi 会话：与 API/WS 同一 Chrome 人格（TLS 指纹），
+# 消除「HTTP 是 Chrome 指纹、图片下载是 Python 指纹」的暴露面。curl_cffi Session
+# 按线程隔离底层 curl 句柄，可跨线程共享（见 app/fetchers/mx/client.py 同款口径）。
+_mx_image_session = None
+_mx_image_session_lock = threading.Lock()
+
+
+def _get_mx_image_session():
+    global _mx_image_session
+    session = _mx_image_session
+    if session is not None:
+        return session
+    with _mx_image_session_lock:
+        if _mx_image_session is None:
+            from curl_cffi.requests import Session
+
+            # 延迟导入理由同 headers_for（避免包初始化成环）
+            from .fetchers.mx.ws import IMPERSONATE_TARGET
+
+            _mx_image_session = Session(impersonate=IMPERSONATE_TARGET)
+        return _mx_image_session
+
+
+def mx_image_get(url: str, timeout: float = 15):
+    """MX 域名图片下载：Chrome 人格 + 逐跳限定 MX 域名的重定向。
+
+    替代 httpx 路径上 safe_get_limited 的逐跳 IP 固定（SSRF 防护）：这里以
+    「重定向只跟随 MX 域名」收口——首跳本就限定在代码内写死的平台域名，
+    出域一律中止。响应体大小下载后校验（域名可信 + 15s 超时兜底传输量，
+    不做流式截断）。
+    """
+    current = url
+    for _ in range(4):  # 首跳 + 至多 3 次重定向
+        if not is_mx_site_url(current):
+            raise ValueError(f"MX 图片重定向离站，中止下载：{current[:120]}")
+        resp = _get_mx_image_session().get(
+            current,
+            headers=headers_for(current),
+            timeout=timeout,
+            allow_redirects=False,
+        )
+        if resp.status_code in (301, 302, 303, 307, 308):
+            location = resp.headers.get("location") or ""
+            if not location:
+                raise ValueError("MX 图片重定向缺少 Location")
+            current = urljoin(current, location)
+            continue
+        return resp
+    raise ValueError(f"MX 图片重定向次数过多：{url[:120]}")
 
 
 def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.Client | None = None) -> str | None:
@@ -188,11 +246,18 @@ def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.C
         if existing.exists() and existing.stat().st_size > 2048:
             return f"{url_prefix}/{existing.name}"
     owns_client = client is None
-    client = client or httpx.Client(timeout=15, follow_redirects=True, headers=headers_for(url))
+    # MX 域名走 curl_cffi Chrome 人格下载（调用方未显式传 httpx client 时）
+    mx_cffi = client is None and is_mx_site_url(url)
+    client = client or (None if mx_cffi else httpx.Client(timeout=15, follow_redirects=True, headers=headers_for(url)))
     try:
-        resp = safe_get_limited(
-            client, url, max_bytes=MAX_BYTES, headers=headers_for(url), timeout=15
-        )
+        if mx_cffi:
+            resp = mx_image_get(url)
+            if len(resp.content) > MAX_BYTES:
+                return url
+        else:
+            resp = safe_get_limited(
+                client, url, max_bytes=MAX_BYTES, headers=headers_for(url), timeout=15
+            )
         if resp.status_code != 200 or not resp.content:
             return url
         content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -217,7 +282,7 @@ def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.C
         logger.debug("cache_image_file 下载失败: %s", url[:120], exc_info=True)
         return url
     finally:
-        if owns_client:
+        if owns_client and client is not None:
             client.close()
 
 
@@ -233,11 +298,16 @@ def cache_avatar(db, kol_id: int, remote_url: str, client: httpx.Client | None =
         if cached.is_file() and cached.stat().st_size > 0:
             return local
     owns_client = client is None
-    client = client or httpx.Client(timeout=15, follow_redirects=True, headers=headers_for(url))
+    # MX 域名走 curl_cffi Chrome 人格下载（调用方未显式传 httpx client 时）
+    mx_cffi = client is None and is_mx_site_url(url)
+    client = client or (None if mx_cffi else httpx.Client(timeout=15, follow_redirects=True, headers=headers_for(url)))
     try:
-        resp = safe_get_limited(
-            client, url, max_bytes=MAX_BYTES, headers=headers_for(url), timeout=15
-        )
+        if mx_cffi:
+            resp = mx_image_get(url)
+        else:
+            resp = safe_get_limited(
+                client, url, max_bytes=MAX_BYTES, headers=headers_for(url), timeout=15
+            )
         if resp.status_code != 200 or not resp.content:
             return url
         content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -265,5 +335,5 @@ def cache_avatar(db, kol_id: int, remote_url: str, client: httpx.Client | None =
         logger.debug("cache_avatar 下载失败: %s", url[:120], exc_info=True)
         return url
     finally:
-        if owns_client:
+        if owns_client and client is not None:
             client.close()
