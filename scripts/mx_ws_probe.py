@@ -348,6 +348,9 @@ def probe_curlffi(ws_url: str, namespace: str, token: str,
     session.close()
     result = stats.summary(t_start)
     log_event("curlffi", "ws_end", **result)
+    # curl 的 C 层句柄会让 daemon recv 线程吊住进程：诊断工具直接强制退出，
+    # 避免僵尸进程继续占着平台 WS 会话污染后续观察（2026-10-12 实踩）
+    os._exit(0)
     return result
 
 
