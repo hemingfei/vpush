@@ -48,7 +48,7 @@ from app.fetchers.mx.login import (  # noqa: E402
     rasterize_svg,
 )
 
-DEFAULT_API_BASE = "https://mx.2026.naaifu.cn/business-api/5"
+DEFAULT_API_BASE = "https://mx.2026.foodtop1.com/business-api/4"
 
 # 登录失败 msg 里的「致命」特征：换验证码重试毫无意义，只会积累连续失败
 # 登录的风控信号——命中即熔断本轮，剩余次数不烧，等人工处置
@@ -69,12 +69,27 @@ def resolve_origin(origin_arg: str | None, config_api_base: str) -> str:
 
 
 def api_base_of(origin: str) -> str:
-    return f"{origin.rstrip('/')}/business-api/5"
+    return f"{origin.rstrip('/')}/business-api/4"
 
 
 def ws_url_of(api_base: str) -> str:
     scheme = "wss" if api_base.startswith("https://") else "ws"
     return f"{scheme}://{api_base.split('://', 1)[1]}".rstrip("/")
+
+
+def business_base_of(cand: str, origin: str) -> str:
+    """登录 hosturl 候选 → business-api 基址。
+
+    新版（2026-10-12 实测）hosturl 是路径形态（如 "/4"，前端拼成 /business-api/4），
+    旧版是完整域名；路径与域名都可能是可用候选。"""
+    cand = cand.strip().rstrip("/")
+    if cand.startswith("http"):
+        return cand if "/business-api" in cand else api_base_of(cand)
+    if cand.startswith("/business-api"):
+        return f"{origin.rstrip('/')}{cand}"
+    if cand.startswith("/") and cand != "/":
+        return f"{origin.rstrip('/')}/business-api{cand}"
+    return api_base_of(origin)
 
 
 def probe_token(api_base: str, token: str, session) -> bool:
@@ -470,7 +485,7 @@ def main(argv=None) -> int:
             candidates.append(result["hosturl"].rstrip("/"))
         candidates.append(origin)
         for cand in candidates:
-            cand_base = cand if "/business-api" in cand else api_base_of(cand)
+            cand_base = business_base_of(cand, origin)
             if probe_token(cand_base, new_token, client._session):
                 switch_base = cand_base
                 break

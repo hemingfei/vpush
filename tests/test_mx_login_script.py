@@ -232,12 +232,30 @@ def test_probe_token_accepts_and_rejects():
 
 def test_origin_and_ws_url_helpers():
     assert mx_login_script.api_base_of("https://mx.2026.foodtop1.com") == \
-        "https://mx.2026.foodtop1.com/business-api/5"
-    assert mx_login_script.ws_url_of("https://x.test/business-api/5") == \
-        "wss://x.test/business-api/5"
-    assert mx_login_script.resolve_origin(None, "https://a.test/business-api/5") == "https://a.test"
-    assert mx_login_script.resolve_origin("https://b.test", "https://a.test/business-api/5") == "https://b.test"
+        "https://mx.2026.foodtop1.com/business-api/4"
+    assert mx_login_script.ws_url_of("https://x.test/business-api/4") == \
+        "wss://x.test/business-api/4"
+    assert mx_login_script.resolve_origin(None, "https://a.test/business-api/4") == "https://a.test"
+    assert mx_login_script.resolve_origin("https://b.test", "https://a.test/business-api/4") == "https://b.test"
     assert mx_login_script.mask("abcdefghijklmnop") == "abcd…mnop"
+
+
+def test_business_base_of_handles_all_hosturl_forms():
+    """登录 hosturl 三种形态：新版路径（/4、/business-api/4）与旧版完整域名。"""
+    origin = "https://mx.2026.foodtop1.com"
+    # 新版实测（2026-10-12）：hosturl 是版本路径，前端拼 /business-api/4
+    assert mx_login_script.business_base_of("/4", origin) == \
+        f"{origin}/business-api/4"
+    assert mx_login_script.business_base_of("/business-api/4", origin) == \
+        f"{origin}/business-api/4"
+    # 旧版：完整域名（带或不带 business-api 段）
+    assert mx_login_script.business_base_of("https://api.test", origin) == \
+        "https://api.test/business-api/4"
+    assert mx_login_script.business_base_of("https://api.test/business-api/7", origin) == \
+        "https://api.test/business-api/7"
+    # 空值/根路径回落登录域名默认版本
+    assert mx_login_script.business_base_of("", origin) == f"{origin}/business-api/4"
+    assert mx_login_script.business_base_of("/", origin) == f"{origin}/business-api/4"
 
 
 # ---- 写回 API ----

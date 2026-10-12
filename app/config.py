@@ -128,9 +128,10 @@ class ImaConfig:
 class MxConfig:
     enabled: bool = False
     token: str = ""
-    api_base: str = "https://mx.2026.naaifu.cn/business-api/5"
-    # 官方网页端 WS 实际连 {api_base}/socket.io/（2026-09-02 抓包），不再是站点根路径
-    ws_url: str = "wss://mx.2026.naaifu.cn/business-api/5"
+    # 2026-10-12 平台迁至 foodtop1.com、业务 API 版本 5→4（浏览器抓包实测；
+    # 旧域 naaifu.cn 的 /business-api/* 已 404）。WS 端点形态仍为 {api_base}/socket.io/
+    api_base: str = "https://mx.2026.foodtop1.com/business-api/4"
+    ws_url: str = "wss://mx.2026.foodtop1.com/business-api/4"
     ws_path: str = "/socket.io"
     ws_namespace: str = "/msg"
     ws_enabled: bool = True

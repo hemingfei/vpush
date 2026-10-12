@@ -35,13 +35,16 @@ SEC_CH_UA_MOBILE = "?0"
 SEC_CH_UA_PLATFORM = '"macOS"'
 ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9"
 
-# 断线后的重连策略：等 16-36 秒（随机）重连一次；重连后连接没站住（存活不足
-# CONNECTION_GRACE_SECONDS，典型为被服务端「连上即踢」）或重连动作本身失败，
-# 就永久放弃自动重连。高频无上限重连是攻击性特征，固定周期的重连节拍也是机器
-# 信号（2026-09-02 由固定短周期改为区间随机），恢复只能靠管理员在后台手动接入。
-# 宽限期是 2026-10-09 午后被踢风暴后补的：旧逻辑 connect() 一返回就恢复重连
-# 额度，被毫秒级踢断反而每轮都满血，退化成固定 ~30s 节拍的无限重连（实测
-# 13:28-13:34 连续 13 次重连 12 次被秒踢），恰恰是本策略要避免的机器信号。
+# 断线后的重连策略分两条路径（2026-10-12 诊断后重构，scripts/mx_ws_probe.py
+# 可复现）：平台对同账号实施单 WS 会话互踢——新连接接入后服务端毫秒级给旧
+# 连接发 Socket.IO DISCONNECT(41) 且不再发心跳/close（僵尸静默，engine.io 读
+# 超时 ~45s 后才判定断开）。因此：
+# - 「连接动作本身失败」（网络错误/端点 404 等）：等 16-36 秒（随机）重连一次，
+#   再失败永久放弃——高频无上限重连是攻击性特征，固定周期节拍也是机器信号。
+# - 「连上后被断」（含被 41 踢、僵尸静默超时、网络中断）：立即抢回会话只会
+#   与对手（通常是账号本人在网页端，socket.io-js 会无限自动重连）互踢，
+#   按阶梯退避等待对方结束会话再接入；连接站住（存活 ≥ 宽限期）即归零。
+KICK_BACKOFF_LEVELS = ((120.0, 180.0), (300.0, 420.0), (600.0, 900.0))
 RECONNECT_DELAY_RANGE = (16.0, 36.0)
 
 # 连接存活宽限期：连上后存活不足此时长即断开，视为连接「没站住」，不恢复
@@ -53,6 +56,12 @@ CONNECTION_GRACE_SECONDS = 60.0
 def _reconnect_delay() -> float:
     """断线重连等待秒数：16-36 秒之间随机。"""
     return random.uniform(*RECONNECT_DELAY_RANGE)
+
+
+def _kick_backoff_delay(level: int) -> float:
+    """被单会话策略踢后的第 level 档（0 起）退避秒数：档位区间内随机。"""
+    level = min(level, len(KICK_BACKOFF_LEVELS) - 1)
+    return random.uniform(*KICK_BACKOFF_LEVELS[level])
 
 # 连接阶段被拒时，判定「确定是鉴权失败」的精确信号：
 # - 握手状态码 401/403（aiohttp 报错形如 "Unexpected status code 401 in server response"）
@@ -314,20 +323,22 @@ class MxWsClient:
         return parsed
 
     async def run_forever(self):
-        """连接并监听 MX WebSocket，断线后按「只重连一次」策略自恢复。
+        """连接并监听 MX WebSocket，断线后按双路径策略自恢复。
 
-        首次连接失败或断线：等待 16-36 秒随机延时后重连一次；
-        重连后连接站住（存活超过宽限期）则恢复额度，下次断线仍有一次机会；
-        重连没站住（连接动作报错，或连上后宽限期内即再断）就永久放弃
-        自动重连：置 gave_up 并触发 on_give_up 回调（用于系统账号发布告警）。
+        连接动作本身失败（非鉴权）：等待 16-36 秒随机延时后重连一次，再失败
+        永久放弃（旧语义不变）。连上后被断：走单会话互踢的阶梯退避——立即重连
+        会踢掉对方（通常是账号本人开着网页），对方自动重连又会踢回来，旧策略
+        在这种互踢里一轮就耗尽额度永久放弃；阶梯退避（约 2-3 / 5-7 / 10-15 分钟
+        随机）给对方留出结束会话的时间，连接站住即归零，三档耗尽才放弃告警。
         连接阶段若被判定为 TOKEN 过期/无效，则不等待不重试，立即放弃。
-        恢复只能由管理员在后台手动接入（start_ws 会创建新客户端，状态自动复位）。
         """
         self._should_stop = False
         self.running = True
         self.gave_up = False
-        # 本次连接是否还欠一次「断线后重连」机会：连接站住后恢复
+        # 连接动作失败路径的「唯一一次快速重连」额度：连接站住后恢复
         reconnect_pending = False
+        # 互踢退避档位（0 起）：连接站住后归零
+        kick_level = 0
         try:
             while not self._should_stop:
                 reason = ""
@@ -356,36 +367,59 @@ class MxWsClient:
                     logger.error("MX WebSocket 连接被拒（TOKEN 过期/无效），已停止重试")
                     self._fire_give_up(reason, True)
                     break
-                # 只有站住的连接才恢复重连额度：存活不足宽限期（连上即被掐断）
-                # 不算站住，额度保持已用——「连上即踢」的循环最多两轮就永久放弃；
-                # connect() 抛错时 connected_at 为 None，同样不算站住（保持旧语义）
                 uptime = (
                     time.monotonic() - connected_at
                     if connected_at is not None
                     else None
                 )
-                if uptime is not None and uptime >= CONNECTION_GRACE_SECONDS:
+                stood = uptime is not None and uptime >= CONNECTION_GRACE_SECONDS
+                if stood:
+                    # 站住的连接：两条路径的额度/档位都恢复
                     reconnect_pending = False
-                if reconnect_pending:
-                    # 那次重连也没站住（或重连动作报错）：永久放弃
+                    kick_level = 0
+                if connect_attempt and uptime is None:
+                    # 连接动作本身失败（网络错误/端点 404 等）：唯一一次快速重连
+                    if reconnect_pending:
+                        self.gave_up = True
+                        logger.error(
+                            "MX WebSocket 重连失败（%s），已停止自动重连；请在管理后台手动接入",
+                            reason,
+                        )
+                        self._fire_give_up(reason, False)
+                        break
+                    reconnect_pending = True
+                    delay = _reconnect_delay()
+                    logger.error(
+                        "MX WebSocket 连接失败（%s），%.0f 秒后重连一次；再失败将停止自动重连",
+                        reason or "connection closed",
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                # 「连上后被断」：单会话互踢的阶梯退避（详见类注释/KICK_BACKOFF_LEVELS）
+                if kick_level >= len(KICK_BACKOFF_LEVELS):
                     self.gave_up = True
                     detail = reason or (
-                        f"重连后 {uptime:.1f}s 内即断开"
-                        if uptime is not None
-                        else "connection closed"
+                        f"存活 {uptime:.1f}s 后被断开" if uptime is not None else "connection closed"
                     )
                     logger.error(
-                        "MX WebSocket 重连失败（%s），已停止自动重连；请在管理后台手动接入",
+                        "MX WebSocket 退避重连仍未站住（%s）——疑似同账号单会话互踢"
+                        "（网页端占用），已停止自动重连；请关闭网页会话后在管理后台手动接入",
                         detail,
                     )
-                    self._fire_give_up(reason, False)
+                    self._fire_give_up(
+                        reason or "single-session kick backoff exhausted", False
+                    )
                     break
-                reconnect_pending = True
-                delay = _reconnect_delay()
+                delay = _kick_backoff_delay(kick_level)
+                kick_level += 1
                 logger.error(
-                    "MX WebSocket 断开（%s），%.0f 秒后重连一次；再失败将停止自动重连",
+                    "MX WebSocket 断开（%s，存活 %.0f 秒）——平台同账号单会话互踢，"
+                    "%.0f 秒后第 %d 档退避重连",
                     reason or "connection closed",
+                    uptime or 0,
                     delay,
+                    kick_level,
                 )
                 await asyncio.sleep(delay)
         finally:

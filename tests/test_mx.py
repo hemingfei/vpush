@@ -649,10 +649,11 @@ def test_ws_successful_reconnect_resets_and_keeps_listening(monkeypatch):
 
 
 def test_ws_gives_up_when_retry_after_clean_drop_fails(monkeypatch):
-    """重连成功后再次断线（wait 正常返回）：仍有一次重连机会；该次失败则放弃。"""
+    """连上后被断（走互踢退避）→ 退避重连动作本身失败：仍有一次快速重连，再失败放弃。"""
     import app.fetchers.mx.ws as mx_ws
 
     monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "_kick_backoff_delay", lambda level: 0.01)
     give_ups = []
     client = MxWsClient(
         SimpleNamespace(), lambda m: None,
@@ -673,20 +674,25 @@ def test_ws_gives_up_when_retry_after_clean_drop_fails(monkeypatch):
     client.connect = connect
     asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
 
-    assert attempts["n"] == 2
+    assert attempts["n"] == 3  # 首连断开 + 退避重连失败 + 唯一一次快速重连失败
     assert client.gave_up is True
     assert give_ups and give_ups[0][1] is False and "reconnect refused" in give_ups[0][0]
 
 
 def test_ws_gives_up_when_reconnect_kicked_within_grace(monkeypatch):
-    """「连上即被踢」风暴：重连后宽限期内再断视为没站住，第二轮即永久放弃。
+    """「连上即被踢」的互踢战：三档退避逐级升档，第四轮仍未站住才永久放弃。
 
-    回归 2026-10-09 午后事故：旧逻辑 connect() 一返回就恢复重连额度，被服务端
-    毫秒级踢断反而每轮满血，实测 13 次重连 12 次被秒踢、固定 ~30s 节拍无限循环。
+    2026-10-12 诊断（scripts/mx_ws_probe.py 实测）：平台同账号单 WS 会话互踢，
+    新连接接入毫秒级踢掉旧连接且静默不发 close。立即抢回只会与对方（通常是
+    网页端，socket.io-js 无限自动重连）互踢，故按 2-3/5-7/10-15 分钟阶梯退避；
+    三档耗尽才放弃告警。
     """
     import app.fetchers.mx.ws as mx_ws
 
     monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    backoff_levels = []
+    monkeypatch.setattr(mx_ws, "_kick_backoff_delay",
+                        lambda level: backoff_levels.append(level) or 0.01)
     give_ups = []
     client = MxWsClient(
         SimpleNamespace(), lambda m: None,
@@ -705,16 +711,19 @@ def test_ws_gives_up_when_reconnect_kicked_within_grace(monkeypatch):
     client.connect = connect
     asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
 
-    assert attempts["n"] == 2  # 首连被踢 + 唯一一次重连再被踢，绝没有第三次
+    assert attempts["n"] == 4  # 首连 + 三档退避各一次，绝没有第五次
+    assert backoff_levels == [0, 1, 2]  # 档位逐级递增
     assert client.gave_up is True
     assert give_ups and give_ups[0][1] is False
+    assert "single-session" in give_ups[0][0]
 
 
 def test_ws_standing_connection_restores_reconnect_credit(monkeypatch):
-    """站住的连接（存活超过宽限期）恢复重连额度：健康断线每轮都有一次重连机会。"""
+    """站住的连接（存活超过宽限期）恢复两条路径的额度/档位：健康断线每轮都自愈。"""
     import app.fetchers.mx.ws as mx_ws
 
     monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "_kick_backoff_delay", lambda level: 0.01)
     monkeypatch.setattr(mx_ws, "CONNECTION_GRACE_SECONDS", 0.05)
     give_ups = []
     client = MxWsClient(
@@ -749,10 +758,11 @@ def test_ws_standing_connection_restores_reconnect_credit(monkeypatch):
 
 
 def test_ws_kick_recovered_by_standing_retry(monkeypatch):
-    """首连被秒踢仍有一次重连机会；重连站住则恢复监听，不触发放弃。"""
+    """首连被秒踢走退避路径；退避重连站住则恢复监听，不触发放弃。"""
     import app.fetchers.mx.ws as mx_ws
 
     monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "_kick_backoff_delay", lambda level: 0.01)
     give_ups = []
     client = MxWsClient(
         SimpleNamespace(), lambda m: None,
@@ -791,6 +801,82 @@ def test_ws_kick_recovered_by_standing_retry(monkeypatch):
             pass
 
     asyncio.run(scenario())
+
+
+def test_ws_kick_level_resets_after_standing_connection(monkeypatch):
+    """互踢退避后重连站住：档位归零——下一个会话被踢又从第 0 档退避，不累积。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    monkeypatch.setattr(mx_ws, "CONNECTION_GRACE_SECONDS", 0.05)
+    backoff_levels = []
+
+    def fake_backoff(level: int) -> float:
+        backoff_levels.append(level)
+        # 前两次退避极短让场景快速推进；之后拉长到 0.5s，保证主循环的取消
+        # 必然落在第三档睡眠里——否则 10ms 一轮能在轮询间隔内连跑到 gave_up
+        return 0.01 if len(backoff_levels) <= 2 else 0.5
+
+    monkeypatch.setattr(mx_ws, "_kick_backoff_delay", fake_backoff)
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+    attempts = {"n": 0}
+
+    async def connect():
+        attempts["n"] += 1
+
+        async def kicked():
+            pass  # 连上即被踢（uptime ≈ 0）
+
+        async def stand_then_drop():
+            await asyncio.sleep(0.1)  # 站住超过宽限期后被断开
+
+        if attempts["n"] == 1:
+            client._sio = SimpleNamespace(wait=kicked)          # 第 1 档退避
+        elif attempts["n"] == 2:
+            client._sio = SimpleNamespace(wait=stand_then_drop)  # 站住 → 档位归零
+        else:
+            client._sio = SimpleNamespace(wait=kicked)          # 应回到第 0 档
+
+    client.connect = connect
+
+    async def scenario():
+        task = asyncio.create_task(client.run_forever())
+        # 等到第二次被踢进入退避（backoff_levels 第二次追加）即刹车断言
+        for _ in range(150):
+            if len(backoff_levels) >= 2:
+                break
+            await asyncio.sleep(0.02)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        # 核心断言：第二次被踢（backoff_levels 第二项）从头退避，不是升到第 1 档；
+        # 取消时机在 0.01s 退避睡眠前后浮动，attempts 落在 2（含）~3（含）
+        assert attempts["n"] >= 2
+        assert backoff_levels[:2] == [0, 0]
+        assert client.gave_up is False
+        assert give_ups == []
+
+    asyncio.run(scenario())
+
+
+def test_kick_backoff_delay_bounds():
+    """退避秒数落在档位区间内；超界档位钳制到最高档。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    for level, (lo, hi) in enumerate(mx_ws.KICK_BACKOFF_LEVELS):
+        for _ in range(20):
+            delay = mx_ws._kick_backoff_delay(level)
+            assert lo <= delay <= hi
+    lo, hi = mx_ws.KICK_BACKOFF_LEVELS[-1]
+    assert lo <= mx_ws._kick_backoff_delay(99) <= hi
+    # 档位设计：互踢战三档退避、总跨度约 2-15 分钟，绝不无限重试
+    assert len(mx_ws.KICK_BACKOFF_LEVELS) == 3
 
 
 def test_ws_manual_disconnect_no_give_up(monkeypatch):
@@ -1621,12 +1707,17 @@ def test_http_wire_persona_matches_ws_persona():
 
 
 def test_avatar_cache_headers_for_mx_domain():
-    """MX 域名图片必须带 MX 站点 Referer，绝不能再带 weibo.com 的假信号。"""
+    """MX 域名图片必须带 MX 站点 Referer，绝不能再带 weibo.com 的假信号。
+
+    平台域名轮转（2026-10-12 起 foodtop1.com）：新旧域名都按图片自身 host 派生
+    Referer，域名再轮转无需改代码。"""
     from app.avatar_cache import headers_for
 
     headers = headers_for("https://mx.2026.naaifu.cn/uploads/a.png")
     assert headers["User-Agent"].startswith("Mozilla/5.0")
-    assert "naaifu.cn" in headers["Referer"]
+    assert headers["Referer"] == "https://mx.2026.naaifu.cn/"
+    headers = headers_for("https://mx.2026.foodtop1.com/uploads/a.png")
+    assert headers["Referer"] == "https://mx.2026.foodtop1.com/"
     assert "weibo.com" not in headers["Referer"]
     # 其他图床行为不变
     assert headers_for("https://wx1.sinaimg.cn/a.jpg")["Referer"] == "https://weibo.com/"

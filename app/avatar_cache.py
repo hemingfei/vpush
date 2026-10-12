@@ -40,9 +40,10 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 DOWNLOAD_HEADERS = {"User-Agent": UA, "Referer": "https://weibo.com/"}
 ZSXQ_HEADERS = {"User-Agent": UA, "Referer": "https://wx.zsxq.com/"}
 # MX 图片/头像必须用 MX 站点的浏览器形态下载：之前错误地带 weibo.com Referer，
-# 在 MX 自家 CDN 的日志里又是一个「账号行为自相矛盾」的风控信号
-MX_SITE_DOMAIN = "naaifu.cn"
-MX_REFERER = "https://mx.2026.naaifu.cn/"
+# 在 MX 自家 CDN 的日志里又是一个「账号行为自相矛盾」的风控信号。
+# 平台域名会轮转（2026-10-12 起 foodtop1.com，此前 naaifu.cn），Referer 按
+# 图片自身 host 派生，域名再变也不用改这里
+MX_SITE_DOMAINS = ("naaifu.cn", "foodtop1.com")
 
 # .part 临时文件清扫：写盘中断（进程崩溃/断电）会留下残留，超龄（1 小时）即清；
 # 下载函数被 WS 解析线程高频调用，清扫入口按小时节流
@@ -155,11 +156,12 @@ def _maybe_cleanup_part_files(dest: Path) -> None:
 def headers_for(url: str) -> dict[str, str]:
     if "zsxq.com" in (url or ""):
         return dict(ZSXQ_HEADERS)
-    if MX_SITE_DOMAIN in (url or ""):
+    netloc = urlparse(url or "").netloc
+    if any(netloc.endswith(domain) for domain in MX_SITE_DOMAINS):
         # 延迟导入：app.fetchers.mx 包初始化会反向导入本模块，顶层导入会成环
         from .fetchers.mx.ws import BROWSER_UA
 
-        return {"User-Agent": BROWSER_UA, "Referer": MX_REFERER}
+        return {"User-Agent": BROWSER_UA, "Referer": f"https://{netloc}/"}
     return dict(DOWNLOAD_HEADERS)
 
 
