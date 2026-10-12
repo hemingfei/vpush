@@ -266,6 +266,48 @@ def _skip_url_gate(monkeypatch):
     monkeypatch.setattr(url_safety_mod, "is_safe_http_url", lambda _url: True)
 
 
+def test_fetch_current_mx_api_base_reads_production(monkeypatch):
+    """探针基线读取生产实况：登录 → GET sources/mx → 返回 api_base。"""
+    import httpx
+
+    _skip_url_gate(monkeypatch)
+    monkeypatch.setenv("VPUSH_URL", "https://vpush.test")
+    monkeypatch.setenv("VPUSH_ADMIN_USER", "admin")
+    monkeypatch.setenv("VPUSH_ADMIN_PASSWORD", "vp-pw")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth/login":
+            return httpx.Response(200, json={"token": "bearer-t"})
+        assert request.headers["Authorization"] == "Bearer bearer-t"
+        return httpx.Response(200, json={
+            "api_base": "https://mx.2026.naaifu.cn/business-api/5 ",
+        })
+
+    base = mx_login_script.fetch_current_mx_api_base(
+        transport=httpx.MockTransport(handler))
+    # 尾空白清掉：探针/写回比较都基于归一化形态
+    assert base == "https://mx.2026.naaifu.cn/business-api/5"
+
+
+def test_fetch_current_mx_api_base_fails_soft(monkeypatch):
+    """读不到（凭据缺失/接口异常）返回 None 回落本地基线，绝不抛出。"""
+    _skip_url_gate(monkeypatch)
+    monkeypatch.setenv("VPUSH_URL", "https://vpush.test")
+    monkeypatch.delenv("VPUSH_ADMIN_USER", raising=False)
+
+    assert mx_login_script.fetch_current_mx_api_base() is None
+
+    import httpx
+    monkeypatch.setenv("VPUSH_ADMIN_USER", "admin")
+    monkeypatch.setenv("VPUSH_ADMIN_PASSWORD", "vp-pw")
+
+    def boom(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    assert mx_login_script.fetch_current_mx_api_base(
+        transport=httpx.MockTransport(boom)) is None
+
+
 def test_push_via_api_puts_token_only(monkeypatch):
     import httpx
 

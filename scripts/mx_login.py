@@ -104,6 +104,41 @@ def probe_token(api_base: str, token: str, session) -> bool:
     return True
 
 
+def fetch_current_mx_api_base(transport=None) -> str | None:
+    """读生产实例当前存着的 MX api_base（--write api 模式的探针基线用）。
+
+    平台域名漂移时，要自愈的是「生产存的旧基址」，而不是本脚本的默认值——
+    用生产实况做基线，探针失败才会触发 hosturl 切换写回。读不到（凭据缺失/
+    网络抖动）返回 None，调用方回落本地基线，行为与旧版一致。
+    transport 供测试注入假传输层。"""
+    from app.url_safety import is_safe_http_url
+
+    base_url = (os.environ.get("VPUSH_URL") or "").strip().rstrip("/")
+    user = os.environ.get("VPUSH_ADMIN_USER") or ""
+    password = os.environ.get("VPUSH_ADMIN_PASSWORD") or ""
+    if not (base_url and user and password) or not is_safe_http_url(base_url):
+        return None
+    try:
+        import httpx
+
+        client_kwargs = {"base_url": base_url, "timeout": 30.0}
+        if transport is not None:
+            client_kwargs["transport"] = transport
+        with httpx.Client(**client_kwargs) as http:
+            resp = http.post("/api/auth/login",
+                             json={"username": user, "password": password})
+            if resp.status_code != 200:
+                return None
+            headers = {"Authorization": f"Bearer {resp.json()['token']}"}
+            resp = http.get("/api/admin/sources/mx", headers=headers)
+            if resp.status_code != 200:
+                return None
+            api_base = str(resp.json().get("api_base") or "").strip().rstrip("/")
+            return api_base or None
+    except Exception:  # noqa: BLE001 - 基线读取尽力而为，失败回落本地默认
+        return None
+
+
 def ocr_image(image_bytes: bytes) -> str | None:
     """可选 ddddocr 识别；未安装/识别失败返回 None（回落人工输入）。"""
     try:
@@ -475,6 +510,12 @@ def main(argv=None) -> int:
     new_token = result["token"]
     print(f"✓ 登录成功，新 TOKEN：{mask(new_token)}（hosturl：{result['hosturl'] or '未下发'}）")
 
+    # 探针基线：--write api 模式优先读生产实例实际存的 api_base——平台域名漂移
+    # 时要自愈的是生产存的旧基址（本地默认值探针必过，永远发现不了漂移）
+    prod_api_base = fetch_current_mx_api_base() if os.environ.get("VPUSH_URL") else None
+    if prod_api_base and prod_api_base != current_api_base:
+        print(f"！生产实例当前 api_base：{prod_api_base}（本地基线：{current_api_base}），按生产实况探针")
+        current_api_base = prod_api_base
     # 探针：新 token 在当前 api_base 不行时，按 hosturl/登录域名切换（官方登录后
     # 也会按 hosturl 切业务域）。切换信息会随写回一并下发。探针复用登录会话，
     # 全部结束后再统一关闭。
