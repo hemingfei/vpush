@@ -680,12 +680,12 @@ def test_ws_gives_up_when_retry_after_clean_drop_fails(monkeypatch):
 
 
 def test_ws_gives_up_when_reconnect_kicked_within_grace(monkeypatch):
-    """「连上即被踢」的互踢战：三档退避逐级升档，第四轮仍未站住才永久放弃。
+    """「连上即被踢」的风暴期：四档退避（首档快速重连）逐级升档，末档后仍没站住才放弃。
 
-    2026-10-12 诊断（scripts/mx_ws_probe.py 实测）：平台同账号单 WS 会话互踢，
-    新连接接入毫秒级踢掉旧连接且静默不发 close。立即抢回只会与同 token 的
-    另一客户端（2026-10-12 勘误：非本人网页，幻影客户端待定位）互踢，
-    故按 2-3/5-7/10-15 分钟阶梯退避；三档耗尽才放弃告警。
+    2026-10-12 诊断（scripts/mx_ws_probe.py 实测）：平台周期性回收 WS 连接
+    （21:57 实测两账号 2.8s 内先后被掐 TCP），常态回收后服务端立即可重连——
+    第 0 档 16-36s 快速恢复；下午盘风暴期新会话 1ms 即被处决，逐档拉长退避；
+    同 token 单会话互踢（6ms 内 41 踢+僵尸静默）同样适用。四档耗尽才放弃告警。
     """
     import app.fetchers.mx.ws as mx_ws
 
@@ -711,8 +711,8 @@ def test_ws_gives_up_when_reconnect_kicked_within_grace(monkeypatch):
     client.connect = connect
     asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
 
-    assert attempts["n"] == 4  # 首连 + 三档退避各一次，绝没有第五次
-    assert backoff_levels == [0, 1, 2]  # 档位逐级递增
+    assert attempts["n"] == 5  # 首连 + 四档退避各一次，绝没有第六次
+    assert backoff_levels == [0, 1, 2, 3]  # 档位逐级递增
     assert client.gave_up is True
     assert give_ups and give_ups[0][1] is False
     assert "single-session" in give_ups[0][0]
@@ -875,8 +875,9 @@ def test_kick_backoff_delay_bounds():
             assert lo <= delay <= hi
     lo, hi = mx_ws.KICK_BACKOFF_LEVELS[-1]
     assert lo <= mx_ws._kick_backoff_delay(99) <= hi
-    # 档位设计：互踢战三档退避、总跨度约 2-15 分钟，绝不无限重试
-    assert len(mx_ws.KICK_BACKOFF_LEVELS) == 3
+    # 档位设计：首档快速（常态回收 ~30s 恢复）+ 三档分钟级退避（风暴期），
+    # 总跨度约 16s-15 分钟，绝不无限重试
+    assert len(mx_ws.KICK_BACKOFF_LEVELS) == 4
 
 
 def test_ws_manual_disconnect_no_give_up(monkeypatch):
