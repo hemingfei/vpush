@@ -1127,7 +1127,7 @@ def test_native_ws_handshake_and_event_dispatch(monkeypatch):
     ws, opener = _install_fake_ws(monkeypatch, [
         '0{"sid":"s1","pingInterval":25000,"pingTimeout":20000}',
         '40/msg,{"sid":"n1"}',
-        '2["room_msg",{"rid":"5","msg":"x"}]',
+        '42/msg,["room_msg",{"rid":"5","msg":"x"}]',
         "41/msg",
     ])
     got = []
@@ -1172,6 +1172,32 @@ def test_native_ws_ping_pong_and_multi_payload_event(monkeypatch):
     assert len(got) == 2
     assert got[0]["a"] == 1 and got[1]["b"] == 2
     assert all("_receivedAt" in m for m in got)
+
+
+def test_native_ws_event_frame_forms_dispatch(monkeypatch):
+    """事件帧三种形态全分发：实测 42/msg,[...]（ground truth）+ 42[...] + 2[...]。
+
+    2026-10-13 生产事故回归：收帧循环曾把 42/msg, 前缀帧当「其他子类型」
+    静默忽略——连接健康但一条消息都进不来（last_message_at 恒 null）。
+    """
+    import pytest
+
+    ws, _ = _install_fake_ws(monkeypatch, [
+        "0{}",
+        '40/msg,{"sid":"n"}',
+        '42/msg,["room_msg",{"rid":"1","msg":"a"}]',
+        '42["room_msg",{"rid":"2"}]',
+        '2["room_msg",{"rid":"3"}]',
+        "42/msg",  # 缺载荷分隔逗号：告警并忽略，不得炸收帧循环
+        "42/msg,not-json",  # 载荷非 JSON：告警并忽略
+        "1",
+    ])
+    got = []
+    client = MxWsClient(_native_config(), got.append)
+    asyncio.run(asyncio.wait_for(client.connect(), timeout=3))
+    with pytest.raises(RuntimeError, match="CLOSE"):
+        asyncio.run(asyncio.wait_for(client._sio.wait(), timeout=3))
+    assert [m["rid"] for m in got] == ["1", "2", "3"]
 
 
 def test_native_ws_connect_error_maps_to_token_expired(monkeypatch):

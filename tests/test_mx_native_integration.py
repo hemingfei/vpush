@@ -62,8 +62,10 @@ class MiniEioServer:
                 assert auth["token"] == "tok" and auth["version"] == "web"
                 await ws.send_str('40/msg,{"sid":"ns-test"}')
                 authed = True
-                # 连接确认后推一条 room_msg 事件
-                await ws.send_str('2["room_msg",{"rid":"9","msg":"ping-case"}]')
+                # 连接确认后推一条 room_msg 事件——帧形态必须是实测 ground
+                # truth：非默认 ns 带「42/msg,」前缀（2026-10-13 生产事故即
+                # fixture 写成无前缀形态、放过了分发解析缺 ns 路由的回归）
+                await ws.send_str('42/msg,["room_msg",{"rid":"9","msg":"ping-case"}]')
             elif text == "3":
                 self.pongs += 1
             else:

@@ -293,6 +293,10 @@ class MxWsClient:
                     # 2[...]：握手期间即有事件推送，直接分发
                     await self._dispatch_sio_event(frame)
                     continue
+                if frame.startswith("42"):
+                    # 42[/ns,][...]：同上（实测服务端标准形态）
+                    await self._dispatch_sio_event(frame)
+                    continue
                 if frame.startswith("44"):
                     raise RuntimeError(f"Socket.IO 连接被拒：{frame[:200]}")
                 if frame.startswith("41"):
@@ -339,19 +343,22 @@ class MxWsClient:
             if not frame:
                 continue
             head = frame[0]
-            if head == "2":  # SIO EVENT：2["event",payload,...]
+            if head == "2":  # 无 EIO 包裹的 EVENT（历史容错）：["event",...]
                 await self._dispatch_sio_event(frame)
             elif head == "4":
                 sub = frame[1:2]
-                if sub == "4":
+                if sub == "2":
+                    # 42[/ns,][...]：SIO EVENT（实测服务端标准形态）
+                    await self._dispatch_sio_event(frame)
+                elif sub == "4":
                     raise RuntimeError(f"Socket.IO 连接错误帧：{frame[:200]}")
-                if sub == "1":
+                elif sub == "1":
                     raise RuntimeError("服务端发送 Socket.IO DISCONNECT（41）")
-                if sub == "5":
+                elif sub == "5":
                     logger.warning(
                         "MX WS 二进制附件事件暂不支持，已跳过：%s", frame[:120]
                     )
-                # 40 确认重放及其他子类型：忽略
+                # 其余子类型（40 确认重放等）：忽略
             elif head == "1":
                 raise RuntimeError("服务端发送 Engine.IO CLOSE（1）")
             elif head == "3":
@@ -362,12 +369,25 @@ class MxWsClient:
                 logger.debug("MX WS 未识别帧：%s", frame[:100])
 
     async def _dispatch_sio_event(self, frame: str):
-        """解析 SIO EVENT 帧并分发（对齐旧实现 room_msg + catch-all 语义）。"""
+        """解析 SIO EVENT 帧并分发（对齐旧实现 room_msg + catch-all 语义）。
+
+        实测服务端事件帧为带命名空间前缀的 ``42/msg,["room_msg",...]``
+        （2026-10-12 mx_ws_probe 抓包 ground truth，非默认 ns 必带前缀）；
+        同时容错 42[...]（默认 ns）与 2[...]（无 EIO 包裹的历史形态）。
+        """
         body = None
         if frame.startswith("2["):
             body = frame[1:]  # 剥掉类型数字，保留 '['：剩余即 JSON 数组
-        elif frame.startswith("42["):  # Socket.IO v2 形态容错
-            body = frame[2:]
+        elif frame.startswith("42"):
+            rest = frame[2:]
+            if rest.startswith("/"):
+                # 42/msg,[...]：剥掉命名空间前缀，取逗号后的 JSON 数组
+                comma = rest.find(",")
+                if comma == -1:
+                    logger.warning("MX WS 事件帧缺载荷分隔逗号：%s", frame[:120])
+                    return
+                rest = rest[comma + 1:]
+            body = rest
         if body is None:
             return
         try:
