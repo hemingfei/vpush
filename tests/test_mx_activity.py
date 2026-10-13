@@ -1,9 +1,11 @@
 """MX 会话中段「真人点房间」活动模拟测试（app/services/mx_activity.py）。
 
 背景（2026-10-13）：WS 会话连上后 vpush 完全静默（只答心跳/ACK），而官方
-网页端会话中每次点选房间必发 room/view + room/notice（抓包场景 S2）。本套
-用例覆盖：请求链形态、节奏与闸门、失败顺延、TOKEN 过期上抛，以及调度器
-接线（tick 触发 / 连接重置 / 开窗恢复上次房间）。
+网页端会话中点选房间会发一组 HTTP——实机抓包（scripts/mx_room_switch_capture.py）
+实测：本会话首次点开 = room/view + msg/list + room/notice 三连（无论有无
+未读），回访已打开过的 = view + notice 两连；全程零 WS emit。本套用例覆盖：
+三连请求链、节奏与闸门、失败顺延、TOKEN 过期上抛，以及调度器接线（tick 触发 /
+连接重置 / 开窗恢复上次房间）。
 """
 from __future__ import annotations
 
@@ -36,9 +38,10 @@ def make_kols(db, rids=("101", "102")):
 class RecordingClient:
     """记录 view/notice 调用顺序的假客户端。"""
 
-    def __init__(self, fail_view=False, token_expired=False):
+    def __init__(self, fail_view=False, token_expired=False, fail_notice=False):
         self.calls: list[tuple[str, int]] = []
         self._fail_view = fail_view
+        self._fail_notice = fail_notice
         self._token_expired = token_expired
 
     def room_view(self, room_id):
@@ -50,11 +53,35 @@ class RecordingClient:
 
     def room_notice(self, room_id):
         self.calls.append(("notice", room_id))
+        if self._fail_notice:
+            raise RuntimeError("notice failed")
 
 
-def due_activity(client, db):
+class FakeFetcher:
+    """假抓取器：fetch 模拟官方三连的前两步（room_view + msg/list）。
+
+    真实现 fetcher.fetch 里做 room/view → 抖动 → msg/list（含追平）；
+    这里用同样的 mx_client 调用序列近似，便于断言请求链顺序。
+    """
+
+    def __init__(self, client, history=None, fail_history=False):
+        self.mx_client = client
+        self.ws_client = SimpleNamespace(connected=True)
+        self.fetched: list = []
+        self._history = history or []
+        self._fail_history = fail_history
+
+    def fetch(self, kol):
+        self.fetched.append(kol["external_id"])
+        self.mx_client.room_view(int(kol["external_id"]))
+        if self._fail_history:
+            raise RuntimeError("history failed")
+        return list(self._history)
+
+
+def due_activity(fetcher, db):
     """已到期的活动模拟器（绕过随机首延迟）。"""
-    activity = MXRoomActivity(client, db)
+    activity = MXRoomActivity(fetcher, db)
     activity._next_fire = time.monotonic() - 1
     return activity
 
@@ -90,20 +117,27 @@ def test_room_notice_request_contract():
 
 # ---- 节奏与闸门 ----
 
-def test_click_sends_view_then_notice_and_excludes_last_room(monkeypatch):
-    """到期点房间：view→notice 成对、排除上一个、刷新 mx_last_room 与节奏。"""
+def test_click_runs_fetch_chain_then_notice_and_excludes_last_room(monkeypatch):
+    """到期点房间：fetch（view+msg/list）→ notice、排除上一个、刷新 mx_last_room。"""
     monkeypatch.setenv("MX_ACTIVITY_SIM", "1")
     db = make_db()
     make_kols(db)
     client = RecordingClient()
-    activity = due_activity(client, db)
+    ingested: list = []
+    fetcher = FakeFetcher(client, history=[{"id": 1}])
+    activity = due_activity(fetcher, db)
 
-    first = asyncio.run(activity.maybe_click(session_active=True, ws_connected=True))
+    first = asyncio.run(
+        activity.maybe_click(session_active=True, ws_connected=True,
+                             on_posts=lambda posts: ingested.extend(posts))
+    )
     assert first  # 返回房间描述
-    assert client.calls[0][0] == "view" and client.calls[1][0] == "notice"
-    assert client.calls[0][1] == client.calls[1][1]  # 同一房间成对
+    assert [c[0] for c in client.calls] == ["view", "notice"]  # fetch 的 view + notice
+    assert client.calls[0][1] == client.calls[1][1]  # 同一房间
+    assert fetcher.fetched == [str(client.calls[0][1])]
     first_rid = str(client.calls[0][1])
     assert db.get_setting(LAST_ROOM_SETTING_KEY) == first_rid
+    assert ingested == [{"id": 1}]  # on_posts 收到拉回的消息
 
     # 第二次点房间必须换一个（仅两个房间时唯一选择是另一个）
     activity._next_fire = time.monotonic() - 1
@@ -122,9 +156,10 @@ def test_click_gated_by_switch_and_connection(monkeypatch):
     db = make_db()
     make_kols(db)
     client = RecordingClient()
+    fetcher = FakeFetcher(client)
 
     monkeypatch.setenv("MX_ACTIVITY_SIM", "0")
-    activity = due_activity(client, db)
+    activity = due_activity(fetcher, db)
     assert asyncio.run(activity.maybe_click(session_active=True, ws_connected=True)) == ""
     assert client.calls == []
 
@@ -139,10 +174,10 @@ def test_click_not_due_is_noop(monkeypatch):
     monkeypatch.setenv("MX_ACTIVITY_SIM", "1")
     db = make_db()
     make_kols(db)
-    client = RecordingClient()
-    activity = MXRoomActivity(client, db)  # 刚武装：必然未到期
+    fetcher = FakeFetcher(RecordingClient())
+    activity = MXRoomActivity(fetcher, db)  # 刚武装：必然未到期
     assert asyncio.run(activity.maybe_click(session_active=True, ws_connected=True)) == ""
-    assert client.calls == []
+    assert fetcher.fetched == []
 
 
 def test_click_failure_reschedules_without_raising(monkeypatch):
@@ -151,11 +186,25 @@ def test_click_failure_reschedules_without_raising(monkeypatch):
     db = make_db()
     make_kols(db)
     client = RecordingClient(fail_view=True)
-    activity = due_activity(client, db)
+    fetcher = FakeFetcher(client)
+    activity = due_activity(fetcher, db)
 
     assert asyncio.run(activity.maybe_click(session_active=True, ws_connected=True)) == ""
     assert [c[0] for c in client.calls] == ["view"]
     assert activity._next_fire - time.monotonic() > ACTIVITY_INTERVAL_RANGE[0] - 5
+
+
+def test_click_notice_failure_does_not_raise(monkeypatch):
+    """room/notice 失败不影响点房间动作本身（与官方抓包语义一致：公告非关键）。"""
+    monkeypatch.setenv("MX_ACTIVITY_SIM", "1")
+    db = make_db()
+    make_kols(db)
+    client = RecordingClient(fail_notice=True)
+    fetcher = FakeFetcher(client)
+    activity = due_activity(fetcher, db)
+
+    assert asyncio.run(activity.maybe_click(session_active=True, ws_connected=True)) != ""
+    assert db.get_setting(LAST_ROOM_SETTING_KEY) == str(client.calls[0][1])
 
 
 def test_click_token_expired_propagates(monkeypatch):
@@ -164,7 +213,8 @@ def test_click_token_expired_propagates(monkeypatch):
     db = make_db()
     make_kols(db)
     client = RecordingClient(token_expired=True)
-    activity = due_activity(client, db)
+    fetcher = FakeFetcher(client)
+    activity = due_activity(fetcher, db)
 
     with pytest.raises(MXTokenExpiredError):
         asyncio.run(activity.maybe_click(session_active=True, ws_connected=True))
@@ -173,11 +223,11 @@ def test_click_token_expired_propagates(monkeypatch):
 def test_click_without_rooms_skips_and_reschedules(monkeypatch):
     monkeypatch.setenv("MX_ACTIVITY_SIM", "1")
     db = make_db()
-    client = RecordingClient()
-    activity = due_activity(client, db)
+    fetcher = FakeFetcher(RecordingClient())
+    activity = due_activity(fetcher, db)
 
     assert asyncio.run(activity.maybe_click(session_active=True, ws_connected=True)) == ""
-    assert client.calls == []
+    assert fetcher.fetched == []
     assert activity._next_fire - time.monotonic() > 0
 
 
@@ -200,13 +250,10 @@ def _make_scheduler(db):
     )
 
 
-def _wire_session(scheduler, client, connected=True):
-    """把调度器置于「WS 已连接」状态，并注入假抓取器（会话任务须在事件循环内创建）。"""
-    fetcher = SimpleNamespace(
-        ws_client=SimpleNamespace(connected=connected),
-        mx_client=client,
-    )
+def _wire_session(scheduler, fetcher, connected=True):
+    """把调度器置于「WS 已连接」状态（会话任务须在事件循环内创建）。"""
     scheduler.fetchers["mx"] = fetcher
+    fetcher.ws_client.connected = connected
     return fetcher
 
 
@@ -218,13 +265,14 @@ def test_tick_fires_activity_click_when_connected(monkeypatch):
     monkeypatch.setenv("MX_ACTIVITY_SIM", "1")
     db = make_db()
     make_kols(db)
-    scheduler = _make_scheduler(db)
     client = RecordingClient()
-    _wire_session(scheduler, client)
+    fetcher = FakeFetcher(client)
+    scheduler = _make_scheduler(db)
+    _wire_session(scheduler, fetcher)
 
     async def scenario():
         _fake_session_task(scheduler)
-        activity = due_activity(client, db)
+        activity = due_activity(fetcher, db)
         scheduler._mx_activity = activity
         await scheduler._mx_maybe_activity_click()
 
@@ -238,14 +286,15 @@ def test_tick_skips_when_disconnected_or_token_expired(monkeypatch):
     db = make_db()
     make_kols(db)
     client = RecordingClient()
+    fetcher = FakeFetcher(client)
     scheduler = _make_scheduler(db)
-    _wire_session(scheduler, client, connected=False)
+    _wire_session(scheduler, fetcher, connected=False)
 
     async def scenario():
         _fake_session_task(scheduler)
-        scheduler._mx_activity = due_activity(client, db)
+        scheduler._mx_activity = due_activity(fetcher, db)
         await scheduler._mx_maybe_activity_click()  # WS 未连接：不点
-        scheduler.fetchers["mx"].ws_client.connected = True
+        fetcher.ws_client.connected = True
         scheduler._mx_token_expired = True
         await scheduler._mx_maybe_activity_click()  # TOKEN 熔断：不点
 
@@ -260,14 +309,13 @@ def test_tick_lazily_creates_activity_on_first_due_tick(monkeypatch):
     db = make_db()
     make_kols(db)
     client = RecordingClient()
+    fetcher = FakeFetcher(client)
     scheduler = _make_scheduler(db)
-    _wire_session(scheduler, client)
+    _wire_session(scheduler, fetcher)
     assert scheduler._mx_activity is None
 
     async def scenario():
         _fake_session_task(scheduler)
-        # 模拟 5-10 分钟后的 tick：直接把（尚未存在的）活动对象的到期时刻放到过去
-        scheduler._mx_activity = None
         # 首个 tick：创建但未到期 → 不点
         await scheduler._mx_maybe_activity_click()
         assert scheduler._mx_activity is not None
@@ -281,7 +329,7 @@ def test_tick_lazily_creates_activity_on_first_due_tick(monkeypatch):
     scheduler._mx_ws_task.cancel()
 
 
-def test_ws_connect_resets_activity_schedule(monkeypatch):
+def test_ws_connect_resets_activity_schedule():
     """新会话（connect 唯一入口）重置模拟器：点房间节奏重新随机排布。"""
     db = make_db()
     scheduler = _make_scheduler(db)
@@ -292,7 +340,7 @@ def test_ws_connect_resets_activity_schedule(monkeypatch):
         await asyncio.sleep(3600)
 
     scheduler.fetchers["mx"] = SimpleNamespace(start_ws=fake_start_ws)
-    scheduler._mx_activity = MXRoomActivity(RecordingClient(), db)
+    scheduler._mx_activity = MXRoomActivity(FakeFetcher(RecordingClient()), db)
 
     async def scenario():
         await scheduler.mx_ws_control("connect", source="auto")

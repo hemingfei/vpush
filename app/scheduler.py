@@ -111,10 +111,12 @@ except Exception as e:
     class MXRoomActivity:  # noqa: D401 - MX 模块不可用时的占位（恒不触发）
         """占位：会话活动模拟随 MX 模块一起不可用。"""
 
-        def __init__(self, client, db=None):
+        def __init__(self, fetcher, db=None):
             pass
 
-        async def maybe_click(self, *, session_active: bool, ws_connected: bool) -> str:
+        async def maybe_click(
+            self, *, session_active: bool, ws_connected: bool, on_posts=None
+        ) -> str:
             return ""
 
 # 全局 MX 相关变量
@@ -3145,13 +3147,28 @@ class Scheduler:
             "系统自动执行 MX 平台断开（超时兜底）",
         )
 
+    def _activity_ingest(self, posts) -> None:
+        """活动模拟点房间拉回的消息入库（真人「缓存进 localStorage」的等价语义）。"""
+        if not posts or self.db is None:
+            return
+        try:
+            known = self.db.existing_post_keys([("mx", p.external_id) for p in posts])
+            for post in posts:
+                if ("mx", post.external_id) not in known:
+                    # 与 WS 实时/兜底同口径：入库前先走本地规则打标
+                    self._apply_mx_rule_tags(post)
+                self.ingest_external_post(post)
+        except Exception:  # noqa: BLE001 - 补漏入库失败不影响活动模拟本身
+            logger.warning("MX 会话活动模拟消息入库失败", exc_info=True)
+
     async def _mx_maybe_activity_click(self):
         """会话中段「真人点房间」模拟（app/services/mx_activity.py）。
 
-        每 5-10 分钟点开一个启用房间（room/view + room/notice，官方点选语义）。
-        触发闸门：会话存活 + WS 在线（真人页面开着才会点房间）+ TOKEN 未熔断
-        ——与兜底槽同口径，熔断态绝不打。活动对象随会话创建（mx_ws_control
-        ("connect") 时置 None），点房间节奏在每个新会话内重新随机。
+        每 5-10 分钟点开一个启用房间：本会话未打开过的走官方三连（room/view +
+        msg/list + room/notice，2026-10-13 实机抓包实测，无论有无未读），拉回
+        消息按「缓存」语义入库。触发闸门：会话存活 + WS 在线（真人页面开着才
+        会点房间）+ TOKEN 未熔断——与兜底槽同口径，熔断态绝不打。活动对象随
+        会话创建（mx_ws_control("connect") 时置 None），点房间节奏每会话重新随机。
         """
         if self._mx_token_expired or not self._mx_session_active():
             return
@@ -3160,13 +3177,12 @@ class Scheduler:
         if ws_client is None or not getattr(ws_client, "connected", False):
             return
         if self._mx_activity is None:
-            client = getattr(fetcher, "mx_client", None)
-            if client is None:
+            if fetcher is None or getattr(fetcher, "mx_client", None) is None:
                 return
-            self._mx_activity = MXRoomActivity(client, self.db)
+            self._mx_activity = MXRoomActivity(fetcher, self.db)
         try:
             await self._mx_activity.maybe_click(
-                session_active=True, ws_connected=True
+                session_active=True, ws_connected=True, on_posts=self._activity_ingest
             )
         except MXTokenExpiredError:
             logger.error("MX 会话活动模拟发现 TOKEN 过期", exc_info=True)

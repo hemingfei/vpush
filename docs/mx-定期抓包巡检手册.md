@@ -152,11 +152,18 @@ async (page) => {
 | 8 | `POST /master-api/api/user/issign`、`/api/user/showad` | 启动必发（签到状态/广告展示判定） |
 | 9 | WS 连接 | 冷启动/刷新才连；登录后当次会话不连（详见 3.4） |
 
-**场景 S2 会话期间点选房间**（无论该房间本会话是否打开过）：
+**场景 S2 会话期间点选房间**（2026-10-13 新域 /5 实机复测修订，scripts/mx_room_switch_capture.py）：
 
-- 必发：`room/view`（进房/已读上报）+ `room/notice`（房间公告）；
-- **不发 `msg/list`**——历史消息渲染自 localStorage 缓存（`mx_web_messages_<rid>`，按房间持久化），
-  新消息由 WS `room_msg` 实时追加进缓存。
+- **本会话首次点开的房间**（无论有无未读徽标，实测未读 99/26/0 三种一致）：
+  `room/view` + `msg/list {"rid","msgid":0,"pagesize":30,"tt"}` + `room/notice` **三连**；
+- **回访本会话已打开过的房间**（缓存已热）：仅 `room/view` + `room/notice` **两连**，
+  不发 `msg/list`；
+- ~~旧结论「点选房间必发的只有 view+notice，连第一次点开也不拉历史」~~——被
+  2026-10-13 实测推翻（当时观察的会话所有房间都已打开过，恰好全是缓存热路径）；
+- **全程零 WS emit**：切房间不发任何 Socket.IO 事件（无房间订阅/切换/已读上报），
+  已读回执就是 HTTP `room/view`（点击后未读徽标消失实测确认）；WS 上只见
+  握手 `40/msg`、心跳 `2/3`、服务端推 `room_msg`/`va`。
+- 判定「有新消息/没新消息」不改变请求形态，只改变徽标是否消失。
 
 **场景 S3 房间内向上翻历史**（点「加载更早」）：
 
@@ -174,7 +181,8 @@ static.dingtalk.com），语音走腾讯云 mp3（HTTP 206 分段加载）。
 序列（user/info/system/config/room/list/msg/tip/grouplist/notice）已由开窗会话按官方
 顺序补发（`boot_sequence`，2026-09-02）。`room/view`+`room/notice`+`msg/list` 自
 2026-10-13 起也会在会话中段出现：开窗恢复上次房间（S1-6）+ 每 5-10 分钟点房间活动
-模拟（S2 语义，view+notice 成对、不发 msg/list；见 `mx_activity.py` 与登录文档 1.8）。
+模拟（S2 语义，本会话未打开过的房间走 view+msg/list+notice 三连、回访两连；见
+`mx_activity.py` 与登录文档 1.8）。
 vpush 运行期无任何登录行为，token 由人工网页取号获得。
 
 ### 3.4 WS 行为

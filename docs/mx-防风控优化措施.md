@@ -265,19 +265,30 @@ WS 状态展示保留；「接口状态」默认显示最近一次登录报告�
 ## 十三、2026-10-13 会话中段真人活动模拟（点房间对冲）
 
 **假设**：WS 会话连上后 vpush 完全静默（只答心跳 pong 与 ACK），而真人使用时
-每次点选房间必发 `room/view` + `room/notice`（抓包场景 S2）。若平台以「会话
+每次点选房间都会发一组 HTTP（同日实机抓包 ground truth，见下）。若平台以「会话
 中段零用户操作」为画像特征对 TOKEN 置「连上即断」标记（下午风暴候选成因之一），
 模拟点房间即为对冲。**对周期性连接回收无效**（回收与行为无关，勿指望消除常态踢连）。
 
+**抓包 ground truth（2026-10-13，`scripts/mx_room_switch_capture.py` 实测，新域 /5）**：
+
+- 本会话首次点开房间（无论有无未读）：`room/view` + `msg/list` + `room/notice` 三连；
+  回访已打开过的房间：仅 view+notice 两连——形态由「会话内是否打开过」决定，
+  与有无新消息无关；
+- **切房间全程零 WS emit**（无订阅/切换/已读事件），已读回执就是 HTTP room/view；
+  WS 上只有握手 `40/msg`、心跳 `2/3`、服务端推 `room_msg`/`va`。
+
 **落地**（`app/services/mx_activity.py` + `scheduler._mx_maybe_activity_click`）：
 
-- 会话存活且 WS 在线期间，每 5–10 分钟随机点开一个启用房间：`room/view` →
-  人形微间隔 → `room/notice`（官方点选逐请求同形；绝不发 `msg/list`）；
+- 会话存活且 WS 在线期间，每 5–10 分钟随机点开一个启用房间：模拟每次点
+  「上一个之外」的房间 → 按抓包三连执行：复用 `fetcher.fetch`（view + 人形
+  微间隔 + msg/list 含有限追平）+ `room/notice`，拉回消息按「缓存」语义入库；
 - 房间池 = 数据库启用 KOL（排除上一个）；每次点开写 settings `mx_last_room`；
 - 开窗登录序列新增第 7 步「恢复上次打开的房间」（`room/view` + `msg/list` +
   `room/notice`，官方冷启动 S1-6，兼有窗口关闭期消息补漏）；
 - 闸门：TOKEN 熔断态绝不打；`MX_ACTIVITY_SIM=0` 关闭（默认开启）；
+  阻塞调用全部 `asyncio.to_thread`（绝不阻塞事件循环）；
 - 定位：画像对冲假设而非已证结论，上线观察下午风暴频率；请求官方同形、
   量级每小时个位数，无效也不回滚。
 
-测试：`tests/test_mx_activity.py` 16 例；MX 全家桶 + scheduler/api 共 653 例全绿。
+测试：`tests/test_mx_activity.py` 17 例（含 room/notice wire 契约、三连顺序、
+闸门/顺延/熔断、调度器接线、恢复房间链）；MX 全家桶 + scheduler/api 全绿。
