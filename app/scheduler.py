@@ -74,6 +74,7 @@ from .wscn_flash import build_wscn_post
 try:
     from .fetchers.mx.client import MXTokenExpiredError
     from .fetchers.mx.human import human_delay
+    from .services.mx_auto_renew import MxAutoRenewer
     from .services.mx_sync import MXRoomSyncService
     from .services.mx_window import (
         arm_windows,
@@ -94,6 +95,17 @@ except Exception as e:
 
     def human_delay(kind: str) -> float:  # noqa: E704 - 占位：模块缺失时抖动不可用
         return 0.0
+
+    class MxAutoRenewer:  # noqa: D401 - MX 模块不可用时的占位（enabled 恒 False）
+        """占位：自动换 TOKEN 功能随 MX 模块一起不可用。"""
+
+        enabled = False
+
+        def __init__(self, db=None):
+            pass
+
+        async def trigger(self, reason: str) -> dict:
+            return {"ok": False, "detail": "MX 模块不可用"}
 
 # 全局 MX 相关变量
 _mx_fetcher = None
@@ -2299,6 +2311,12 @@ class Scheduler:
         self._mx_ws_task = None
         self._mx_ws_on_message = None
         self._mx_ws_on_give_up = None
+        self._mx_ws_on_storm = None
+        self._mx_ws_on_reconnected = None
+        # 受限自动换 TOKEN 触发器（风暴/放弃场景；凭据 env 化，未配置=关闭）
+        self._mx_auto_renewer = None
+        # 断流恢复补拉的节流时刻（monotonic）：重连风暴下 5 分钟内只补一次
+        self._mx_recovery_sync_at = 0.0
         # _mx_schedule_ws_abort 的 fire-and-forget 任务持引用：事件循环只持
         # 弱引用，不持有可能被 GC 中途取消，导致「WS 已掐断」动作静默丢失
         self._mx_ws_abort_tasks: set = set()
@@ -2599,6 +2617,24 @@ class Scheduler:
         """
         self._mx_token_expired = True
         self._mx_schedule_ws_abort()
+
+    async def _mx_try_auto_renew(self, reason: str) -> str:
+        """受限自动换 TOKEN（2026-10-13 起风暴/放弃场景的自动兜底）。
+
+        闸门（每日预算+冷却，DB 持久化）在 MxAutoRenewer 内；返回触发结果
+        描述（供告警文案拼接），未触发返回空串。绝不抛异常。
+        """
+        renewer = self._mx_auto_renewer or MxAutoRenewer(self.db)
+        self._mx_auto_renewer = renewer
+        try:
+            result = await renewer.trigger(reason)
+        except Exception:
+            logger.error("MX 自动换 TOKEN 触发链路异常（原因：%s）", reason, exc_info=True)
+            return ""
+        if result.get("ok"):
+            return result.get("detail", "已入队")
+        logger.info("MX 自动换 TOKEN 未触发（原因：%s）：%s", reason, result.get("detail"))
+        return ""
 
     def _mx_schedule_ws_abort(self):
         """把「立即掐断 WS」调度回事件循环执行（publish_mx_error 可能在线程中调用）。"""
@@ -3266,15 +3302,24 @@ class Scheduler:
                         logger.error(f"Failed to process MX real-time message: {e}", exc_info=True)
 
                 async def on_ws_give_up(reason: str, token_expired: bool = False):
-                    """WS 永久放弃自动重连：置状态标记并用系统账号发布告警。"""
+                    """WS 永久放弃自动重连：置状态标记、尝试自动换 TOKEN 并发布告警。"""
                     self._mx_ws_gave_up = True
+                    renew_detail = await self._mx_try_auto_renew(
+                        "WS 永久放弃自动重连" + ("（TOKEN 过期被拒）" if token_expired else "")
+                    )
                     if token_expired:
                         self._mx_trigger_token_expired()
                         await self._publish_system_alert(
                             "MX TOKEN 已过期",
                             "⚠️ MX TOKEN 已过期或无效，WebSocket 连接被拒，已停止重试。"
                             "\n请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次），"
-                            "更换后自动恢复。",
+                            "更换后自动恢复。"
+                            + (
+                                f"\n\n✅ 已自动触发 TOKEN 更换（{renew_detail}），"
+                                "Jenkins 构建完成后自动重启接入。"
+                                if renew_detail
+                                else "\n\n（自动换 TOKEN 未启用或预算已尽，请人工到 Jenkins 跑 vpush-mx-token。）"
+                            ),
                         )
                     else:
                         await self._publish_system_alert(
@@ -3282,11 +3327,57 @@ class Scheduler:
                             "⚠️ MX WebSocket 断线后自动重连失败，已停止自动重连，"
                             "消息暂停实时更新。\n"
                             f"失败原因：{reason or '未知'}\n"
-                            "请到后台「数据源 → MX」手动接入，或检查 MX 账号/网络状态。",
+                            "请到后台「数据源 → MX」手动接入，或检查 MX 账号/网络状态。"
+                            + (
+                                f"\n\n✅ 已自动触发 TOKEN 更换（{renew_detail}），"
+                                "Jenkins 构建完成后自动重启接入。"
+                                if renew_detail
+                                else "\n\n（自动换 TOKEN 未启用或预算已尽，请人工到 Jenkins 跑 vpush-mx-token。）"
+                            ),
                         )
+
+                async def on_ws_storm(reason: str):
+                    """风暴形态确认（连续连上即断，2026-10-13 破案的 token 级标记）：
+                    本地退避无法自愈，换新 TOKEN 是唯一解法，触发受限自动更换。"""
+                    await self._mx_try_auto_renew(f"WS 风暴形态（{reason}）")
+
+                async def on_ws_reconnected():
+                    """断线后重新连上：补拉断流期消息（房间同步）。重连风暴下
+                    5 分钟内只补一次；人形间隔后再拉，避免恢复即拉取的机器节拍。"""
+                    now = time.monotonic()
+                    if now - self._mx_recovery_sync_at < 300:
+                        return
+                    self._mx_recovery_sync_at = now
+                    service = self._mx_sync_service
+                    temp = None
+                    if service is None:
+                        if not (MX_AVAILABLE and self.mx_config and self.mx_config.enabled):
+                            return
+                        temp = MXRoomSyncService(self.mx_config, self.db)
+                        service = temp
+                    try:
+                        await asyncio.sleep(human_delay("phase"))
+                        count = await service.sync_rooms()
+                        logger.info("MX 断流恢复补拉完成：%s 个房间", count)
+                    except MXTokenExpiredError:
+                        self._mx_trigger_token_expired()
+                    except Exception:
+                        logger.error("MX 断流恢复补拉失败", exc_info=True)
+                    finally:
+                        if temp is not None:
+                            temp.stop()
 
                 self._mx_ws_on_message = on_mx_message
                 self._mx_ws_on_give_up = on_ws_give_up
+                self._mx_ws_on_storm = on_ws_storm
+                self._mx_ws_on_reconnected = on_ws_reconnected
+                if self._mx_auto_renewer is None:
+                    self._mx_auto_renewer = MxAutoRenewer(self.db)
+                    if not self._mx_auto_renewer.enabled:
+                        logger.info(
+                            "MX 自动换 TOKEN 未启用（缺 MX_RENEW_JENKINS_* 环境变量），"
+                            "风暴期仍走退避+人工"
+                        )
 
             # 启动每日窗口管理：WS 会话与兜底拉取的启停全部由窗口驱动，
             # 不再服务一启动就常驻在线
@@ -3452,7 +3543,10 @@ class Scheduler:
             _mx_fetcher = mx_fetcher  # 供 get_mx_ws_status 读取连接状态
             self._mx_ws_task = asyncio.create_task(
                 mx_fetcher.start_ws(
-                    self._mx_ws_on_message, on_ws_give_up=self._mx_ws_on_give_up
+                    self._mx_ws_on_message,
+                    on_ws_give_up=self._mx_ws_on_give_up,
+                    on_storm=self._mx_ws_on_storm,
+                    on_reconnected=self._mx_ws_on_reconnected,
                 )
             )
             # 会话启动时刻（自动/手动唯一共同入口，超时兜底据此计时）；

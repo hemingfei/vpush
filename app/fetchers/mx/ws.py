@@ -108,6 +108,20 @@ REVIVAL_BUDGET = 2
 # 60s 足以干净区分两者。
 CONNECTION_GRACE_SECONDS = 60.0
 
+# 风暴形态阈值（2026-10-13 下午破案）：连上后存活不足此时长即被断（实测
+# 40/msg ack 后同毫秒 41/msg, 空载荷处决），视为平台对当前 token 置了「连上
+# 即断」标记——本地退避无法自愈（实测 67 分钟不消退），唯一解法是换新 token。
+# 常态回收的被踢会话存活在分钟级以上（实测 39-64min），5s 足以干净区分。
+STORM_UPTIME_SECONDS = 5.0
+# 风暴期退避直接落到末档（600-900s）：标记存续期内快档重试全是徒劳，每次
+# 尝试还是一次平台可见事件；拉长间隔等标记消退或自动换 token 生效
+STORM_MIN_LEVEL = len(KICK_BACKOFF_LEVELS) - 1
+
+# 实测非消息类平台事件（2026-10-13 帧样本）：request=客户端环境探测（让浏览器
+# 去 cz88 查本机出口 IP）、va=视图上报回执。这些不进消息管道（旧 catch-all 会把
+# 载荷当聊天消息产生「missing room id」噪音）；未识别事件仍走 catch-all 透传。
+NON_MESSAGE_EVENTS = frozenset({"request", "va"})
+
 
 def _reconnect_delay() -> float:
     """断线重连等待秒数：16-36 秒之间随机。"""
@@ -201,6 +215,8 @@ class MxWsClient:
         config: Any,
         on_message_callback: Callable[[dict], None],
         on_give_up: Callable[[str], Any] | None = None,
+        on_storm: Callable[[str], Any] | None = None,
+        on_reconnected: Callable[[], Any] | None = None,
     ):
         """
         Initialize MX WebSocket client.
@@ -209,10 +225,16 @@ class MxWsClient:
             config: MX configuration object
             on_message_callback: Callback function when a new message is received
             on_give_up: 永久放弃自动重连时的回调（参数为失败原因），用于发布系统告警
+            on_storm: 风暴形态确认回调（连续 2 次连上即断，参数为描述），用于触发
+                自动换 TOKEN——风暴标记绑定 token，本地退避无法自愈（2026-10-13）
+            on_reconnected: 断线后重新连上的回调（本次 run_forever 内第 2 次及以后
+                的成功连接），用于触发房间同步补拉断流期消息
         """
         self.config = config
         self.on_message = on_message_callback
         self.on_give_up = on_give_up
+        self.on_storm = on_storm
+        self.on_reconnected = on_reconnected
         self.connected = False
         self.last_message_at: datetime | None = None
         self._sio: Any = None
@@ -233,6 +255,8 @@ class MxWsClient:
         self.manually_stopped = False
         # 断开原因（管理员手动 / 系统窗口自动），stop() 时写入，供状态接口如实展示
         self.stop_reason = ""
+        # 风暴形态（连续连上即断）已通知标记：每个风暴片段只通知一次，连接站住后复位
+        self._storm_notified = False
 
     async def connect(self):
         """按配置选传输实现：curl_cffi（默认，Chrome TLS 指纹）/ socketio（回退）。"""
@@ -373,20 +397,38 @@ class MxWsClient:
 
         实测服务端事件帧为带命名空间前缀的 ``42/msg,["room_msg",...]``
         （2026-10-12 mx_ws_probe 抓包 ground truth，非默认 ns 必带前缀）；
-        同时容错 42[...]（默认 ns）与 2[...]（无 EIO 包裹的历史形态）。
+        同时容错 42[...]（默认 ns）、2[...]（无 EIO 包裹的历史形态）与
+        ack 序号形态 ``42/msg,<ack>["request",...]``（2026-10-13 实测：
+        平台环境探测事件 request/va 均带序号，浏览器会回 43 ACK，本客户端
+        回空载荷 ACK 对齐协议，但不猜业务契约）。
         """
         body = None
+        ns_part = ""  # 命名空间段（含尾逗号，如 "/msg,"），回 ACK 时复用
+        ack_id: int | None = None
         if frame.startswith("2["):
             body = frame[1:]  # 剥掉类型数字，保留 '['：剩余即 JSON 数组
         elif frame.startswith("42"):
             rest = frame[2:]
             if rest.startswith("/"):
-                # 42/msg,[...]：剥掉命名空间前缀，取逗号后的 JSON 数组
+                # 42/msg,[...]：剥掉命名空间前缀，取逗号后的载荷
                 comma = rest.find(",")
                 if comma == -1:
                     logger.warning("MX WS 事件帧缺载荷分隔逗号：%s", frame[:120])
                     return
+                ns_part = rest[: comma + 1]
                 rest = rest[comma + 1:]
+            if not rest.startswith("["):
+                # 42/msg,<ack>[...]：服务端期待确认的事件帧
+                bracket = rest.find("[")
+                if bracket == -1:
+                    logger.warning("MX WS 事件帧缺载荷数组：%s", frame[:120])
+                    return
+                ack_part = rest[:bracket]
+                if not ack_part.isdigit():
+                    logger.warning("MX WS 事件帧形态未识别：%s", frame[:120])
+                    return
+                ack_id = int(ack_part)
+                rest = rest[bracket:]
             body = rest
         if body is None:
             return
@@ -394,12 +436,36 @@ class MxWsClient:
             args = json.loads(body)
         except json.JSONDecodeError:
             logger.warning("MX WS 事件载荷非 JSON：%s", frame[:120])
+            if ack_id is not None:
+                await self._send_sio_ack(ns_part, ack_id)
             return
-        if not isinstance(args, list) or len(args) < 2:
+        if ack_id is not None:
+            await self._send_sio_ack(ns_part, ack_id)
+        if not isinstance(args, list) or not args:
+            return
+        event = args[0] if isinstance(args[0], str) else ""
+        if event in NON_MESSAGE_EVENTS:
+            # 平台非消息事件（request=客户端环境探测如 cz88 IP 查询、va 等）：
+            # 不进消息管道（旧 catch-all 会把 va 的裸数字当消息产生噪音日志）
+            logger.debug("MX WS 平台事件已忽略并回 ACK（event=%s）：%s", event, frame[:100])
             return
         payloads = args[1:]
+        if not payloads:
+            return
         # 单载荷直接透传（room_msg 形态）；多参事件归一成列表（同旧 catch-all）
         await self._handle_message(payloads[0] if len(payloads) == 1 else payloads)
+
+    async def _send_sio_ack(self, ns_part: str, ack_id: int):
+        """对服务端带 ack 序号的事件回 ACK：``43<ns>,<id>[null]``（python-socketio
+        对无返回值 handler 的标准空确认形态）。失败仅记日志——ACK 丢失不影响主链路。"""
+        ws = self._native_ws
+        if ws is None:
+            return
+        try:
+            await ws.send_str(f"43{ns_part}{ack_id}[null]")
+            logger.debug("MX WS 已回 ACK：43%s%s[null]", ns_part, ack_id)
+        except Exception:  # noqa: BLE001 - 尽力确认，失败不断链
+            logger.debug("MX WS 回 ACK 失败（忽略）", exc_info=True)
 
     async def _close_native(self):
         """掐断原生传输：terminate 不发任何关闭帧（关标签页语义），与 stop 同口径。"""
@@ -610,6 +676,10 @@ class MxWsClient:
         kick_level = 0
         # 复活额度：退避/快速重连耗尽后消耗一次进入长等待；站住即全额恢复
         revivals_left = REVIVAL_BUDGET
+        # 本次 run_forever 内成功连接计数：≥2 说明是断线后重连（供补拉回调）
+        connect_count = 0
+        # 风暴判定：连续「连上即断」（存活 < STORM_UPTIME_SECONDS）次数
+        instant_kill_streak = 0
         try:
             while not self._should_stop:
                 reason = ""
@@ -620,6 +690,10 @@ class MxWsClient:
                         connect_attempt = True
                         await self.connect()
                     connected_at = time.monotonic()
+                    connect_count += 1
+                    if connect_count >= 2:
+                        # 断线后重新连上：调度器借此触发房间同步补拉断流期消息
+                        self._fire_callback(self.on_reconnected)
                     # Sleep and let the Socket.IO client handle events
                     await self._sio.wait()
                 except asyncio.CancelledError:
@@ -649,6 +723,20 @@ class MxWsClient:
                     reconnect_pending = False
                     kick_level = 0
                     revivals_left = REVIVAL_BUDGET
+                    instant_kill_streak = 0
+                    self._storm_notified = False
+                elif uptime is not None and uptime < STORM_UPTIME_SECONDS:
+                    # 风暴形态计数：连上即断。第 2 次起触发 storm 回调（调度器
+                    # 据此触发受限自动换 TOKEN——标记绑定 token，退避无法自愈）
+                    instant_kill_streak += 1
+                    if instant_kill_streak >= 2 and not self._storm_notified:
+                        self._storm_notified = True
+                        logger.error(
+                            "MX WS 风暴形态确认（连续 %d 次连上即断，末次存活 %.1fs）"
+                            "——平台对当前 TOKEN 的连上即断标记，换 TOKEN 是唯一解法",
+                            instant_kill_streak, uptime,
+                        )
+                        self._fire_callback(self.on_storm, f"连续 {instant_kill_streak} 次连上即断（末次存活 {uptime:.1f}s）")
                 if connect_attempt and uptime is None:
                     # 连接动作本身失败（网络错误/端点 404 等）：快速重连一次；
                     # 再失败不再立即放弃，而是消耗复活额度等风暴过去
@@ -716,13 +804,19 @@ class MxWsClient:
                         reason or "single-session kick backoff exhausted", False
                     )
                     break
+                # 风暴形态（本次连接连上即断）：快档重试在标记存续期内全是徒劳，
+                # 直接落到末档长退避，等标记消退或自动换 TOKEN 生效
+                storm_hit = uptime is not None and uptime < STORM_UPTIME_SECONDS
+                if storm_hit:
+                    kick_level = max(kick_level, STORM_MIN_LEVEL)
                 delay = _kick_backoff_delay(kick_level)
                 kick_level += 1
                 logger.error(
-                    "MX WebSocket 断开（%s，存活 %.0f 秒）——平台回收连接/互踢，"
+                    "MX WebSocket 断开（%s，存活 %.0f 秒）——平台回收连接/互踢%s，"
                     "%.0f 秒后第 %d 档退避重连",
                     reason or "connection closed",
                     uptime or 0,
+                    "，风暴形态快档已跳过" if storm_hit else "",
                     delay,
                     kick_level,
                 )
@@ -747,16 +841,20 @@ class MxWsClient:
 
     def _fire_give_up(self, reason: str, token_expired: bool):
         """永久放弃自动重连时回调外部（发布系统告警等）；回调异常只记日志。"""
-        if self.on_give_up is None:
+        self._fire_callback(self.on_give_up, reason, token_expired)
+
+    def _fire_callback(self, cb: Callable | None, *args):
+        """通用回调触发：支持同步/协程函数，fire-and-forget，异常只记日志。"""
+        if cb is None:
             return
         try:
-            result = self.on_give_up(reason, token_expired)
+            result = cb(*args)
             if asyncio.iscoroutine(result):
                 task = asyncio.create_task(self._await_give_up(result))
                 self._giveup_tasks.add(task)
                 task.add_done_callback(self._giveup_tasks.discard)
         except Exception:
-            logger.error("MX WebSocket 重连失败回调执行异常", exc_info=True)
+            logger.error("MX WebSocket 回调执行异常", exc_info=True)
 
     async def _await_give_up(self, coro):
         try:

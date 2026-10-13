@@ -685,12 +685,12 @@ def test_ws_gives_up_when_retry_after_clean_drop_fails(monkeypatch):
 
 
 def test_ws_gives_up_when_reconnect_kicked_within_grace(monkeypatch):
-    """「连上即被踢」的风暴期：四档退避（首档快速重连）逐级升档，末档后仍没站住才放弃。
+    """「连上即被踢」的风暴期：退避直接钳到末档（快档在标记存续期全是徒劳），
+    末档后仍没站住走有界复活，复活额度耗尽才放弃。
 
-    2026-10-12 诊断（scripts/mx_ws_probe.py 实测）：平台周期性回收 WS 连接
-    （21:57 实测两账号 2.8s 内先后被掐 TCP），常态回收后服务端立即可重连——
-    第 0 档 16-36s 快速恢复；下午盘风暴期新会话 1ms 即被处决，逐档拉长退避；
-    同 token 单会话互踢（6ms 内 41 踢+僵尸静默）同样适用。四档耗尽才放弃告警。
+    2026-10-13 下午破案后更新语义：风暴期每个「连上即断」都钳到末档
+    （600-900s），不再从快档逐级爬——每档一次长等，墙钟耐心反而更长；
+    快档快速重连只服务于「站住很久后被正常回收」的常态场景。
     """
     import app.fetchers.mx.ws as mx_ws
 
@@ -710,15 +710,17 @@ def test_ws_gives_up_when_reconnect_kicked_within_grace(monkeypatch):
         attempts["n"] += 1
 
         async def kicked_immediately():
-            pass  # wait() 立即返回 = 连上即被服务端掐断
+            pass  # wait() 立即返回 = 连上即被服务端掐断（风暴形态）
 
         client._sio = SimpleNamespace(wait=kicked_immediately)
 
     client.connect = connect
     asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
 
-    assert attempts["n"] == 15  # 每轮「首连 + 四档退避 + 末档检查连接」×3 轮（2 次复活隔开）
-    assert backoff_levels == [0, 1, 2, 3] * 3  # 每轮档位逐级递增，复活从第 0 档重来
+    # 每轮风暴片段 = 一次末档退避（钳制后阶梯只剩一档）+ 一次复活边界；
+    # 两轮复活隔开共 3 次末档退避、6 次连接，复活额度耗尽才放弃
+    assert attempts["n"] == 6
+    assert backoff_levels == [3, 3, 3]  # 每次都钳到末档，复活后从钳制重新开始
     assert client.gave_up is True
     assert give_ups and give_ups[0][1] is False
     assert "single-session" in give_ups[0][0]
@@ -810,11 +812,17 @@ def test_ws_kick_recovered_by_standing_retry(monkeypatch):
 
 
 def test_ws_kick_level_resets_after_standing_connection(monkeypatch):
-    """互踢退避后重连站住：档位归零——下一个会话被踢又从第 0 档退避，不累积。"""
+    """互踢退避后重连站住：档位归零——下一个会话被踢又重新走完整退避，不累积。
+
+    2026-10-13 起连上即断会钳到末档（STORM_UPTIME_SECONDS），本测试同步缩小
+    风暴阈值让 0.1s 的「站住」不算风暴（生产口径：站住 ≥60s 远超 5s 阈值）。
+    站住复位后第二次被踢仍走阶梯分支（而非复活边界），即证明档位已归零。
+    """
     import app.fetchers.mx.ws as mx_ws
 
     monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
     monkeypatch.setattr(mx_ws, "CONNECTION_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr(mx_ws, "STORM_UPTIME_SECONDS", 0.08)
     backoff_levels = []
 
     def fake_backoff(level: int) -> float:
@@ -838,14 +846,14 @@ def test_ws_kick_level_resets_after_standing_connection(monkeypatch):
             pass  # 连上即被踢（uptime ≈ 0）
 
         async def stand_then_drop():
-            await asyncio.sleep(0.1)  # 站住超过宽限期后被断开
+            await asyncio.sleep(0.1)  # 站住超过宽限期后被断开（非风暴阈值内）
 
         if attempts["n"] == 1:
-            client._sio = SimpleNamespace(wait=kicked)          # 第 1 档退避
+            client._sio = SimpleNamespace(wait=kicked)          # 末档退避（钳制）
         elif attempts["n"] == 2:
             client._sio = SimpleNamespace(wait=stand_then_drop)  # 站住 → 档位归零
         else:
-            client._sio = SimpleNamespace(wait=kicked)          # 应回到第 0 档
+            client._sio = SimpleNamespace(wait=kicked)          # 应回到钳制起点
 
     client.connect = connect
 
@@ -861,10 +869,13 @@ def test_ws_kick_level_resets_after_standing_connection(monkeypatch):
             await task
         except asyncio.CancelledError:
             pass
-        # 核心断言：第二次被踢（backoff_levels 第二项）从头退避，不是升到第 1 档；
-        # 取消时机在 0.01s 退避睡眠前后浮动，attempts 落在 2（含）~3（含）
+        # 核心断言（2026-10-13 风暴钳制语义下的「归零」证明）：
+        #   backoff_levels[0] == 3 —— 第 1 次连上即断（uptime≈0 < 风暴阈值），钳到末档；
+        #   backoff_levels[1] == 0 —— 站住 0.1s 复位档位后，其后的普通断开
+        #   （0.1s ≥ 风暴阈值 0.08，非风暴）从第 0 档进入——若档位未归零，
+        #   这里会是 1（或因 kick_level 越界直接掉进复活路径而不产生记录）
         assert attempts["n"] >= 2
-        assert backoff_levels[:2] == [0, 0]
+        assert backoff_levels[:2] == [3, 0]
         assert client.gave_up is False
         assert give_ups == []
 

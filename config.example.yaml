@@ -60,6 +60,12 @@ sources:
     ws_enabled: true   # 是否启用 WebSocket 实时推送
     page_size: 30      # 历史消息分页大小（官方 msg/list 实测值）
     max_history_pages: 100  # 最大历史消息页数
+    # 自动换 TOKEN（2026-10-13 起）：WS 风暴形态（连续 2 次连上即断）或放弃
+    # 重连时自动触发 Jenkins vpush-mx-token 构建换新 token。凭据只走环境变量
+    # （不入配置文件/数据库）：MX_RENEW_JENKINS_USER / MX_RENEW_JENKINS_PASSWORD
+    # 必填，缺省=功能关闭；可选 MX_RENEW_JENKINS_URL / MX_RENEW_JENKINS_JOB /
+    # MX_RENEW_DAILY_BUDGET（默认 2 次/日）/ MX_RENEW_COOLDOWN_MIN（默认 60）/
+    # MX_RENEW_DISABLED=1 强制关闭
 
 polling:
   interval_seconds: 180

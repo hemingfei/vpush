@@ -268,13 +268,21 @@ class MxFetcher(Fetcher):
         except Exception:
             return format_published_at(str(int(time.time())))
 
-    async def start_ws(self, on_message, on_ws_give_up=None):
+    async def start_ws(
+        self,
+        on_message,
+        on_ws_give_up=None,
+        on_storm=None,
+        on_reconnected=None,
+    ):
         """
         启动 WebSocket 连接并监听实时消息。
 
         Args:
             on_message: 回调函数，当收到新消息时调用（可以是异步函数）
             on_ws_give_up: 自动重连永久放弃时的回调（参数为失败原因），用于发布系统告警
+            on_storm: 风暴形态确认回调（连续 2 次连上即断），用于触发自动换 TOKEN
+            on_reconnected: 断线后重新连上的回调，用于触发房间同步补拉断流期消息
         """
         if not self._ws_enabled:
             logger.info("MX WebSocket is disabled")
@@ -302,7 +310,13 @@ class MxFetcher(Fetcher):
             self._ws_tasks.add(task)
             task.add_done_callback(self._ws_tasks.discard)
 
-        self.ws_client = MxWsClient(self.config, _on_raw_message, on_give_up=on_ws_give_up)
+        self.ws_client = MxWsClient(
+            self.config,
+            _on_raw_message,
+            on_give_up=on_ws_give_up,
+            on_storm=on_storm,
+            on_reconnected=on_reconnected,
+        )
         await self.ws_client.run_forever()
 
     async def stop_ws(self, reason: str = "已手动断开"):
