@@ -2542,7 +2542,7 @@ def test_mx_manual_login_reports_each_step(monkeypatch):
 
     report = asyncio.run(scheduler.mx_manual_login())
     assert [s["name"] for s in report["steps"]] == [
-        "user/info", "system/config", "room/list", "websocket",
+        "user/info", "system/config", "room/list", "恢复房间", "websocket",
     ]
     assert report["ok"] is True
     assert report["steps"][2]["detail"] == "129 个房间"
@@ -2612,7 +2612,7 @@ def test_session_start_records_auto_report(monkeypatch):
     assert report["source"] == "auto"
     assert report["ok"] is True
     assert [s["name"] for s in report["steps"]] == [
-        "user/info", "room/list", "websocket",
+        "user/info", "room/list", "恢复房间", "websocket",
     ]
 
 

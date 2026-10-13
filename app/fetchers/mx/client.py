@@ -155,6 +155,12 @@ class MXClient:
         data = {"rid": room_id, "tt": int(time.time() * 1000)}
         self._request("POST", "/api/room/view", data)
 
+    def room_notice(self, room_id: int) -> Any:
+        """房间公告：官方「点选房间」与 room/view 成对必发（抓包实测 S2），
+        返回 {"list":[公告]}（可空）。仅点选语义，其余场景不发。"""
+        data = {"rid": room_id, "tt": int(time.time() * 1000)}
+        return self._request("POST", "/api/room/notice", data)
+
     # ---- 官方冷启动序列的只读端点（2026-09-02 抓包实测）----
     # master-api 与 business-api 同主机不同前缀。vpush 在开窗会话启动时按官方
     # 顺序补发这些只读请求，使「开窗」的请求足迹与「真人打开网页」一致；

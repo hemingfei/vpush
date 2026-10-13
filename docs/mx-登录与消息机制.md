@@ -46,7 +46,8 @@ MX 挂进通用轮询管线，否则前功尽弃。
 4. `POST /master-api/api/room/grouplist` — `{"tt":<ms>}`
 5. `GET /master-api/api/notice?tt=<ms>&token=<token>` — 平台公告（GET，token 走 query，无 Content-Type）
 6. `POST {api_base}/api/room/list` — `{"pages":1,"limit":1000000,"tt":<ms>}` **单次全量**拉房间列表（官方冷启动本身就是这个形态，抓包实测）
-7. 连接 WebSocket（见第二节）
+7. `恢复上次打开的房间`（2026-10-13 起，`_mx_restore_last_room`）— `room/view` + `msg/list(msgid=0,pagesize=30)` + `room/notice` 三连（官方冷启动 S1-6 实测）。官方是对 localStorage 缓存做增量合并，vpush 的等价物是数据库去重入库——这一步兼有**窗口关闭期间的消息补漏**职责。上次房间取 settings 键 `mx_last_room`（会话活动模拟每次点房间刷新）；无记录或该房间已停用时随机挑一个启用房间
+8. 连接 WebSocket（见第二节）
 
 要点：
 - `tt` 全部是毫秒时间戳，请求时现取。
@@ -134,6 +135,28 @@ MX_WS_URL / MX_WS_PATH / MX_WS_ENABLED / MX_PAGE_SIZE / MX_MAX_HISTORY_PAGES`
 - 连接阶段被拒且判定 TOKEN 失效 → 不等待不重试，立即放弃并触发熔断。
 - python-socketio 内部重连禁用（`reconnection=False`），策略完全自己控制。
 - 恢复：管理员「登录」/「接入 WS」新建客户端（状态自动复位），或次日窗口。
+
+### 1.8 会话中段真人活动模拟（2026-10-13 起，`mx_activity.py`）
+
+**动机**：WS 会话连上后 vpush 完全静默（只答心跳 pong 与 ACK，零应用层请求），
+而真人使用时每次点选房间必发 `room/view` + `room/notice` 两个 HTTP（抓包场景
+S2）。若平台以「会话中段零用户操作」为画像特征对 TOKEN 置「连上即断」标记
+（下午风暴的候选成因之一），本模拟即为对冲；**对周期性连接回收无效**（回收
+与行为无关，双账号 2.8s 同杀实锤，见 mx-单会话互踢诊断-2026-10-12）。
+
+- **节奏**：会话存活且 WS 在线期间，每 **5–10 分钟**（随机）点开一个启用房间。
+  模拟器随会话创建（`mx_ws_control("connect")` 唯一入口重置），节奏每会话重新随机。
+- **请求链**：`room/view {"rid","tt"}` → 人形微间隔（`room_open` 档抖动）→
+  `room/notice {"rid","tt"}`，与官方点选房间逐请求同形；**绝不发 `msg/list`**
+  （官方 S2 点选不拉历史，消息渲染自本地缓存，vpush 等价物是数据库+WS 推送）。
+- **房间池**：数据库启用的 MX KOL 随机挑，排除上一个；无可挑房间则顺延节奏。
+  每次点开把 rid 写入 settings `mx_last_room`（登录恢复上次房间复用）。
+- **闸门**：TOKEN 熔断态绝不打（与兜底槽同口径）；闸门不满足不消费到期状态，
+  恢复在线后下个 tick 补点。TOKEN 过期（`MXTokenExpiredError`）向上抛走统一
+  熔断告警；其余单次失败只记日志顺延。
+- **开关**：`MX_ACTIVITY_SIM=0/false/no` 关闭（默认开启）。
+- **定位**：画像对冲假设，非已证结论——上线后观察下午风暴频率是否下降；
+  无效果也不回滚（请求足迹官方同形、量级每小时个位数，无副作用）。
 
 ---
 

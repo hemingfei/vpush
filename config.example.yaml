@@ -66,6 +66,9 @@ sources:
     # 必填，缺省=功能关闭；可选 MX_RENEW_JENKINS_URL / MX_RENEW_JENKINS_JOB /
     # MX_RENEW_DAILY_BUDGET（默认 2 次/日）/ MX_RENEW_COOLDOWN_MIN（默认 60）/
     # MX_RENEW_DISABLED=1 强制关闭
+    # 会话中段真人活动模拟（2026-10-13 起）：会话在线期间每 5-10 分钟点开一个
+    # 启用房间（room/view + room/notice，官方点选房间同形），对冲「会话零操作」
+    # 画像假设；环境变量 MX_ACTIVITY_SIM=0 关闭（默认开启）
 
 polling:
   interval_seconds: 180

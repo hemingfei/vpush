@@ -74,6 +74,7 @@ from .wscn_flash import build_wscn_post
 try:
     from .fetchers.mx.client import MXTokenExpiredError
     from .fetchers.mx.human import human_delay
+    from .services.mx_activity import MXRoomActivity
     from .services.mx_auto_renew import MxAutoRenewer
     from .services.mx_sync import MXRoomSyncService
     from .services.mx_window import (
@@ -106,6 +107,15 @@ except Exception as e:
 
         async def trigger(self, reason: str) -> dict:
             return {"ok": False, "detail": "MX 模块不可用"}
+
+    class MXRoomActivity:  # noqa: D401 - MX 模块不可用时的占位（恒不触发）
+        """占位：会话活动模拟随 MX 模块一起不可用。"""
+
+        def __init__(self, client, db=None):
+            pass
+
+        async def maybe_click(self, *, session_active: bool, ws_connected: bool) -> str:
+            return ""
 
 # 全局 MX 相关变量
 _mx_fetcher = None
@@ -2315,6 +2325,8 @@ class Scheduler:
         self._mx_ws_on_reconnected = None
         # 受限自动换 TOKEN 触发器（风暴/放弃场景；凭据 env 化，未配置=关闭）
         self._mx_auto_renewer = None
+        # 会话中段「真人点房间」模拟器（随会话创建，connect 时置 None 重新排布节奏）
+        self._mx_activity = None
         # 断流恢复补拉的节流时刻（monotonic）：重连风暴下 5 分钟内只补一次
         self._mx_recovery_sync_at = 0.0
         # _mx_schedule_ws_abort 的 fire-and-forget 任务持引用：事件循环只持
@@ -2918,6 +2930,7 @@ class Scheduler:
         await self._mx_maybe_daily_fallback()
         await self._mx_maybe_nightly_force_close()
         await self._mx_maybe_session_timeout()
+        await self._mx_maybe_activity_click()
 
     async def _mx_session_start(self):
         """系统自动执行 MX 平台登录：按官方冷启动序列执行（启动请求 → 房间列表 → WS）。
@@ -2951,8 +2964,8 @@ class Scheduler:
         # 官方网页端每次「打开应用」都会：补发启动只读序列（user/info → system/config
         # → msg/tip → grouplist → 平台公告）→ 拉一次房间列表 → 连 WS（2026-09-02
         # 抓包实测）。vpush 开窗完全按此顺序执行，使请求足迹与「真人打开网页」一致。
+        token_expired = False
         if self._mx_sync_service is not None:
-            token_expired = False
             try:
                 boot_steps = await asyncio.to_thread(self._mx_sync_service.boot_sequence)
                 steps.extend(boot_steps or [])
@@ -2981,18 +2994,28 @@ class Scheduler:
                         "MX 房间同步失败",
                         f"⚠️ 登录时的房间列表同步失败：{exc}",
                     )
-            if token_expired:
-                self._mx_trigger_token_expired()
-                record("TOKEN 校验", False, "TOKEN 已过期/无效，本次登录中止")
-                finish()
-                await asyncio.to_thread(
-                    self.publish_mx_error,
-                    "token_expired",
-                    "MX TOKEN 已过期",
-                    "⚠️ MX TOKEN 已过期或无效，MX 平台登录失败，已暂停拉取与实时推送。"
-                    "\n请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次）。",
-                )
-                return
+        if not token_expired:
+            # 官方冷启动 S1-6：恢复「上次打开的房间」（room/view + msg/list +
+            # room/notice，2026-09-02 抓包实测），兼有窗口关闭期间的消息补漏；
+            # 失败不阻断后续 WS 连接
+            try:
+                ok, detail = await self._mx_restore_last_room()
+                record("恢复房间", ok, detail)
+            except MXTokenExpiredError:
+                token_expired = True
+                record("恢复房间", False, "TOKEN 已过期/无效")
+        if token_expired:
+            self._mx_trigger_token_expired()
+            record("TOKEN 校验", False, "TOKEN 已过期/无效，本次登录中止")
+            finish()
+            await asyncio.to_thread(
+                self.publish_mx_error,
+                "token_expired",
+                "MX TOKEN 已过期",
+                "⚠️ MX TOKEN 已过期或无效，MX 平台登录失败，已暂停拉取与实时推送。"
+                "\n请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次）。",
+            )
+            return
         if self.mx_config.ws_enabled:
             await asyncio.sleep(human_delay("phase"))  # 房间列表就绪 → 建立 WS 的人形间隔
             try:
@@ -3121,6 +3144,96 @@ class Scheduler:
             f"会话持续超过 {self._MX_MAX_SESSION_HOURS} 小时，"
             "系统自动执行 MX 平台断开（超时兜底）",
         )
+
+    async def _mx_maybe_activity_click(self):
+        """会话中段「真人点房间」模拟（app/services/mx_activity.py）。
+
+        每 5-10 分钟点开一个启用房间（room/view + room/notice，官方点选语义）。
+        触发闸门：会话存活 + WS 在线（真人页面开着才会点房间）+ TOKEN 未熔断
+        ——与兜底槽同口径，熔断态绝不打。活动对象随会话创建（mx_ws_control
+        ("connect") 时置 None），点房间节奏在每个新会话内重新随机。
+        """
+        if self._mx_token_expired or not self._mx_session_active():
+            return
+        fetcher = self.fetchers.get("mx")
+        ws_client = getattr(fetcher, "ws_client", None)
+        if ws_client is None or not getattr(ws_client, "connected", False):
+            return
+        if self._mx_activity is None:
+            client = getattr(fetcher, "mx_client", None)
+            if client is None:
+                return
+            self._mx_activity = MXRoomActivity(client, self.db)
+        try:
+            await self._mx_activity.maybe_click(
+                session_active=True, ws_connected=True
+            )
+        except MXTokenExpiredError:
+            logger.error("MX 会话活动模拟发现 TOKEN 过期", exc_info=True)
+            await asyncio.to_thread(
+                self.publish_mx_error,
+                "token_expired",
+                "MX TOKEN 已过期",
+                "⚠️ MX TOKEN 已过期（会话活动模拟发现），MX 已暂停拉取与实时推送。"
+                "\n请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次）。",
+            )
+
+    async def _mx_restore_last_room(self) -> tuple[bool, str]:
+        """官方冷启动 S1-6：恢复「上次打开的房间」（room/view + msg/list + room/notice）。
+
+        msg/list 兼有补漏职责：窗口关闭期间该房间的消息借此入库（官方是对
+        localStorage 缓存做增量合并，vpush 的等价物是数据库去重入库）。上次
+        房间取 settings 键 mx_last_room（活动模拟每次点房间都刷新）；无记录
+        或该房间已停用时随机挑一个启用房间。失败只记日志，绝不阻断登录。
+
+        Returns:
+            (ok, detail)：供登录报告展示。MXTokenExpiredError 向上抛，由调用方
+            走既有的 TOKEN 熔断分支。
+        """
+        fetcher = self.fetchers.get("mx")
+        if fetcher is None or self.db is None:
+            return True, "MX 抓取器未初始化，跳过"
+        kols = [
+            k for k in self.db.list_kols(platform="mx")
+            if k.get("enabled") and str(k.get("external_id") or "").strip()
+        ]
+        if not kols:
+            return True, "无启用房间，跳过"
+        last_rid = str(self.db.get_setting("mx_last_room") or "")
+        kol = next(
+            (k for k in kols if str(k.get("external_id")) == last_rid), None
+        ) if last_rid else None
+        if kol is None:
+            kol = random.choice(kols)
+        rid = str(kol["external_id"])
+
+        def _open():
+            posts = fetcher.fetch(kol) or []  # room/view + msg/list（含有限追平）
+            try:
+                fetcher.mx_client.room_notice(int(rid))
+            except MXTokenExpiredError:
+                raise
+            except Exception:  # noqa: BLE001 - 公告失败不影响补漏
+                logger.warning("MX room/notice 上报失败 room=%s", rid, exc_info=True)
+            known = self.db.existing_post_keys([("mx", p.external_id) for p in posts])
+            saved = 0
+            for post in posts:
+                if ("mx", post.external_id) not in known:
+                    # 与 WS 实时/兜底同口径：入库前先走本地规则打标
+                    self._apply_mx_rule_tags(post)
+                if self.ingest_external_post(post) is not None:
+                    saved += 1
+            return len(posts), saved
+
+        try:
+            total, saved = await asyncio.to_thread(_open)
+            self.db.set_setting("mx_last_room", rid)
+            return True, f"{kol['name']}：{total} 条，新增 {saved}"
+        except MXTokenExpiredError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 恢复失败不阻断登录链
+            logger.warning("MX 恢复上次房间失败 room=%s: %s", rid, exc, exc_info=True)
+            return False, str(exc)[:100]
 
     async def _mx_fallback_pull_once(self):
         """随机拉 1 个启用房间的最新消息（含有限追平），入库并推送。"""
@@ -3476,6 +3589,14 @@ class Scheduler:
             finally:
                 if temp is not None:
                     temp.stop()
+            if not self._mx_token_expired:
+                # 与自动开窗同款：官方冷启动 S1-6 恢复「上次打开的房间」
+                try:
+                    ok, detail = await self._mx_restore_last_room()
+                    record("恢复房间", ok, detail)
+                except MXTokenExpiredError:
+                    self._mx_trigger_token_expired()
+                    record("恢复房间", False, "TOKEN 已过期/无效")
             if self._mx_token_expired:
                 record("websocket", False, "TOKEN 已熔断，跳过连接")
             elif self.mx_config.ws_enabled:
@@ -3552,6 +3673,8 @@ class Scheduler:
             # 会话启动时刻（自动/手动唯一共同入口，超时兜底据此计时）；
             # 「已在运行」的早退分支不刷新，保证时刻对应当前存活会话的真实起点
             self._mx_session_started_at = datetime.now(CN_TZ)
+            # 新会话：点房间模拟器置 None，下个 tick 重建并重新随机排布节奏
+            self._mx_activity = None
             logger.info("MX WebSocket 已发起连接（%s）", source_label)
             return "已发起 MX WebSocket 连接"
         raise RuntimeError(f"未知操作：{action}")

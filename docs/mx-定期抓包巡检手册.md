@@ -170,10 +170,12 @@ async (page) => {
 static.dingtalk.com），语音走腾讯云 mp3（HTTP 206 分段加载）。
 
 **vpush 不调用的官方端点**：`login`/`code`（人工取号红线，永不自动调用）、`issign`/
-`showad`/`member-ai-api`（请求体未采集，不猜格式硬发，留待巡检抓到再补）、`business-api/5`
-的 `room/notice`（点选语义，仅真点房间才发）——其余启动序列（user/info/system/config/
-room/list/msg/tip/grouplist/notice）已由开窗会话按官方顺序补发（`boot_sequence`，
-2026-09-02）。vpush 运行期无任何登录行为，token 由人工网页取号获得。
+`showad`/`member-ai-api`（请求体未采集，不猜格式硬发，留待巡检抓到再补）——其余启动
+序列（user/info/system/config/room/list/msg/tip/grouplist/notice）已由开窗会话按官方
+顺序补发（`boot_sequence`，2026-09-02）。`room/view`+`room/notice`+`msg/list` 自
+2026-10-13 起也会在会话中段出现：开窗恢复上次房间（S1-6）+ 每 5-10 分钟点房间活动
+模拟（S2 语义，view+notice 成对、不发 msg/list；见 `mx_activity.py` 与登录文档 1.8）。
+vpush 运行期无任何登录行为，token 由人工网页取号获得。
 
 ### 3.4 WS 行为
 
