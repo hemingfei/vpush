@@ -38,3 +38,6 @@ docs/research/
 config.demo.yaml
 .scratch/
 waf-bot/node_modules/
+node_modules/
+package.json
+package-lock.json

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>MX 采集器</title>
+  <style>
+    body { font: 14px/1.7 system-ui, sans-serif; max-width: 680px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; margin-top: 1rem; font-weight: 600; }
+    input { width: 100%; padding: 6px 8px; box-sizing: border-box; }
+    button { margin: 0.6rem 0.4rem 0 0; padding: 6px 14px; }
+    pre { background: #f4f4f4; padding: 1em; white-space: pre-wrap; word-break: break-all; }
+    code { background: #f4f4f4; padding: 0 4px; }
+    .ok { color: #0a7d32; } .bad { color: #b3261e; }
+    fieldset { border: 1px solid #ccc; margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <h2>MX 采集器</h2>
+  <p>被动转发 MX 页面消息帧到云网关（/api/mx-ingest）。零行为、零决策。</p>
+
+  <fieldset>
+    <legend>云网关</legend>
+    <label for="gateway">上行地址（仅 wss://自有域名）</label>
+    <input id="gateway" placeholder="wss://your-domain.example.com/api/mx-ingest">
+    <button id="saveGateway">保存网关地址</button>
+    <button id="testGateway">校验地址</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>设备配对</legend>
+    <p>后台生成 8 位一次性配对码后，在此输入完成绑定（设备密钥保存在本机）。</p>
+    <label for="code">配对码</label>
+    <input id="code" maxlength="8" placeholder="8 位配对码">
+    <button id="pair">配对</button>
+    <button id="forget">撤销本地密钥（重新配对用）</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>采集范围</legend>
+    <label for="sitePrefix">MX 页面前缀（域名漂移时在此更新，保存即时生效、不重启采集）</label>
+    <input id="sitePrefix" placeholder="https://mx.2026.foodtop1.com/">
+    <button id="savePrefix">保存前缀</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>状态</legend>
+    <pre id="out">（加载中）</pre>
+    <button id="refresh">刷新状态</button>
+  </fieldset>
+
+  <script src="options.js"></script>
+</body>
+</html>
