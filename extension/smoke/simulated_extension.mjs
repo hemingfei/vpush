@@ -16,6 +16,7 @@ import { validateIngestHost } from "../src/host_guard.js";
 import { createEnvelopeFactory } from "../src/envelope.js";
 import { createBuffer } from "../src/buffer.js";
 import { createAuthClient } from "../src/auth_client.js";
+import { createResponseTracker } from "../src/response_body.js";
 
 // chrome.storage.local 替身（持久到内存）
 const mem = new Map();
@@ -50,6 +51,7 @@ const getAccount = async () => (await storage.get(["mx_account"])).mx_account ||
 const envelope = createEnvelopeFactory({ getAccount, seqStore });
 const buffer = createBuffer({ cap: 5000 });
 const auth = createAuthClient({ storage });
+const respTracker = createResponseTracker(); // 与 sw.js 同一生产模块（S5）
 
 let ws = null;
 const lifecycle = []; // 供断言的生命周期事件账本
@@ -60,6 +62,13 @@ let account = "";
 async function feedFrame(kind, payload) {
   if (kind === "ws_in" || kind === "ws_out") {
     if (isEngineFrame(payload)) return "filtered_engine";
+  }
+  if (kind === "http" && payload && typeof payload === "object" && payload.url) {
+    // 模拟 sw.js requestWillBeSent：关注请求先登记再上行请求面
+    respTracker.track(payload.__requestId || payload.url, {
+      url: payload.url, method: payload.method || "GET",
+      postData: payload.body ?? null,
+    });
   }
   const env = await envelope.build(kind, payload);
   await sendEnvelope(env);
@@ -190,6 +199,23 @@ async function handle(cmd) {
         lifecycle,
         storage: storage.snapshot(),
       };
+    }
+    case "http_response": {
+      // 模拟 sw.js Network.loadingFinished + Network.getResponseBody：
+      // 登记表里的请求取回 → 组装带响应体的 http 帧 → 上行
+      const { requestId, responseBody } = cmd;
+      const entry = respTracker.take(requestId);
+      if (!entry) return { ok: false, error: "requestId 未登记" };
+      const payload = respTracker.buildPayload(entry, responseBody);
+      const env = await envelope.build("http", payload);
+      const delivery = await sendEnvelope(env);
+      return { ok: true, delivery, payload };
+    }
+    case "set_account": {
+      // 模拟另一个 profile 里的扩展实例：换账号标签（接力换 profile 的
+      // 扩展侧等价——storage 按 profile 隔离，各实例各配各的标签）
+      await storage.set({ mx_account: cmd.account || "main" });
+      return { ok: true, account: cmd.account || "main" };
     }
     case "reconnect": {
       // 模拟 SW 重启后 restoreBuffer + 重连（seq 从 storage 恢复不归零）

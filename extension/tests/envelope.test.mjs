@@ -83,6 +83,32 @@ test("接力换账号后信封 account 标签跟随切换（跨账号去重按�
   assert.equal(e2.seq, e1.seq + 1, "换账号不重置 seq（幂等键是 (account, seq)）");
 });
 
+test("两个不同账号标签的扩展实例产生互异的 account 标签（S3）", async () => {
+  // 每账号一个专属 profile（ADR-0001）→ 每个实例在配对时配置一次自己的
+  // 标签（storage.mx_account，options 页配对必填）；两个实例各造信封，
+  // 标签互异且各自稳定——云端跨账号去重据此判定「不同账号」。
+  const mainFactory = createEnvelopeFactory({
+    getAccount: async () => "main",
+    seqStore: memorySeqStore(),
+  });
+  const backupFactory = createEnvelopeFactory({
+    getAccount: async () => "backup",
+    seqStore: memorySeqStore(),
+  });
+  const m1 = await mainFactory.build("ws_in", "x");
+  const m2 = await mainFactory.build("ws_in", "x");
+  const b1 = await backupFactory.build("ws_in", "x");
+  assert.equal(m1.account, "main");
+  assert.equal(m2.account, "main", "同实例标签稳定");
+  assert.equal(b1.account, "backup");
+  assert.notEqual(b1.account, m1.account, "两个实例标签必须互异");
+  // 同内容不同标签：幂等键 (account, seq) 不同 → 云端不按重复吞
+  assert.notDeepEqual(
+    { account: m1.account, seq: m1.seq },
+    { account: b1.account, seq: b1.seq }
+  );
+});
+
 test("http 帧 payload 序列化为 JSON 字符串（网关 http 分支只收字符串 payload）", async () => {
   const factory = createEnvelopeFactory({ getAccount: accountGetter("main").getAccount, seqStore: memorySeqStore() });
   const env = await factory.build("http", { url: "https://x/api/1", method: "GET", body: null });

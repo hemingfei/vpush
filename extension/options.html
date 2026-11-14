@@ -29,6 +29,8 @@
   <fieldset>
     <legend>设备配对</legend>
     <p>后台生成 8 位一次性配对码后，在此输入完成绑定（设备密钥保存在本机）。</p>
+    <label for="account">账号标签（本扩展实例所属的 MX 账号名；跨账号去重按它判定）</label>
+    <input id="account" placeholder="如 main / backup（配对前必填）">
     <label for="code">配对码</label>
     <input id="code" maxlength="8" placeholder="8 位配对码">
     <button id="pair">配对</button>

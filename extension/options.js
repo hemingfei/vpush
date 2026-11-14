@@ -14,9 +14,10 @@ async function refreshStatus() {
 }
 
 // 初始回填当前配置
-chrome.storage.local.get(["mx_gateway_url", "mx_site_prefix"]).then((got) => {
+chrome.storage.local.get(["mx_gateway_url", "mx_site_prefix", "mx_account"]).then((got) => {
   $("gateway").value = got.mx_gateway_url || "";
   $("sitePrefix").value = got.mx_site_prefix || "";
+  $("account").value = got.mx_account || "";
 });
 
 $("saveGateway").onclick = async () => {
@@ -40,6 +41,14 @@ $("pair").onclick = async () => {
     $("out").textContent = "配对码必须 8 位";
     return;
   }
+  // 账号标签配对时必填（S3）：跨账号去重按 (account, seq) 幂等与标签判定，
+  // 空标签会把全部帧归入缺省 main——接力双账号部署时两实例必须各配各的。
+  const account = $("account").value.trim();
+  if (!account) {
+    $("out").textContent = "账号标签必填（本扩展实例所属的 MX 账号名）";
+    return;
+  }
+  await chrome.storage.local.set({ mx_account: account });
   const res = await chrome.runtime.sendMessage({ cmd: "pair", code });
   $("out").textContent = res.ok
     ? "配对成功，设备密钥已保存，采集连接已启动"

@@ -26,6 +26,7 @@ import { createEnvelopeFactory } from "./src/envelope.js";
 import { createBuffer } from "./src/buffer.js";
 import { createAuthClient } from "./src/auth_client.js";
 import { shouldCaptureTab, shouldCaptureHttp } from "./src/attach_filter.js";
+import { createResponseTracker } from "./src/response_body.js";
 
 const DEBUGGER_VERSION = "1.3";
 const ALARM_NAME = "mx-keepalive";
@@ -48,8 +49,14 @@ const seqStore = {
   },
 };
 
-// account 标签端口：信封构造时每次读取（接力换账号补位时后续帧带新标签，
-// 云端跨账号模糊去重按标签豁免同账号）。agent 写 storage.mx_account。
+// account 标签端口：信封构造时每次读取。取值来源 = 本扩展实例安装时在
+// options 页配对阶段写入 storage.mx_account 的账号标签（S3 设计）：
+// 行为器给每个账号一个专属 Chrome profile（ADR-0001，接力不并行在线），
+// chrome.storage.local 按 profile 隔离——每个 profile 里的扩展实例只在
+// 自己账号的浏览器里运行，故「按安装配置一次」即可与实际在线账号一致；
+// 接力换账号 = 行为器换 profile = 另一个 profile 里的扩展实例带另一标签。
+// （agent 与扩展互不感知是 ADR-0001 决策——不存在 agent→extension 写
+// storage 的通道；旧注释「agent 写 storage.mx_account」是错误接线描述。）
 const getAccount = async () => {
   const got = await storage.get(["mx_account"]);
   return got.mx_account || "main";
@@ -57,6 +64,7 @@ const getAccount = async () => {
 const envelope = createEnvelopeFactory({ getAccount, seqStore });
 const buffer = createBuffer({ cap: 5000 });
 const auth = createAuthClient({ storage });
+const respTracker = createResponseTracker();
 
 let ws = null;
 let wsReady = false;
@@ -65,16 +73,21 @@ let pairingWindowOpen = null; // options 页处于配对中：不自动 auth 打
 
 // ---------- 生命周期上行（可查询面，user story 19） ----------
 
+// buffer_overflow 生命周期上报的统一出口（T3 去重：reportLifecycle 与
+// onopen 补传路径共用同一账目面——读计数 → 上报 → 清零，只在有丢帧时发）
+async function reportOverflowIfAny(detailPrefix = "累计丢帧") {
+  if (buffer.droppedTotal() <= 0) return;
+  const dropped = buffer.droppedTotal();
+  buffer.resetDropped();
+  await send(await envelope.buildLifecycle("buffer_overflow", `${detailPrefix} ${dropped}`));
+}
+
 async function reportLifecycle(event, detail = "") {
   const env = await envelope.buildLifecycle(event, detail);
   await send(env);
   // 断连期间 lifecycle 帧也进缓冲（断连事件本身除外——服务端断连记录由
   // 网关 _on_disconnect 落账，客户端再补发就是重复事件）
-  if (buffer.droppedTotal() > 0 && wsReady) {
-    const dropped = buffer.droppedTotal();
-    buffer.resetDropped();
-    await send(await envelope.buildLifecycle("buffer_overflow", `累计丢帧 ${dropped}`));
-  }
+  await reportOverflowIfAny();
 }
 
 // ---------- 上行与缓冲补传 ----------
@@ -162,7 +175,7 @@ async function connectGateway() {
       // 传给 auth_client 的 ws 适配器：closeCode 透出网关拒绝后的关闭码
       // （拒绝路径 = 回 {ok:false} + close 4003，适配器须能读到 close 状态）
       const res = await auth.auth({
-        send: (s) => jsonReply(ws, s),
+        send: (s) => sendFrameAwaitReply(ws, s),
         get closeCode() {
           return ws._closeCode ?? null;
         },
@@ -186,9 +199,9 @@ async function connectGateway() {
         }
       }
       if (buffer.droppedTotal() > 0) {
-        const dropped = buffer.droppedTotal();
-        buffer.resetDropped();
-        await reportLifecycle("buffer_overflow", `补传后上报累计丢帧 ${dropped}`);
+        // 补传后的丢帧账目上报（与 reportLifecycle 内部共用 reportOverflowIfAny
+        // 的读-报-清序列，仅文案区分补传场景）
+        await reportOverflowIfAny("补传后上报累计丢帧");
       }
     }
   };
@@ -211,8 +224,9 @@ async function connectGateway() {
   };
 }
 
-// 首帧发送 + 等一条 JSON 响应（pair/auth 的同步问答面）
-function jsonReply(sock, text) {
+// 首帧发送 + 等一条 JSON 应答（pair/auth 的同步问答面）。命名即语义：
+// sendFrameAwaitReply——发一帧、等一答；不解析协议之外的东西。
+function sendFrameAwaitReply(sock, text) {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       sock.removeEventListener("message", onMsg);
@@ -255,7 +269,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
           setTimeout(() => rej(new Error("网关连接超时")), 10000);
         });
         const res = await auth.pair(
-          { send: (s) => jsonReply(pairSock, s), get closeCode() { return null; } },
+          { send: (s) => sendFrameAwaitReply(pairSock, s), get closeCode() { return null; } },
           msg.code
         );
         pairSock.close();
@@ -341,6 +355,8 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       } else if (method === "Network.requestWillBeSent") {
         const url = params?.request?.url ?? "";
         if (!shouldCaptureHttp(url)) return;
+        // 登记 + 先发请求面（响应体另帧补充：loadingFinished 后才能取）
+        respTracker.track(params?.requestId, params?.request);
         await send(
           await envelope.build("http", {
             url,
@@ -348,9 +364,27 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
             body: params.request.postData ?? null,
           })
         );
-      } else if (method === "Network.webSocketCreated") {
-        // HTTP body 抓取按需启用：getResponseBody 只对关注请求调用（spike
-        // 验证路径：requestWillBeSent → requestId → Network.getResponseBody）
+      } else if (method === "Network.loadingFinished") {
+        // 响应体采集（票 #16 交付物 2：requestWillBeSent + getResponseBody）：
+        // loadingFinished 后 getResponseBody 才可用；只对已登记的关注请求取
+        // （登记/组装纯逻辑在 src/response_body.js，node --test 覆盖）
+        const entry = respTracker.take(params?.requestId);
+        if (!entry) return;
+        let body = null;
+        try {
+          const resp = await chrome.debugger.sendCommand(
+            { tabId: source.tabId }, "Network.getResponseBody",
+            { requestId: params.requestId }
+          );
+          body = resp?.body ?? null; // base64 体按原样传（截断语义在 capBody）
+        } catch {
+          body = null; // 体取不到（流式/已被网络栈清理）：帧照发，体置 null
+        }
+        await send(
+          await envelope.build("http", respTracker.buildPayload(entry, body))
+        );
+      } else if (method === "Network.loadingFailed") {
+        respTracker.take(params?.requestId); // 失败请求：只清登记不上行
       }
     } catch (e) {
       await reportLifecycle("on_event_error", String(e?.message || e));

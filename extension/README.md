@@ -13,14 +13,15 @@ WS 帧/HTTP 请求到云网关 `/api/mx-ingest`。**零行为、零决策**—�
 extension/
 ├── manifest.json          MV3 manifest（debugger/storage/alarms/tabs 权限）
 ├── sw.js                  采集内核 service worker（spike sw.js 产品化）
-├── options.html/js        配置页：网关地址/配对/采集前缀（写 storage 即时生效）
+├── options.html/js        配置页：网关地址/账号标签/配对/采集前缀（写 storage 即时生效）
 ├── src/                   纯逻辑模块（node --test 覆盖）
 │   ├── engine_frame.js    引擎帧过滤（与网关 ENGINE_FRAME_RE 逐字节对齐）
 │   ├── envelope.js        信封 {seq,ts,account,type,payload} + 持久化单调 seq
 │   ├── buffer.js          断线缓冲账目（5000 上限丢最旧 + 丢帧计数）
 │   ├── auth_client.js     配对/认证状态机（首帧 pair/auth；4003=吊销清密钥）
 │   ├── host_guard.js      上行地址校验（仅 wss 自有域名；拒内网/环回）
-│   └── attach_filter.js   attach 前缀判定 + HTTP URL 过滤（每事件 await 读 storage）
+│   ├── attach_filter.js   attach 前缀判定 + HTTP URL 过滤（每事件 await 读 storage）
+│   └── response_body.js   HTTP 响应体采集（登记/64KB 截断/payload 组装）
 ├── tests/                 本地测试（零依赖 node:test；不进 CI）
 ├── smoke/                 冒烟驱动（node 侧模拟扩展内核）
 └── README.md
@@ -36,6 +37,9 @@ scripts/mx_extension_smoke.py  全链冒烟（起网关测试服 + 驱动模拟�
 - 信封：`{seq, ts, account, type: ws_in|ws_out|http|lifecycle, payload}`
   - `ws_in/ws_out`：SIO 帧原文（字符串）；`http`：`{url,method,body}` 的
     **JSON 字符串**（网关 http 分支只收 str，记 `http_frame` 事件）；
+    `Network.loadingFinished` 后对已登记请求调 `Network.getResponseBody`，
+    追发 `{url,method,body,responseBody,responseBodyTruncated}` 帧（响应体
+    64KB 截断，超限置 truncated 标记——纯逻辑在 `src/response_body.js`）；
     `lifecycle`：走 `event`/`detail` 字段
 - 引擎帧（`2`/`3`/`0`/`40*`/`41*`）扩展侧过滤不上行（网关双保险防御性丢弃）
 - 云端按 `(account, seq)` 24h 幂等窗去重——断线重传安全的前提是 seq 单调
@@ -49,7 +53,18 @@ node extension/tests/run_tests.mjs
 # 等价：node --test extension/tests/*.test.mjs
 ```
 
-当前 33 用例全绿。仓库 CI 无任何扩展相关接线（无新增 CI 依赖）。
+当前 42 用例全绿。仓库 CI 无任何扩展相关接线（无新增 CI 依赖）。
+
+### 账号标签（跨账号去重的接线，S3）
+
+`account` 字段的取值来源是 **options 页配对时必填的「账号标签」**
+（存 `chrome.storage.local.mx_account`，随设备密钥同一安装面）。设计依据：
+行为器给每个账号一个专属 Chrome profile（ADR-0001，接力不并行在线），
+`chrome.storage.local` 按 profile 隔离——每个 profile 里的扩展实例只在
+自己账号的浏览器里运行，故「按安装配置一次」即可与实际在线账号一致；
+接力换账号 = 行为器换 profile = 另一个 profile 里的扩展实例带另一标签。
+**行为器与扩展互不感知是 ADR-0001 的架构决策**——不存在 agent→extension
+写 storage 的通道，两组件只经云端网关间接协同。
 
 ## 本地冒烟（端到端验收）
 
@@ -66,8 +81,13 @@ C:/Users/hemin/Documents/vpush/.venv/Scripts/python.exe scripts/mx_extension_smo
 ```
 
 扩展侧由 `extension/smoke/simulated_extension.mjs` 驱动——**import 的是
-`extension/src/` 生产模块**（配对状态机/信封/过滤/缓冲全是产品代码），仅
-chrome.debugger 事件源与 chrome.storage.local 换成指令注入与内存替身。
+`extension/src/` 生产模块**（配对状态机/信封/过滤/缓冲/响应体采集全是
+产品代码），仅 chrome.debugger 事件源与 chrome.storage.local 换成指令注入
+与内存替身。响应体采集的 chrome.debugger `Network.getResponseBody` 调用
+本身（真实 GUI Chrome 会话）无法在模拟驱动里行使——冒烟经 `src/response_body.js`
+单测路径 + `http_response` 指令断言信封带响应体；**真实浏览器下的手动验证
+（48h 挂机验收）**：打开 MX 房间后看 lifecycle/`http_frame` 事件流里是否
+出现带 `responseBody` 的帧。
 
 ## load-unpacked 安装（开发验证）
 
@@ -82,6 +102,9 @@ chromium-*/chrome-win64/chrome.exe`）：
    内网/环回/非 wss）→ 后台生成配对码 → 输入配对 → 确认状态「已连接」。
 3. MX 域名漂移时改「采集范围」前缀，**保存即时生效、不重启采集**（设计决策：
    配置变更不 reload SW——重启窗口丢事件）。
+4. **账号标签**（配对必填）：填该扩展实例所属的 MX 账号名（如 `main`）；
+   接力双账号部署 = 两个 profile 各装一份扩展、各配各的标签（跨账号去重
+   按 (account, seq) 幂等与标签判定，标签错配会导致备用账号帧被误吞）。
 
 ## 分发（不进 Chrome Web Store）
 
