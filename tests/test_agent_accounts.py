@@ -1,6 +1,6 @@
 """行为器（Agent）账号注册表与配置解析的纯逻辑测试（票 #17 交付物 ⑤⑦）。
 
-注册表语义（mx-behavior-logic.md §5）：云端没有账号表，接力账号注册表是
+注册表语义（票 #17 交付物 5）：云端没有账号表，接力账号注册表是
 本地 agent 自管的新物——JSON 文件即可；每账号一个 Chrome profile；
 token 更新时刻类比 settings 键 mx_token_updated_at 的云端先例。
 

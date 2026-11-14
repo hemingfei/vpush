@@ -66,6 +66,21 @@ def seed_storage_script() -> str:
     }"""
 
 
+def probe_storage_script() -> str:
+    """会话中段失效检测的只读探针脚本（S6；与 seed 键集互为镜像）。
+
+    判定「官方自动登录会认账」的最小条件：mx_web_token 键存在且非空串
+    （seed 写入的是 JSON.stringify(token)，页面读出解析出 token 才算
+    已登录；键被平台侧登出清除 → False）。返回布尔——presence-only，
+    绝不把 token 值带回（凭据红线：探针结果不携带凭据）。
+    """
+    return """() => {
+      const raw = localStorage.getItem('mx_web_token');
+      if (!raw) return false;
+      try { return Boolean(JSON.parse(raw)); } catch { return Boolean(raw); }
+    }"""
+
+
 def wait_cdp_port_open(*, port: int, timeout_seconds: float,
                        sleep, connect, process_poll,
                        host: str = "127.0.0.1") -> bool:
@@ -109,8 +124,6 @@ class CDPExecutor:
         self.user_data_dir = Path(user_data_dir)
         self.cdp_port = cdp_port
         self.origin = origin.rstrip("/")
-        self._proc = None
-        self._browser = None
 
     # ---- 纯构造面（可单测） ----
 

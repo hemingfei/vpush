@@ -182,6 +182,29 @@ class BrowserRuntime:
         """当前会话 token（runner 在登录成功后回写注册表）。"""
         return self._token
 
+    async def probe_session(self) -> dict:
+        """会话中段失效检测（S6）：CDP Runtime.evaluate 读 seed 的登录键。
+
+        探针只读（presence + 非空），不写不点——「掉登录态」的权威来源是
+        localStorage（seed 免登五键的官方读取面，mx_room_switch_capture
+        实测键集）。比 token 存在性强：token 在但页面被登出（平台侧
+        互踢/会话过期）时，localStorage 键已被清，必须重登。
+
+        返回 {"alive": bool, "error": BaseException | None}——
+        alive=False 或 error 非 None 都按「会话失效」处理（调用方
+        relogin_needed 判定；CDP 报错视同失效——保守侧在重登链路）。
+        """
+        from .executor import probe_storage_script
+
+        page = self._page
+        if page is None or self._browser is None:
+            return {"alive": False, "error": None}
+        try:
+            got = await page.evaluate(probe_storage_script())
+        except Exception as exc:  # noqa: BLE001 - CDP 会话丢失按失效处理
+            return {"alive": False, "error": exc}
+        return {"alive": bool(got), "error": None}
+
     # ---- 行为动作 ----
 
     async def switch_room(self, room_name: str) -> None:

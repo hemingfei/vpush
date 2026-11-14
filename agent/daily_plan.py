@@ -6,7 +6,7 @@
 
 本地 agent 无云端 DB——计划存 agent 数据目录下按日命名的 JSON 文件，
 序列化格式复用 mx_window.dumps_plan/loads_plan（「键格式复用」是搬运红线，
-mx-behavior-logic.md §1）：
+app/services/mx_window.py 即权威源）：
 
 - 同一天重启后读到同一份计划：「真人日程当天固定」，多次重启窗口形状
   不漂移（mx_window.py 模块 docstring 的原文语义）；

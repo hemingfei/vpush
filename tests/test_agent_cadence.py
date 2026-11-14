@@ -1,6 +1,6 @@
 """行为器切房间节奏的纯逻辑测试（票 #17 交付物 ③）。
 
-语义红线（mx-behavior-logic.md §2/§6）：间隔与抖动从 app/services/mx_activity
+语义红线（票 #17 交付物 3）：间隔与抖动从 app/services/mx_activity
 搬运，不重写——ACTIVITY_INTERVAL_RANGE = (300.0, 600.0)「用户口径 5-10 分钟」、
 「排除上一个房间」、「会话开启即武装、首次点击落在随机间隔后」；房间点击后
 记录「最后打开的房间」（本地等价云端 settings 键 mx_last_room）。

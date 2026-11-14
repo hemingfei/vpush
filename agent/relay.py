@@ -28,14 +28,6 @@ class RelayState(enum.Enum):
     BACKUP_ACTIVE = "backup_active"
 
 
-@dataclass(frozen=True)
-class RelayEvent:
-    """一次切换事件（进结构化日志；只含账号名，绝不含凭据）。"""
-
-    kind: str          # switch_to_backup | primary_recovered | new_day_reset
-    account: str
-
-
 @dataclass
 class RelayStateMachine:
     """账号清单驱动的失效切换状态机。

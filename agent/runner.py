@@ -31,7 +31,7 @@ from .config import AgentConfig
 from .daily_plan import get_today_plan
 from .executor import CDPExecutor
 from .lifecycle import LifecycleLog
-from .login import LoginRetryPacer, relogin_needed
+from .login import FATAL_LOGIN_MARKERS, LoginRetryPacer, _is_fatal, relogin_needed
 from .relay import RelayStateMachine
 from .window_runner import WindowRunner
 
@@ -41,11 +41,18 @@ logger = logging.getLogger(__name__)
 TICK_SECONDS = 30.0
 
 
+def _fatal_mark(exc: BaseException) -> str:
+    """致命错误特征标记（日志用；只取命中词，不带异常原文以外的信息）。"""
+    text = str(exc)
+    return next((m for m in FATAL_LOGIN_MARKERS if m in text), "fatal")
+
+
 class AgentRunner:
     """常驻行为器：一个循环驱动窗口/登录/接力/切房全生命周期。"""
 
     def __init__(self, config: AgentConfig, *, log: LifecycleLog,
-                 registry: AccountRegistry | None = None):
+                 registry: AccountRegistry | None = None,
+                 runtime_factory=None):
         self.config = config
         self.log = log
         self.registry = registry or config.registry()
@@ -63,14 +70,80 @@ class AgentRunner:
         self.cadence = RoomCadence()
         self.pacer = LoginRetryPacer()
         self.runtime: BrowserRuntime | None = None
+        # BrowserRuntime 工厂（S2 接力换 profile 用）：签名 (account_user, token)
+        # → BrowserRuntime。缺省 = 生产实现（CDPExecutor + 专属 profile），
+        # 测试注入桩以离线驱动换 profile 顺序断言。
+        self._runtime_factory = runtime_factory or self._make_runtime
         self._login_failures = 0
         self._next_relogin_at: float | None = None
+        self._last_login_error: BaseException | None = None
+
+    def _make_runtime(self, account_user: str, token: str | None) -> BrowserRuntime:
+        """生产运行时构造：一个账号一个 CDPExecutor（专属 profile，ADR-0001）。"""
+        executor = CDPExecutor(
+            exe=self._chrome_exe(),
+            user_data_dir=self.registry.profile_dir(account_user),
+            cdp_port=self.config.cdp_port,
+            origin=self.config.origin,
+        )
+        return BrowserRuntime(executor=executor, account_user=account_user,
+                              token=token)
 
     # ---- 日志回调（生命周期事件统一落点） ----
 
     def _on_relay_switch(self, kind: str, account: Account) -> None:
+        """接力切换：换 profile 重开会话（S2——切换不再只记日志）。
+
+        中途换 profile 序列（两账号不并行在线的结构保证，ADR-0001）：
+        1. 关当前浏览器（在线的旧账号随浏览器退出，先下线）；
+        2. 用新活跃账号的专属 profile 起新浏览器；
+        3. 对新账号跑登录链路（seed 免登 → 失效重登）；
+        4. 续窗：切房节奏重新武装（会话开启即武装的口径同 _open_window）。
+
+        窗口没开时（如开窗登录失败引发的切换）只做 1-2 的「清场」——
+        下次 tick 的开窗动作自然用新活跃账号。swap 中途失败降级：
+        运行时清空 + relay_swap_error 记档，状态机活跃位不动（决策一致性
+        由状态机保证），下次开窗按活跃账号重试。
+        """
         self.log.record("relay_switch", account=account.user,
                         detail=f"{kind} → 活跃账号 {account.user}")
+        asyncio.get_event_loop().create_task(self._swap_runtime(account))
+
+    async def _swap_runtime(self, account: Account) -> None:
+        """执行一次换 profile（_on_relay_switch 的异步体；异常全兜底）。"""
+        try:
+            if self.runtime is not None:
+                old = self.runtime
+                self.runtime = None
+                await old.stop()  # 先关旧：旧账号先下线，绝不并行在线
+            if not self.runner.window_open:
+                # 窗口未开（开窗失败引发的切换）：无会话可续，清场即完成
+                return
+            rt = self._runtime_factory(account.user, self.registry.token(account.user))
+            await rt.start()
+            ok = await rt.ensure_logged_in(
+                account=account.user,
+                password=self.config.password_of(account),
+            )
+            if ok and rt.token:
+                self.registry.set_token(account.user, rt.token, updated_at=time.time())
+                self.log.record("login_ok", account=account.user,
+                                detail="接力换 profile 后登录成功")
+            else:
+                self._login_failures += 1
+                self.relay.report_login(account.user, ok=False)
+                self.log.record("login_fail", account=account.user,
+                                detail=f"换 profile 后登录失败 "
+                                       f"{self._login_failures} 次，接力切换评估")
+            self.runtime = rt
+            self.cadence = RoomCadence()  # 新会话开启即武装
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - swap 失败降级：清空运行时等下次开窗
+            self.runtime = None
+            logger.exception("接力换 profile 失败 account=%s", account.user)
+            self.log.record("relay_swap_error", account=account.user,
+                            detail="换 profile 中途失败，运行时已清空待下次开窗")
 
     def _on_new_day(self, day) -> None:
         # 日切：接力回卷主账号 + 计划重建（WindowRunner 的下一 tick 读新窗口）
@@ -92,14 +165,7 @@ class AgentRunner:
         """开窗：起浏览器 → 登录（seed 免登 → 重登链路）→ 节奏重武装。"""
         self.log.record("browser_open", account=account.user,
                         detail=f"窗口开启 {now:%H:%M:%S}")
-        executor = CDPExecutor(
-            exe=self._chrome_exe(),
-            user_data_dir=self.registry.profile_dir(account.user),
-            cdp_port=self.config.cdp_port,
-            origin=self.config.origin,
-        )
-        rt = BrowserRuntime(executor=executor, account_user=account.user,
-                            token=self.registry.token(account.user))
+        rt = self._runtime_factory(account.user, self.registry.token(account.user))
         await rt.start()
         ok = await rt.ensure_logged_in(
             account=account.user,
@@ -131,22 +197,30 @@ class AgentRunner:
     # ---- 登录保持与重登 ----
 
     async def _ensure_session(self) -> None:
-        """窗口开着但会话掉登录态 → 按 pacer 节奏重登（不硬轰不断采）。"""
+        """窗口开着但会话掉登录态 → 按 pacer 节奏重登（不硬轰不断采）。
+
+        探针（S6）：CDP Runtime.evaluate 读 seed 的 localStorage 登录键
+        （BrowserRuntime.probe_session——presence + 非空）。token 在但页面
+        已被登出（互踢/会话过期）时键被清，探针判死触发中段重登；CDP
+        报错视同失效（保守侧在重登链路，relogin_needed 的 error 分支）。
+        """
         if self.runtime is None:
             return
         account = self.relay.active
-        token = self.runtime.token
-        probe = {"token": token, "alive": bool(token), "error": None}
-        if token:
-            # 只读探针语义（mx_login.probe_token 的 user/info）：token 在即可用
-            probe["alive"] = True
+        probe = await self._probe_session()
         if not relogin_needed(probe):
             return
         now_mono = time.monotonic()
         if self._next_relogin_at is not None and now_mono < self._next_relogin_at:
             return  # 退避窗口未到
-        ok = await self.runtime.ensure_logged_in(
-            account=account.user, password=self.config.password_of(account))
+        try:
+            ok = await self.runtime.ensure_logged_in(
+                account=account.user, password=self.config.password_of(account))
+        except Exception as exc:  # noqa: BLE001 - 登录链路异常也要走失败分支
+            ok = False
+            self._last_login_error = exc
+        else:
+            self._last_login_error = probe.get("error")
         if ok and self.runtime.token:
             self.registry.set_token(account.user, self.runtime.token,
                                     updated_at=time.time())
@@ -155,6 +229,16 @@ class AgentRunner:
             self.log.record("login_ok", account=account.user, detail="重登成功")
         else:
             self._login_failures += 1
+            # 致命登录错误（密码错/锁定/封禁——login._is_fatal）不硬轰：
+            # 不排退避、直接报给接力状态机切备用账号（等人工处置的是
+            # 备用也致命时——状态机沿清单顺延，不会停在无账号）
+            err = self._last_login_error
+            if err is not None and _is_fatal(err):
+                self.relay.report_login(account.user, ok=False)
+                self.log.record("login_fail", account=account.user,
+                                detail=f"致命登录错误（{_fatal_mark(err)}），"
+                                       "跳过重试节奏，接力切换评估")
+                return
             delay = self.pacer.next_retry_delay(
                 now=datetime.now(CN_TZ), consecutive_failures=self._login_failures)
             self._next_relogin_at = now_mono + delay.total_seconds()
@@ -162,6 +246,16 @@ class AgentRunner:
             self.log.record("login_fail", account=account.user,
                             detail=f"重登失败 {self._login_failures} 次，"
                                    f"{delay.total_seconds():.0f}s 后再试")
+
+    async def _probe_session(self) -> dict:
+        """探针收敛点：runtime 有 CDP 探针用它；异常视同失效（alive=False
+        + error），交给 relogin_needed 的既有 error 分支。"""
+        if self.runtime is None:
+            return {"alive": False, "error": None}
+        try:
+            return await self.runtime.probe_session()
+        except Exception as exc:  # noqa: BLE001 - CDP 探针报错按失效处理
+            return {"alive": False, "error": exc}
 
     # ---- 切房 ----
 

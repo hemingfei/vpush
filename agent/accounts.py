@@ -1,8 +1,8 @@
 """接力（Relay）账号注册表：本地 JSON 自管，云端无账号表（spec #14）。
 
-注册表形态是新物（mx-behavior-logic.md §5：云端只有单账号 config + .env
-凭据，token 时效记录 settings 键 mx_token_updated_at 的先例）；本地 agent
-以一个 JSON 文件承接同等语义：
+注册表形态是新物（票 #17：云端只有单账号 config + .env 凭据，token 时效
+记录 settings 键 mx_token_updated_at 的先例——app/config.py MxConfig 与
+app/api.py mx_token_updated_at 键）；本地 agent 以一个 JSON 文件承接同等语义：
 
 - 每账号一个独立 Chrome profile 目录（ADR-0001：Chrome 136+ 远程调试端口
   在默认 user-data-dir 失效，独立 profile 是硬前提；同时两账号 profile 隔离

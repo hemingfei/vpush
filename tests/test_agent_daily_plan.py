@@ -1,6 +1,6 @@
 """行为器当日计划持久化的纯逻辑测试（票 #17 交付物 ②）。
 
-语义红线（mx-behavior-logic.md §6）：窗口/间隔的随机分布、当日计划
+语义红线（票 #17 交付物 2，权威源 app/services/mx_window.py）：窗口/间隔的随机分布、当日计划
 「同日重启不漂移」——数值与语义照搬 app.services.mx_window，不重新发明。
 差异只在存储介质：云端存 settings 键 mx_daily_plan（scheduler.py:129），
 本地 agent 无云端 DB——存 agent 数据目录下的 JSON 文件，序列化格式

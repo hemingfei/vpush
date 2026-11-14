@@ -6,7 +6,7 @@
   不带 --headless、不带 Playwright/自动化痕迹（ADR-0001 否决纯 CDP agent
   的理由正是「自动化痕迹常驻」——这是产品红线，值得锁测试）；
 - profile seed 免登的 localStorage 键集（scripts/mx_room_switch_capture.py:88
-  抓包实测键名，mx-behavior-logic.md §3）；
+  抓包实测键名，票 #17 交付物 1 的实测口径）；
 - 点击选择器：点房间名 strong、回落头像区（真点击先例）。
 """
 from __future__ import annotations
@@ -84,6 +84,29 @@ def test_seed_storage_script_is_callable_js():
     script = seed_storage_script()
     assert "=>" in script or script.startswith(("(", "function"))
     assert "token" in script and "user" in script
+
+
+def test_probe_storage_script_keys_mirror_seed_set():
+    """探针只读 mx_web_token（seed 五键的登录权威键）：presence + 非空判定，
+    且绝不回带 token 值（凭据红线——探针结果只含布尔）。"""
+    from agent.executor import probe_storage_script
+
+    script = probe_storage_script()
+    assert "mx_web_token" in script
+    assert "localStorage.getItem" in script, "探针必须只读，不写不点"
+    assert "setItem" not in script, "探针绝不能写 storage"
+    # 键被清（登出）→ False；键在但空串 → False；JSON 值解析失败按裸值兜底
+    assert "return false" in script or "return Boolean" in script
+
+
+def test_probe_storage_script_is_callable_js():
+    """探针脚本可被 page.evaluate 调用：无参函数表达式。"""
+    from agent.executor import probe_storage_script
+
+    script = probe_storage_script()
+    assert "=>" in script or script.startswith(("(", "function"))
+    # 参数位为空：探针不需要外部入参（区别于 seed 的 (token, user)）
+    assert "() =>" in script
 
 
 # ---- 房间点击选择器（真点击先例搬运） ----

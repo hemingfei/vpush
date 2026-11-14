@@ -1,7 +1,8 @@
 """行为器窗口循环决策层（票 #17 交付物 ② 的粘合层，纯逻辑可单测）。
 
 本地 agent 对应云端调度器窗口循环的「开窗→开 Chrome→登录→保持；
-关窗→关 Chrome」（mx-behavior-logic.md §1：WS 会话管理本身不再需要）。
+关窗→关 Chrome」（票 #17 + ADR-0001：本地架构里 WS 会话管理由本地浏览器
+承接，云端 _mx_window_loop 的窗口决策语义搬运自 app/services/mx_window.py）。
 
 决策规则搬运自 app.services.mx_window（红线：不重写语义）：
 - 错过的窗口不武装（arm_windows 默认口径）——重启后不自动续连；

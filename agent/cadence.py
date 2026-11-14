@@ -1,6 +1,6 @@
 """行为器切房间节奏：间隔/抖动/目标选择（票 #17 交付物 ③）。
 
-语义搬运源（mx-behavior-logic.md §2，红线「不重写」）：
+语义搬运源（票 #17「不重写」红线；数值单一来源见下述 app 模块）：
 - 间隔 5-10 分钟：app/services/mx_activity.py:36 ACTIVITY_INTERVAL_RANGE =
   (300.0, 600.0)（用户口径）；采样方式 random.uniform（mx_activity.py:69-70）；
 - 会话开启即武装：首次点击落在一个随机间隔后（mx_activity.py:62——启动

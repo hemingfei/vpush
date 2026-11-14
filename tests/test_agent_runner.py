@@ -220,3 +220,237 @@ def test_login_failure_after_open_triggers_relay_and_backoff(monkeypatch, tmp_pa
     events = query_events(tmp_path / "agentdata" / "lifecycle.jsonl")
     kinds = [e["kind"] for e in events]
     assert "relay_switch" in kinds and "login_fail" in kinds
+
+
+# ---- S2: 接力中途换 profile（接力切换的浏览器面）----
+
+
+class _RecordingFactory:
+    """记录 start/stop 顺序的 BrowserRuntime 工厂桩（构造顺序=换 profile 顺序）。"""
+
+    def __init__(self):
+        self.events: list[str] = []
+        self.fail_on: str | None = None
+        self.runtimes: list[_FakeRuntime] = []
+
+    def make(self, account: str, token: str | None) -> _FakeRuntime:
+        rt = _FakeRuntime()
+        rt.account = account
+        rt.token = token
+
+        async def start():
+            self.events.append(f"start:{account}")
+            if self.fail_on == f"start:{account}":
+                raise RuntimeError("Chrome 启动失败")
+
+        async def stop():
+            self.events.append(f"stop:{account}")
+
+        rt.start = start
+        rt.stop = stop
+        self.runtimes.append(rt)
+        return rt
+
+
+def _two_account_runner(env, tmp_path, factory):
+    from agent.accounts import parse_accounts
+
+    cfg, _ = env
+    cfg.accounts = parse_accounts("main-user,backup-user")
+    runner = AgentRunner(cfg, log=LifecycleLog(tmp_path / "agentdata" / "lifecycle.jsonl"))
+    runner._runtime_factory = factory.make
+    return runner
+
+
+def _open_window_state(runner, day=None):
+    """把 WindowRunner 拨到「窗口已开」决策态（mid-session 场景前提）。"""
+    day = day or date(2026, 11, 16)
+    wins = _windows_for(day)
+    # 先武装：起点设为未来一毫秒的等价手法——直接用 restart_login=True 补武装
+    runner.runner.tick(
+        now=datetime(day.year, day.month, day.day, 8, 0, tzinfo=CN_TZ),
+        windows=wins, restart_login=True)
+    assert runner.runner.window_open
+
+
+def test_relay_switch_swaps_profile_mid_session(env, tmp_path):
+    """接力切换（switch_to_backup）：旧运行时先关，新 profile 启动+登录续窗。"""
+    factory = _RecordingFactory()
+    runner = _two_account_runner(env, tmp_path, factory)
+    _open_window_state(runner)
+    old_rt = factory.make("main-user", "tok-m")
+    runner.runtime = old_rt
+    runner.registry.set_token("main-user", "tok-m", updated_at=1.0)
+    runner.registry.set_token("backup-user", "tok-b", updated_at=1.0)
+
+    async def scenario():
+        runner.relay.report_login("main-user", ok=False)
+        await asyncio.sleep(0.1)  # 等换 profile 的 create_task 执行完
+
+    asyncio.run(scenario())
+    # 切换后活跃账号是备用，且完成了「先关旧、再起新、再登录」的动作序列
+    assert runner.relay.active.user == "backup-user"
+    assert factory.events[:2] == ["stop:main-user", "start:backup-user"], factory.events
+    assert runner.runtime is factory.runtimes[-1], "运行时必须换成备用 profile 的实例"
+    events = query_events(tmp_path / "agentdata" / "lifecycle.jsonl")
+    kinds = [e["kind"] for e in events]
+    assert "relay_switch" in kinds and "login_ok" in kinds, kinds
+
+
+def test_relay_swap_failure_degrades_gracefully(env, tmp_path):
+    """换 profile 中途失败：降级不炸——接力状态保持一致，下次开窗走新活跃账号。"""
+    factory = _RecordingFactory()
+    runner = _two_account_runner(env, tmp_path, factory)
+    _open_window_state(runner)
+    old_rt = factory.make("main-user", "tok-m")
+    runner.runtime = old_rt
+    runner.registry.set_token("main-user", "tok-m", updated_at=1.0)
+    factory.fail_on = "start:backup-user"  # 新 profile 启动即失败
+
+    async def scenario():
+        runner.relay.report_login("main-user", ok=False)
+        await asyncio.sleep(0.1)  # 等 swap 任务跑完（含失败分支）
+
+    asyncio.run(scenario())
+    # 状态机活跃位已切到备用（决策一致性），运行时被清空（旧浏览器已关、
+    # 新浏览器没起来——下次 tick 开窗动作按活跃账号重开）
+    assert runner.relay.active.user == "backup-user"
+    assert runner.runtime is None
+    events = query_events(tmp_path / "agentdata" / "lifecycle.jsonl")
+    assert any(e["kind"] == "relay_swap_error" for e in events), events
+
+
+def test_primary_recovered_swaps_back(env, tmp_path):
+    """主账号恢复（primary_recovered）：备用浏览器关停，主 profile 换回。"""
+    factory = _RecordingFactory()
+    runner = _two_account_runner(env, tmp_path, factory)
+    _open_window_state(runner)
+    backup_rt = factory.make("backup-user", "tok-b")
+    runner.runtime = backup_rt
+    runner.registry.set_token("main-user", "tok-m", updated_at=1.0)
+    runner.registry.set_token("backup-user", "tok-b", updated_at=1.0)
+    # 把状态机拨到备用在位（manual，绕过 report_login 的失败切换含义）
+    runner.relay._active_index = 1
+
+    async def scenario():
+        runner.relay.report_login("main-user", ok=True)
+        await asyncio.sleep(0.1)  # 等 swap-back 任务跑完
+
+    asyncio.run(scenario())
+    assert runner.relay.active.user == "main-user"
+    assert factory.events[:2] == ["stop:backup-user", "start:main-user"], factory.events
+    assert runner.runtime is factory.runtimes[-1], "运行时必须换回主账号 profile 实例"
+    events = query_events(tmp_path / "agentdata" / "lifecycle.jsonl")
+    kinds = [e["kind"] for e in events]
+    assert "relay_switch" in kinds
+
+
+# ---- S6: 会话中段失效检测（CDP liveness 探针）----
+
+
+def test_mid_session_logout_triggers_relogin(env, tmp_path, monkeypatch):
+    """localStorage 掉登录态（键被清）→ 探针判死 → 中段重登成功。"""
+    cfg, _ = env
+    runner = AgentRunner(cfg, log=LifecycleLog(tmp_path / "agentdata" / "lifecycle.jsonl"))
+    fake = _FakeRuntime()
+    fake.token = None  # token 兜底无效——探针才说话
+
+    async def ensure_logged_in(*, account: str, password: str) -> bool:
+        fake.logins.append(account)
+        fake.token = "tok-new"  # 真实运行时契约：登录成功回写 token
+        return True
+
+    async def probe():
+        return {"alive": False, "error": None}
+
+    fake.ensure_logged_in = ensure_logged_in
+    fake.probe_session = probe
+    runner.runtime = fake
+
+    async def scenario():
+        await runner._ensure_session()
+
+    asyncio.run(scenario())
+    assert fake.logins == ["solo-user"], "探针判死应走中段重登"
+    events = query_events(tmp_path / "agentdata" / "lifecycle.jsonl")
+    assert any(e["kind"] == "login_ok" for e in events)
+
+
+def test_mid_session_alive_skips_relogin(env, tmp_path):
+    """localStorage 认证键健在 → alive → 不重登（pacer 不空转）。"""
+    cfg, _ = env
+    runner = AgentRunner(cfg, log=LifecycleLog(tmp_path / "agentdata" / "lifecycle.jsonl"))
+    fake = _FakeRuntime()
+
+    async def probe():
+        return {"alive": True, "error": None}
+
+    fake.probe_session = probe
+    runner.runtime = fake
+
+    async def scenario():
+        await runner._ensure_session()
+
+    asyncio.run(scenario())
+    assert fake.logins == [], "会话健在不应重登"
+
+
+def test_mid_session_probe_error_treated_as_dead(env, tmp_path):
+    """CDP 探针报错（Runtime.evaluate 失败）→ 按失效处理：走重登。"""
+    cfg, _ = env
+    runner = AgentRunner(cfg, log=LifecycleLog(tmp_path / "agentdata" / "lifecycle.jsonl"))
+    fake = _FakeRuntime()
+
+    async def probe():
+        raise RuntimeError("CDP 会话丢失")
+
+    async def ensure_logged_in(*, account: str, password: str) -> bool:
+        fake.logins.append(account)
+        fake.token = "tok-new"
+        return True
+
+    fake.ensure_logged_in = ensure_logged_in
+    fake.probe_session = probe
+    runner.runtime = fake
+
+    async def scenario():
+        await runner._ensure_session()
+
+    asyncio.run(scenario())
+    assert fake.logins == ["solo-user"], "探针报错按失效处理"
+
+
+def test_mid_session_fatal_error_triggers_relay_switch(env, tmp_path):
+    """中段重登致命错误（密码错/锁定）：不硬轰——报给接力状态机切备用。"""
+    from agent.accounts import parse_accounts
+
+    cfg, _ = env
+    cfg.accounts = parse_accounts("main-user,backup-user")
+    runner = AgentRunner(cfg, log=LifecycleLog(tmp_path / "agentdata" / "lifecycle.jsonl"))
+    runner.relay = __import__("agent.relay", fromlist=["RelayStateMachine"]).RelayStateMachine(
+        cfg.accounts, on_switch=runner._on_relay_switch)
+    fake = _FakeRuntime()
+    fake.token = None
+
+    async def probe():
+        return {"alive": False, "error": None}
+
+    fake.probe_session = probe
+
+    async def fail_login(*, account: str, password: str) -> bool:
+        from app.fetchers.mx.login import MXLoginError
+
+        raise MXLoginError("密码错误，请重新输入")
+
+    fake.probe_session = probe
+    fake.ensure_logged_in = fail_login
+    runner.runtime = fake
+
+    async def scenario():
+        await runner._ensure_session()
+
+    asyncio.run(scenario())
+    assert runner.relay.active.user == "backup-user", "致命错误应触发接力切换"
+    events = query_events(tmp_path / "agentdata" / "lifecycle.jsonl")
+    kinds = [e["kind"] for e in events]
+    assert any(k in ("login_fail", "relay_switch") for k in kinds), kinds
