@@ -424,9 +424,11 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         api_base=config.sources.mx.api_base,
     )
     app.include_router(_mx_ingest_router)
-    # 吊销反向通知回调挂 app.state：管理端吊销设备后现存连接即断
+    # 吊销反向通知回调 + 在线连接注册表挂 app.state：管理端吊销设备后现存连接
+    # 即断；登录态管理面（/api/admin/mx-ingest/*）经注册表判设备在线
     # （router 属性挂回调是既定契约：include_router 复制路由、自定义属性不随行）
     app.state.mx_ingest_notify_revoked = _mx_ingest_router.mx_ingest_notify_revoked  # type: ignore[attr-defined]
+    app.state.mx_ingest_live_connections = _mx_ingest_router.mx_ingest_live_connections  # type: ignore[attr-defined]
 
     app.include_router(
         create_api_router(

@@ -406,6 +406,8 @@ def build_ingest_router(
     # include_router 复制路由、自定义属性不随行：挂 router 属性供
     # build_gateway_app/main.create_app 取出来挂 app.state
     router.mx_ingest_notify_revoked = notify_revoked_devices  # type: ignore[attr-defined]
+    # 在线连接注册表同样透出（登录态管理面 /admin/mx-ingest/overview 的在线判定用）
+    router.mx_ingest_live_connections = gateway.live_connections  # type: ignore[attr-defined]
 
     # ---- 断连告警：延迟检查 + 去重窗（S4）----
 

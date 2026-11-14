@@ -6439,6 +6439,66 @@ def create_api_router(
         _audit(admin, "login_mx_session", "", "")
         return {"ok": bool(report.get("ok")), "report": report}
 
+    # ---- MX 本地采集设备管理（spec #14 云网关管理面前端接线）----
+    # 与 mx_gateway 的 Bearer 管理面（MX_INGEST_ADMIN_TOKEN）并行：这里是后台
+    # 页面用的登录态端点（require_admin），复用同一批 db 方法；吊销时经
+    # app.state.mx_ingest_notify_revoked 掐断存量连接（main.py 挂的网关回调）。
+    # 在线判定用 app.state.mx_ingest_live_connections（main.py 从网关实例透出的
+    # device_id -> set[WebSocket] 注册表），不重复维护第二份在线账。
+
+    @router.get("/admin/sources/mx/ingest/overview", dependencies=[Depends(require_admin)])
+    async def mx_ingest_overview(request: Request, admin: dict = Depends(require_admin)):
+        """设备清单（含在线状态）+ 最近生命周期事件，管理面板一次拉齐。"""
+        live_conn = getattr(request.app.state, "mx_ingest_live_connections", None)
+        devices = db._rows(
+            "SELECT id, name, revoked, created_at, last_seen_at FROM mx_devices "
+            "ORDER BY id DESC LIMIT 500"
+        )
+        device_list = []
+        for r in devices:
+            device_id = int(r["id"])
+            online = bool(live_conn.get(device_id)) if live_conn is not None else False
+            device_list.append({
+                "id": device_id,
+                "name": str(r.get("name") or ""),
+                "revoked": int(r.get("revoked") or 0),
+                "created_at": str(r.get("created_at") or ""),
+                "last_seen_at": str(r.get("last_seen_at") or ""),
+                "online": online,
+            })
+        return {"devices": device_list, "events": db.list_mx_ingest_events(limit=100)}
+
+    @router.post("/admin/sources/mx/ingest/pairing-code", dependencies=[Depends(require_admin)])
+    async def mx_ingest_mint_pairing_code(admin: dict = Depends(require_admin)):
+        """登录态签发 8 位一次性配对码（与 Bearer 管理面同一 db 方法）。"""
+        code = db.create_mx_pairing_code()
+        row = db._rows("SELECT expires_at FROM mx_pairing_codes ORDER BY id DESC LIMIT 1")
+        expires_at = float(row[0]["expires_at"]) if row else time.time() + 900
+        _audit(admin, "mx_ingest_pairing_code", "", "")
+        return {"code": code, "expires_at": expires_at}
+
+    @router.post("/admin/sources/mx/ingest/devices/{device_id}/revoke", dependencies=[Depends(require_admin)])
+    async def mx_ingest_revoke_device(device_id: int, request: Request,
+                                      admin: dict = Depends(require_admin)):
+        """吊销设备 + 掐断存量连接（close 4003，与 Bearer 管理面同语义）。"""
+        device = db._rows("SELECT id FROM mx_devices WHERE id = ?", (int(device_id),))
+        if not device:
+            raise HTTPException(status_code=404, detail="设备不存在")
+        db.revoke_mx_device(int(device_id))
+        notify = getattr(request.app.state, "mx_ingest_notify_revoked", None)
+        if notify is not None:
+            try:
+                notify(int(device_id))
+            except Exception:
+                logger.warning("MX 采集设备吊销断连失败 device=%s", device_id, exc_info=True)
+        _audit(admin, "mx_ingest_revoke_device", str(device_id), "")
+        return {"ok": True, "device_id": int(device_id)}
+
+    @router.get("/admin/sources/mx/ingest/events", dependencies=[Depends(require_admin)])
+    async def mx_ingest_events(limit: int = 100):
+        """网关生命周期事件流（启动/attach/断连/重登），排障可查询。"""
+        return {"events": db.list_mx_ingest_events(limit=limit)}
+
     # ---- AI 分析任务管理 ----
     # /admin/ai-analysis 与 /admin/ai-tasks 两组 URL 均被前端使用（历史并存），
     # 收敛为同一份实现函数与同一份校验（时间/窗口、PUT model_fields_set 口径），

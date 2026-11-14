@@ -8775,6 +8775,8 @@ async function loadMxAdmin() {
     // Load rooms
     loadMxRooms();
     refreshMxWsStatus();
+    // 本地采集设备管理（云网关管理面）：与 MX 配置同 tab 一次性拉齐
+    loadMxIngestDevices();
 
     // Add event listeners for search/filter
     const qInput = $("#mx-rooms-q");
@@ -8907,6 +8909,115 @@ async function mxSessionLogout() {
   } finally {
     if (btn) btn.disabled = false;
     refreshMxWsStatus();
+  }
+}
+
+// ---------- MX 本地采集设备管理（spec #14 云网关管理面前端接线） ----------
+// 数据面：本地扩展（采集器）经 wss /api/mx-ingest 上行帧；这里是后台运营面——
+// 一次性配对码签发、设备清单（含在线状态）、吊销（存量连接即断）、生命周期事件流。
+
+async function loadMxIngestDevices() {
+  const box = $("#mx-ingest-box");
+  if (!box) return;
+  try {
+    const data = await api("/api/admin/sources/mx/ingest/overview");
+    renderMxIngestDevices(data);
+  } catch (err) {
+    box.innerHTML = `<p class="muted">${escapeHtml(err.message || "加载采集设备失败")}</p>
+      <div class="toolbar"><button type="button" class="btn-ghost" onclick="loadMxIngestDevices()">重试</button></div>`;
+  }
+}
+
+function renderMxIngestDevices(data) {
+  const box = $("#mx-ingest-box");
+  if (!box || !routeStillActive(_adminRenderSeq)) return;
+  const devices = data.devices || [];
+  const events = data.events || [];
+  const onlineCount = devices.filter((d) => d.online && !d.revoked).length;
+
+  const deviceRows = devices.map((d) => {
+    const state = d.revoked
+      ? `<span class="ai-task-status-badge disabled">已吊销</span>`
+      : d.online
+        ? `<span class="ai-task-status-badge enabled">在线</span>`
+        : `<span class="ai-task-status-badge disabled">离线</span>`;
+    return `<tr>
+      <td>${d.id}</td>
+      <td>${escapeHtml(d.name || "采集器")}</td>
+      <td>${state}</td>
+      <td class="muted">${escapeHtml(fmtDbTime(d.created_at))}</td>
+      <td class="muted">${escapeHtml(fmtDbTime(d.last_seen_at))}</td>
+      <td>${d.revoked ? "" : `<button type="button" class="btn-ghost danger" onclick="mxIngestRevoke(${d.id})">吊销</button>`}</td>
+    </tr>`;
+  }).join("");
+
+  const eventRows = events.map((e) => {
+    const bad = e.event === "disconnect" || e.event === "attach_failed" || e.event === "buffer_overflow";
+    return `<tr>
+      <td class="muted">${escapeHtml(fmtDbTime(e.created_at))}</td>
+      <td>${escapeHtml(e.event || "")}</td>
+      <td class="muted">${escapeHtml(e.account || "")}</td>
+      <td class="muted" style="word-break:break-all${bad ? ";color:var(--color-danger-strong)" : ""}">${escapeHtml(e.detail || "")}</td>
+    </tr>`;
+  }).join("");
+
+  box.innerHTML = `
+    <div class="toolbar" style="margin-bottom:10px">
+      <button type="button" class="btn-normal" id="mx-ingest-mint-btn" onclick="mxIngestMintCode()">生成配对码</button>
+      <button type="button" class="btn-ghost" onclick="loadMxIngestDevices()">刷新</button>
+      <span class="muted">在线设备 ${onlineCount} / ${devices.filter((d) => !d.revoked).length}</span>
+    </div>
+    <div id="mx-ingest-code-box"></div>
+    ${devices.length ? `
+      <div class="table-wrap" style="margin-bottom:14px">
+        <table>
+          <thead><tr><th>ID</th><th>设备</th><th>状态</th><th>配对时间</th><th>最近活跃</th><th></th></tr></thead>
+          <tbody>${deviceRows || ""}</tbody>
+        </table>
+      </div>` : `<p class="muted" style="margin-bottom:14px">尚无设备。点「生成配对码」，在采集器扩展 options 页输入完成绑定。</p>`}
+    <details ${events.length ? "" : "open"}>
+      <summary class="section-meta" style="cursor:pointer">生命周期事件（最近 ${events.length} 条）——排障入口：attach/断连/断连告警/补传</summary>
+      ${events.length ? `
+        <div class="table-wrap" style="margin-top:8px">
+          <table>
+            <thead><tr><th>时间</th><th>事件</th><th>账号</th><th>详情</th></tr></thead>
+            <tbody>${eventRows}</tbody>
+          </table>
+        </div>` : `<p class="muted">暂无事件（设备配对并连接后出现）</p>`}
+    </details>`;
+}
+
+async function mxIngestMintCode() {
+  const btn = $("#mx-ingest-mint-btn");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const res = await api("/api/admin/sources/mx/ingest/pairing-code", { method: "POST" });
+    const box = $("#mx-ingest-code-box");
+    const mins = Math.max(1, Math.round((Number(res.expires_at) - Date.now() / 1000) / 60));
+    if (box) {
+      // 内联形态对齐 .notice-warn 的排版（无 notice-info 变体，不引新 CSS 类）
+      box.innerHTML = `<div style="background:var(--color-accent-soft);border-radius:var(--radius-md,10px);padding:12px 14px;margin-bottom:12px">
+        <strong>配对码 <code style="font-size:1.4em;letter-spacing:.2em">${escapeHtml(res.code)}</code>（${mins} 分钟内有效，一次性）</strong>
+        <p class="section-meta" style="margin:6px 0 0">在本地采集器扩展 options 页：填网关地址 <code>wss://&lt;本站域名&gt;/api/mx-ingest</code>、账号标签，再输入此码完成绑定。</p>
+      </div>`;
+    }
+    flash("配对码已生成");
+  } catch (err) {
+    flash(err.message || "配对码生成失败", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function mxIngestRevoke(deviceId) {
+  if (!confirm(`吊销设备 #${deviceId}？其采集连接会立即断开，需重新配对才能恢复采集。`)) return;
+  try {
+    await api(`/api/admin/sources/mx/ingest/devices/${deviceId}/revoke`, { method: "POST" });
+    flash(`设备 #${deviceId} 已吊销`);
+    loadMxIngestDevices();
+  } catch (err) {
+    flash(err.message || "吊销失败", "error");
   }
 }
 
@@ -9328,6 +9439,10 @@ const INLINE_HANDLERS = {
   updateMxRoom,
   pullMxRoomHistory,
   refreshMxWsStatus,
+  // ---- hmf：MX 本地采集设备管理（云网关管理面）----
+  loadMxIngestDevices,
+  mxIngestMintCode,
+  mxIngestRevoke,
   // ---- hmf：KOL 管理扩展（系统KOL/屏蔽词/档位/webhook）----
   adminSetTier,
   adminBatchSystemToggle,

@@ -397,6 +397,13 @@ export function createAdminDashboardView(dependencies) {
         </div>
         <div id="mx-rooms-list"></div>
       </section>
+      <section class="section-panel">
+        <header class="section-head">
+          <div><h2 class="section-title">本地采集设备</h2>
+          <p class="section-meta">MX 消息已改由本地真实浏览器采集（行为器 + 采集器扩展，ADR-0001）：扩展经 wss 把帧上行到云网关。这里签发一次性配对码绑定新设备、查看设备在线状态与生命周期事件；换电脑或疑似泄露时吊销设备，其采集连接立即断开。</p></div>
+        </header>
+        <div id="mx-ingest-box"><p class="muted">加载中…</p></div>
+      </section>
     </div>
       <div id="st-imgbed" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-imgbed" style="display:none">
         ${imgbedSettingsHtml(s.imgbed || {})}
