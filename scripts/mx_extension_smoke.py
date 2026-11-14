@@ -208,13 +208,10 @@ def main():
             "seq": 5, "ts": int(time.time() * 1000), "account": "main",
             "type": "ws_in", "payload": room_msg_frame(9101, '[{"type": "text", "msg": "冒烟消息一"}]'),
         }, ensure_ascii=False)
-        import websockets  # noqa: F401  # 依赖存在性由网关测试保证
-
         async def replay_once():
             import websockets
 
             async with websockets.connect(url) as wsx:
-                key = db._rows("SELECT * FROM mx_devices")[0]
                 # 用真实设备密钥重新认证（从 DB 拿不到明文——扩展侧 storage 有）
                 dev_key = st["storage"]["mx_device_key"]
                 await wsx.send(json.dumps({"op": "auth", "key": dev_key}))
