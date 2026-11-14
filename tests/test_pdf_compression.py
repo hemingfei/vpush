@@ -147,8 +147,13 @@ def test_archive_lock_blocks_other_process(tmp_path):
         assert time.monotonic() - started >= 0.15
     finally:
         if process.poll() is None:
-            process.stdin.write("x")
-            process.stdin.flush()
+            try:
+                process.stdin.write("x")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError):
+                # release 线程已写过 'x' 且子进程恰好退出的竞态：管道已断，
+                # 再写一次就是 BrokenPipeError——收尾目的已达成，忽略即可
+                pass
         process.wait(timeout=5)
 
 
