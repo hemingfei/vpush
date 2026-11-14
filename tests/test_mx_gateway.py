@@ -686,7 +686,7 @@ def test_admin_routes_require_token():
     import httpx
 
     async def scenario():
-        app, db = make_gateway_with_admin()
+        app, _db = make_gateway_with_admin()
         transports = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transports,
                                      base_url="http://test") as client:
@@ -716,7 +716,7 @@ def test_admin_mint_pairing_code_and_devices_list():
     import httpx
 
     async def scenario():
-        app, db = make_gateway_with_admin()
+        app, _db = make_gateway_with_admin()
         # 管理面签发配对码（带 expires_at 返回）
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -761,7 +761,7 @@ def test_admin_revoke_kills_live_connection():
     import httpx
 
     async def scenario():
-        app, db = make_gateway_with_admin()
+        app, _db = make_gateway_with_admin()
         port, stop = start_server(app)
         try:
             # 管理面签码
