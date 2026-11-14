@@ -403,6 +403,26 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             response.status_code = 503
         return {"status": payload.get("status"), "available": payload.get("available")}
 
+    # MX 云网关（spec #14 / ADR-0001）：本地采集器（扩展）上行帧的 websocket
+    # 接入端。入库+推送与V平台 KOL webhook 同链路（ingest_external_post）；
+    # 断连告警循系统通知 KOL 机制（_publish_system_alert 同步版）。
+    # 必须在 include_router/mount("/") 之前注册，否则被 SPA 静态兜底吃掉。
+    from .services.mx_gateway import build_ingest_router
+
+    def _mx_ingest_alert(title: str, content: str) -> None:
+        # 纯 UI 调试模式不发告警：与 on_mx_alert 等回调同口径
+        if background_workers_enabled():
+            scheduler._publish_system_alert_sync(title, content)
+
+    _mx_ingest_router = build_ingest_router(
+        db,
+        on_external_post=scheduler.ingest_external_post if background_workers_enabled() else None,
+        alert_publisher=_mx_ingest_alert,
+    )
+    app.include_router(_mx_ingest_router)
+    # 吊销反向通知回调挂 app.state：管理端吊销设备后现存连接即断（UI 随扩展票接）
+    app.state.mx_ingest_notify_revoked = _mx_ingest_router.mx_ingest_notify_revoked  # type: ignore[attr-defined]
+
     app.include_router(
         create_api_router(
             db,

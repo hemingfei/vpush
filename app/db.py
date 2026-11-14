@@ -114,6 +114,59 @@ SCHEMA_MIGRATIONS: list[tuple[int, str, str | tuple[str, ...]]] = [
             "CREATE INDEX IF NOT EXISTS idx_mx_action_marks_post ON mx_action_marks(post_id)",
         ),
     ),
+    (
+        2026111401,
+        "MX 云网关三表：设备配对/设备密钥 + 上行幂等窗 + 生命周期事件",
+        (
+            # 采集器（本地扩展）上行接云（spec #14 / ADR-0001）：
+            # - mx_pairing_codes：8 位一次性配对码（只存哈希，用后即焚）
+            # - mx_devices：配对成功下发的设备密钥（哈希存储），可吊销
+            # - mx_ingest_seq：(account, seq) 24h 幂等窗，扩展断线重连补传防重
+            # - mx_ingest_events：lifecycle 生命周期事件（启动/attach/断连/重登）
+            #   可查询，服务排障与断采缺口核对（user story 18/19）
+            (
+                "CREATE TABLE IF NOT EXISTS mx_pairing_codes (\n"
+                "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+                "    code_hash TEXT NOT NULL UNIQUE,\n"
+                "    created_at TEXT NOT NULL DEFAULT (datetime('now')),\n"
+                "    expires_at REAL NOT NULL,\n"
+                "    used_at TEXT\n"
+                ")"
+            ),
+            (
+                "CREATE TABLE IF NOT EXISTS mx_devices (\n"
+                "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+                "    name TEXT NOT NULL DEFAULT '',\n"
+                "    key_hash TEXT NOT NULL UNIQUE,\n"
+                "    revoked INTEGER NOT NULL DEFAULT 0,\n"
+                "    created_at TEXT NOT NULL DEFAULT (datetime('now')),\n"
+                "    last_seen_at TEXT\n"
+                ")"
+            ),
+            (
+                "CREATE TABLE IF NOT EXISTS mx_ingest_seq (\n"
+                "    account TEXT NOT NULL,\n"
+                "    seq INTEGER NOT NULL,\n"
+                "    seen_at REAL NOT NULL,\n"
+                "    PRIMARY KEY (account, seq)\n"
+                ")"
+            ),
+            (
+                "CREATE TABLE IF NOT EXISTS mx_ingest_events (\n"
+                "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+                "    device_id INTEGER NOT NULL DEFAULT 0,\n"
+                "    account TEXT NOT NULL DEFAULT '',\n"
+                "    event TEXT NOT NULL,\n"
+                "    detail TEXT NOT NULL DEFAULT '',\n"
+                "    created_at TEXT NOT NULL DEFAULT (datetime('now'))\n"
+                ")"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_mx_ingest_events_created "
+                "ON mx_ingest_events(created_at)"
+            ),
+        ),
+    ),
 ]
 
 _SLOW_QUERY_SECONDS = 0.2
@@ -5516,6 +5569,121 @@ class DB:
         if not rows or int(rows[0]["period_start"]) != int(period_start):
             return 0
         return int(rows[0]["count"])
+
+    # ---- MX 云网关：配对码 / 设备密钥 / 幂等窗 / 生命周期事件（票 #15）----
+
+    def create_mx_pairing_code(self, ttl_seconds: int = 15 * 60) -> str:
+        """生成 8 位一次性配对码（只存哈希，绑定前不出现在任何日志）。
+
+        返回明文码给管理端展示；库里只有 sha256 哈希——配对码与
+        bind_codes 同取舍：短时效一次性凭据，泄露面=窗口期内被抢先绑定。
+        """
+        import secrets as _secrets
+
+        code = "".join(_secrets.choice("0123456789") for _ in range(8))
+        self._execute(
+            "INSERT INTO mx_pairing_codes (code_hash, expires_at) VALUES (?, ?)",
+            (_secret_hash(code), time.time() + max(int(ttl_seconds), 60)),
+        )
+        self.delete_expired_mx_pairing_codes()
+        return code
+
+    def delete_expired_mx_pairing_codes(self) -> None:
+        self._execute(
+            "DELETE FROM mx_pairing_codes WHERE expires_at < ?",
+            (time.time(),),
+        )
+
+    def consume_mx_pairing_code(self, code: str) -> bool:
+        """一次性消费配对码（原子）：有效且未用过则置 used_at 并返回 True。
+
+        先 SELECT 再 UPDATE 两步在并发下可能双消费；这里用带条件的单条
+        UPDATE（rowcount 判定）保证「一码一设备」。
+        """
+        digest = _secret_hash((code or "").strip())
+        if not digest:
+            return False
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE mx_pairing_codes SET used_at = datetime('now') "
+                "WHERE code_hash = ? AND used_at IS NULL AND expires_at >= ?",
+                (digest, time.time()),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def add_mx_device(self, device_key: str, name: str = "") -> int:
+        """登记配对成功的设备（密钥只存哈希），返回设备 id。"""
+        rowid = self._execute(
+            "INSERT INTO mx_devices (name, key_hash) VALUES (?, ?)",
+            (str(name or "")[:64], _secret_hash(device_key)),
+        )
+        return int(rowid)
+
+    def find_mx_device_by_key(self, device_key: str) -> dict | None:
+        """按设备密钥查有效设备；吊销/未知一律 None（吊销后新连接拒绝）。"""
+        digest = _secret_hash(device_key)
+        if not digest:
+            return None
+        rows = self._rows(
+            "SELECT * FROM mx_devices WHERE key_hash = ? AND revoked = 0",
+            (digest,),
+        )
+        return rows[0] if rows else None
+
+    def revoke_mx_device(self, device_id: int) -> None:
+        """吊销设备：新连接拒绝，存量连接由网关自行掐断。"""
+        self._execute(
+            "UPDATE mx_devices SET revoked = 1 WHERE id = ?",
+            (int(device_id),),
+        )
+
+    def touch_mx_device(self, device_id: int) -> None:
+        self._execute(
+            "UPDATE mx_devices SET last_seen_at = datetime('now') WHERE id = ?",
+            (int(device_id),),
+        )
+
+    def seen_mx_ingest_seq(self, account: str, seq: int) -> bool:
+        """(account, seq) 24h 幂等窗：首次见到则登记并返回 False，重复 True。
+
+        INSERT OR IGNORE + rowcount 原子判重（表 PRIMARY KEY (account, seq)）；
+        窗口过期行由登记时顺手清理（同账号行数有限，DELETE 开销可忽略）。
+        """
+        now = time.time()
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO mx_ingest_seq (account, seq, seen_at) "
+                "VALUES (?, ?, ?)",
+                (str(account), int(seq), now),
+            )
+            if not cur.rowcount:
+                self._conn.commit()
+                return True
+            self._conn.execute(
+                "DELETE FROM mx_ingest_seq WHERE account = ? AND seen_at < ?",
+                (str(account), now - 24 * 3600),
+            )
+            self._conn.commit()
+            return False
+
+    def record_mx_ingest_event(
+        self, device_id: int, account: str, event: str, detail: str = ""
+    ) -> None:
+        """记录采集器生命周期事件（启动/attach/断连/重登），排障可查询。"""
+        self._execute(
+            "INSERT INTO mx_ingest_events (device_id, account, event, detail) "
+            "VALUES (?, ?, ?, ?)",
+            (int(device_id), str(account or "")[:64], str(event or "")[:32],
+             str(detail or "")[:500]),
+        )
+
+    def list_mx_ingest_events(self, limit: int = 200) -> list[dict]:
+        """最近的网关生命周期/断连事件（断采缺口核对入口）。"""
+        return self._rows(
+            "SELECT * FROM mx_ingest_events ORDER BY id DESC LIMIT ?",
+            (max(1, min(int(limit), 1000)),),
+        )
 
     def clear_quota(self, key: str) -> None:
         self._execute("DELETE FROM bind_quota WHERE key = ?", (key,))
