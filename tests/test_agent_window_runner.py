@@ -76,9 +76,10 @@ def test_missed_window_not_automatically_opened():
     # 8:00 tick：处在第一窗内（7:00 已过）——不补开（默认非重启补登场景）
     runner.tick(now=_at(8, 0), windows=wins)
     assert [a[0] for a in actions] == ["new_day"]  # 只有 new_day，无 open
-    # 12:45 tick：处在第二窗内——第二窗开窗点 12:30 也已过，同样不补开
+    # 12:45 tick：第二窗（12:30 装载时未到点→已武装）到点照常开——
+    # 「错过不续连」只作用于装载时刻已错过的窗口（云端 _mx_armed 缓存语义）
     runner.tick(now=_at(12, 45), windows=wins)
-    assert [a[0] for a in actions] == ["new_day"]
+    assert actions[-1][0] == "open"
 
 
 def test_restart_login_allowed_rearms_current_window():
@@ -112,3 +113,28 @@ def test_new_day_reset_between_days():
     kinds = [a[0] for a in actions]
     assert kinds == ["new_day", "open", "close", "new_day"]
     assert actions[3][1] == date(2026, 11, 17)
+
+
+def test_armed_cached_until_new_day_random_second_open():
+    """武装状态按日缓存：装载后到点的窗口必开（开窗点随机秒不被 30s tick 错过）。
+
+    回归（2026-11-14 实战）：agent 20:55 启动、窗口 20:57:15——每 tick 重算
+    armed 会让 20:57:24 的 tick 判 start<now 不武装，窗口永远开不了（云端
+    scheduler._mx_armed 是装载时算一次的缓存，本测试锁死该语义）。
+    """
+    runner, actions = _runner()  # 周六 restart_login=False（2026-11-14 是周六）
+    day = date(2026, 11, 14)
+    wins = (
+        (datetime(day.year, day.month, day.day, 7, 14, 38, tzinfo=CN_TZ),
+         datetime(day.year, day.month, day.day, 11, 45, 8, tzinfo=CN_TZ)),
+        (datetime(day.year, day.month, day.day, 12, 43, 42, tzinfo=CN_TZ),
+         datetime(day.year, day.month, day.day, 16, 17, 1, tzinfo=CN_TZ)),
+        (datetime(day.year, day.month, day.day, 20, 57, 15, tzinfo=CN_TZ),
+         datetime(day.year, day.month, day.day, 23, 48, 47, tzinfo=CN_TZ)),
+    )
+    first = datetime(day.year, day.month, day.day, 20, 55, 24, tzinfo=CN_TZ)
+    runner.tick(now=first, windows=wins)          # 装载 tick：三窗全武装（都未来）
+    assert [a[0] for a in actions] == ["new_day"]
+    # 到点后第一个 tick（20:57:24 > 20:57:15）：缓存武装 → 必须开
+    runner.tick(now=first.replace(minute=57, second=24), windows=wins)
+    assert actions[-1][0] == "open"

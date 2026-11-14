@@ -46,6 +46,10 @@ class WindowRunner:
         self._restart_login = restart_login
         self._day: date | None = None
         self._open = False
+        # 武装状态按日缓存（云端 scheduler._mx_armed 同款）：计划装载时刻算一次，
+        # 到点 tick 查缓存——每 tick 重算会让「start>=now」与「start<=now」互相
+        # 矛盾（开窗点错秒即永远错过；云端语义是装载时判错过，到点必开）
+        self._armed: list[bool] | None = None
 
     def tick(self, *, now: datetime, windows, restart_login: bool | None = None) -> None:
         """单次 tick（调用方按 30s 节奏驱动，与云端 _mx_window_loop 同频）。
@@ -57,11 +61,14 @@ class WindowRunner:
         if self._day != today:
             self._day = today
             self._open = False  # 跨天关窗态复位（夜间关窗兜底，防跨天悬挂）
+            self._armed = None  # 武装状态随当日计划重建（云端 _mx_windows_today 同款）
             self._on_new_day(today)
 
-        armed = arm_windows(list(windows), now,
-                            restart_login=self._restart_login
-                            if restart_login is None else restart_login)
+        if self._armed is None or len(self._armed) != len(windows):
+            self._armed = arm_windows(list(windows), now,
+                                      restart_login=self._restart_login
+                                      if restart_login is None else restart_login)
+        armed = self._armed
         idx = next((i for i, (start, stop) in enumerate(windows)
                     if start <= now < stop), None)
         if idx is not None:
