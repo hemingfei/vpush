@@ -396,9 +396,14 @@ def test_mid_session_alive_skips_relogin(env, tmp_path):
 
 
 def test_mid_session_probe_error_treated_as_dead(env, tmp_path):
-    """CDP 探针报错（Runtime.evaluate 失败）→ 按失效处理：走重登。"""
-    cfg, _ = env
-    runner = AgentRunner(cfg, log=LifecycleLog(tmp_path / "agentdata" / "lifecycle.jsonl"))
+    """CDP 探针报错（Runtime.evaluate 失败）= 浏览器进程已死：收尸重建。
+
+    死页面上的 ensure_logged_in 只会永远失败——正确语义是收尸旧 runtime
+    （置 None + browser_rebuild 事件），重登发生在下一 tick 补开的新浏览器上。
+    """
+    cfg, tmp_path = env
+    log_path = tmp_path / "agentdata" / "lifecycle.jsonl"
+    runner = AgentRunner(cfg, log=LifecycleLog(log_path))
     fake = _FakeRuntime()
 
     async def probe():
@@ -417,7 +422,10 @@ def test_mid_session_probe_error_treated_as_dead(env, tmp_path):
         await runner._ensure_session()
 
     asyncio.run(scenario())
-    assert fake.logins == ["solo-user"], "探针报错按失效处理"
+    assert runner.runtime is None, "旧 runtime 已收尸"
+    assert fake.logins == [], "不在死页面上重登"
+    events = query_events(log_path)
+    assert any(e["kind"] == "browser_rebuild" for e in events), "重建事件入档"
 
 
 def test_mid_session_fatal_error_triggers_relay_switch(env, tmp_path):

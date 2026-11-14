@@ -213,6 +213,17 @@ class AgentRunner:
         now_mono = time.monotonic()
         if self._next_relogin_at is not None and now_mono < self._next_relogin_at:
             return  # 退避窗口未到
+        # CDP 会话已死（浏览器进程被杀/崩溃）时，在死页面上重试登录只会
+        # 永远失败——浏览器进程必须重建。旧 runtime 收尸置 None，下一 tick
+        # 走「窗内无运行时补开」路径拉起新 Chrome（_tick 的补开分支）。
+        if probe.get("error") is not None:
+            dead = self.runtime
+            self.runtime = None
+            await dead.stop()
+            self._next_relogin_at = None  # 补开即全新登录链路，清掉退避
+            self.log.record("browser_rebuild", account=account.user,
+                            detail="CDP 会话失效，重建浏览器")
+            return
         try:
             ok = await self.runtime.ensure_logged_in(
                 account=account.user, password=self.config.password_of(account))
