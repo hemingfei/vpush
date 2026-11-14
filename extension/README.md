@@ -11,7 +11,7 @@ WS 帧/HTTP 请求到云网关 `/api/mx-ingest`。**零行为、零决策**—�
 
 ```
 extension/
-├── manifest.json          MV3 manifest（debugger/storage/alarms/tabs 权限）
+├── manifest.json          MV3 manifest（debugger/storage/alarms/tabs 权限；action badge）
 ├── sw.js                  采集内核 service worker（spike sw.js 产品化）
 ├── options.html/js        配置页：网关地址/账号标签/配对/采集前缀（写 storage 即时生效）
 ├── src/                   纯逻辑模块（node --test 覆盖）
@@ -19,9 +19,10 @@ extension/
 │   ├── envelope.js        信封 {seq,ts,account,type,payload} + 持久化单调 seq
 │   ├── buffer.js          断线缓冲账目（5000 上限丢最旧 + 丢帧计数）
 │   ├── auth_client.js     配对/认证状态机（首帧 pair/auth；4003=吊销清密钥）
+│   ├── conn_state.js      重连退避账目（互斥门+下刻门，session 持久跨 SW 死亡）
 │   ├── host_guard.js      上行地址校验（仅 wss 自有域名；拒内网/环回）
 │   ├── attach_filter.js   attach 前缀判定 + HTTP URL 过滤（每事件 await 读 storage）
-│   └── response_body.js   HTTP 响应体采集（登记/64KB 截断/payload 组装）
+│   └── response_body.js   HTTP 响应体采集（登记写穿 session/64KB 截断/组装）
 ├── tests/                 本地测试（零依赖 node:test；不进 CI）
 ├── smoke/                 冒烟驱动（node 侧模拟扩展内核）
 └── README.md
@@ -53,7 +54,44 @@ node extension/tests/run_tests.mjs
 # 等价：node --test extension/tests/*.test.mjs
 ```
 
-当前 42 用例全绿。仓库 CI 无任何扩展相关接线（无新增 CI 依赖）。
+当前 50 用例全绿。仓库 CI 无任何扩展相关接线（无新增 CI 依赖）。
+
+## badge 运维面（工具栏图标角标）
+
+免开 options 页看采集健康度（状态跃迁时刷新，不逐帧刷）：
+
+| badge | 语义 |
+| ----- | ---- |
+| 无字 | 已连接且缓冲空 |
+| 数字（≤99） | 断线缓冲中的帧数 |
+| 琥珀 `!` | 待配对 / 密钥已吊销（需人工重新配对） |
+| 红色底色 | 有丢帧（buffer_overflow 账目非零） |
+
+## MV3 审计加固（2026-11-14）
+
+对照 `GoogleChrome/modern-web-guidance` chrome-extensions 技能 16 条
+mandatory rules 的审计落地（设计决策 7/8/9 继承 spike 决策不回退）：
+
+1. **响应体登记写穿 `chrome.storage.session`**（`src/response_body.js`）：
+   SW 死于 `requestWillBeSent` 与 `loadingFinished` 之间时，重启经
+   `restore()` 装回，响应体帧不再静默丢失；debugger 重 attach（新
+   Network 会话 = 新 requestId 空间）时 `clear()` 清陈旧登记。
+2. **连接互斥 + 陈旧回调守卫**（`sw.js`）：`connecting` 同步互斥位挡
+   同批多入口（alarm/onclose/onInstalled），`ws !== sock` 守卫挡孤儿
+   socket 的 `onclose` 串账——原三入口竞态可产生孤儿 WS 连接。
+3. **重连退避持久化**（`src/conn_state.js`）：档位与下刻门存
+   `storage.session`——SW 被 30s 回收后不从 0 档重新快连；真退避由
+   `acquire()` 门控（alarm 敲门早到即放弃），浏览器重启 session 清零
+   从 0 档开始（新会话无历史风暴）。旧 `setTimeout` 重连不活过 SW
+   生命周期，已废。
+4. **manifest 收窄**：移除 `host_permissions` 的 `http://127.0.0.1/*`
+   （无消费方——WS 连网关不受 host_permissions 约束，`https://*/*`
+   是 chrome.debugger attach MX 页面所需，域名漂移可配故保留）；CSP
+   `connect-src` 移除 `ws://127.0.0.1`（扩展运行时 host_guard 本就
+   拒绝明文 ws）。`mx_gateway_url` 运行时可配，`connect-src wss:`
+   无法钉死单域——**权威校验在 `src/host_guard.js`**（仅 wss+公网域名，
+   拒内网/环回）。
+
 
 ### 账号标签（跨账号去重的接线，S3）
 
@@ -129,3 +167,9 @@ Out of Scope 终端用户分发）：
 5. seq 持久化（`chrome.storage.local.mx_seq`）——内存计数器重启归零会让补传
    帧撞旧 seq 被网关幂等窗吞掉
 6. 吊销（close 4003）清本地密钥转人工配对——自动重试死密钥只会反复 4003
+7. 连接互斥（`connecting` 位 + `ws !== sock` 守卫）与退避门（`conn_state`
+   下刻门）——孤儿 WS 与风暴快连双防线（MV3 审计 2026-11-14）
+8. SW 死亡不丢的短命状态放 `chrome.storage.session`（响应体登记/退避账目），
+   跨浏览器的长命状态放 `chrome.storage.local`（seq/缓冲/密钥/配置）
+9. 配置变更不 reload SW 的 corollary：`mx_gateway_url` 运行时可配，CSP/
+   host_permissions 只能放宽到「wss 任意域」，逐域校验在 host_guard 运行时做

@@ -51,7 +51,20 @@ const getAccount = async () => (await storage.get(["mx_account"])).mx_account ||
 const envelope = createEnvelopeFactory({ getAccount, seqStore });
 const buffer = createBuffer({ cap: 5000 });
 const auth = createAuthClient({ storage });
-const respTracker = createResponseTracker(); // 与 sw.js 同一生产模块（S5）
+// 与 sw.js 同一生产模块（S5），带内存 sessionStore 复刻登记写穿语义
+const sessionMem = new Map();
+const sessionStore = {
+  async get(k) {
+    const keys = Array.isArray(k) ? k : [k];
+    const out = {};
+    for (const key of keys) if (sessionMem.has(key)) out[key] = sessionMem.get(key);
+    return out;
+  },
+  async set(obj) {
+    for (const [k, v] of Object.entries(obj)) sessionMem.set(k, v);
+  },
+};
+const respTracker = createResponseTracker({ sessionStore });
 
 let ws = null;
 const lifecycle = []; // 供断言的生命周期事件账本
@@ -65,7 +78,7 @@ async function feedFrame(kind, payload) {
   }
   if (kind === "http" && payload && typeof payload === "object" && payload.url) {
     // 模拟 sw.js requestWillBeSent：关注请求先登记再上行请求面
-    respTracker.track(payload.__requestId || payload.url, {
+    await respTracker.track(payload.__requestId || payload.url, {
       url: payload.url, method: payload.method || "GET",
       postData: payload.body ?? null,
     });
@@ -204,7 +217,7 @@ async function handle(cmd) {
       // 模拟 sw.js Network.loadingFinished + Network.getResponseBody：
       // 登记表里的请求取回 → 组装带响应体的 http 帧 → 上行
       const { requestId, responseBody } = cmd;
-      const entry = respTracker.take(requestId);
+      const entry = await respTracker.take(requestId);
       if (!entry) return { ok: false, error: "requestId 未登记" };
       const payload = respTracker.buildPayload(entry, responseBody);
       const env = await envelope.build("http", payload);
