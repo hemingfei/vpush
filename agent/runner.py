@@ -290,6 +290,14 @@ class AgentRunner:
         elif not now_open and was_open:
             await self._close_window(now=now)
         if now_open:
+            # 开窗动作中途失败（如 Chrome 启动异常）时 runtime 为 None 而
+            # window_open 已翻转 True——只靠 _ensure_session 会永久短路
+            # （runtime None 直接 return），会话卡死到出窗。此处补开：
+            # 「上一 tick 就已开窗但至今无运行时」（was_open=True）= 开窗
+            # 失败后的恢复路径；刚翻转的 tick（was_open=False）不补，由
+            # _open_window 自身的结果处理负责。
+            if self.runtime is None and was_open:
+                await self._open_window(self.relay.active, now=now)
             await self._ensure_session()
             await self._maybe_switch_room()
 
