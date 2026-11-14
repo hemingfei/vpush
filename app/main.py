@@ -418,9 +418,14 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         db,
         on_external_post=scheduler.ingest_external_post if background_workers_enabled() else None,
         alert_publisher=_mx_ingest_alert,
+        # 管理面 Bearer 凭据（签发配对码/设备清单/吊销）：留空=管理面关闭
+        admin_token=os.environ.get("MX_INGEST_ADMIN_TOKEN", ""),
+        # 帖子化 api_base 与 fetchers 同源（config MX_API_BASE，域名漂移只改配置）
+        api_base=config.sources.mx.api_base,
     )
     app.include_router(_mx_ingest_router)
-    # 吊销反向通知回调挂 app.state：管理端吊销设备后现存连接即断（UI 随扩展票接）
+    # 吊销反向通知回调挂 app.state：管理端吊销设备后现存连接即断
+    # （router 属性挂回调是既定契约：include_router 复制路由、自定义属性不随行）
     app.state.mx_ingest_notify_revoked = _mx_ingest_router.mx_ingest_notify_revoked  # type: ignore[attr-defined]
 
     app.include_router(

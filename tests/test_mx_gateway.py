@@ -459,11 +459,11 @@ def test_full_app_includes_gateway_route(tmp_path):
     assert callable(app.state.mx_ingest_notify_revoked)
 
 
-# ---- 断连告警：超阈值窗内去重、阈值可配置 ----
+# ---- 断连告警：延迟检查 + 阈值窗去重、阈值可配置 ----
 
 
 def test_disconnect_alert_publishes_with_threshold_dedup():
-    """断连发布系统通知式告警；同设备阈值窗内重复断连不重复告警。"""
+    """断连超阈值仍离线 → 告警；阈值窗内重复断连不重复告警（去重窗语义）。"""
 
     async def scenario():
         from app.db import DB
@@ -477,8 +477,10 @@ def test_disconnect_alert_publishes_with_threshold_dedup():
             db,
             on_external_post=None,
             alert_publisher=lambda title, content: alerts.append((title, content)),
-            # 阈值窗 300s：第二次断连落在窗内 → 不再告警
-            disconnect_alert_seconds=300,
+            # 阈值 1.0s（短窗可测）：断连后设备保持离线，延迟检查到期即告警；
+            # 第二次断连落在去重窗内 → 不再告警。语义与生产 300s 相同，
+            # 只是时长缩短（阈值参数可配置的意义所在）
+            disconnect_alert_seconds=1.0,
         )
         port, stop = start_server(app)
         try:
@@ -494,12 +496,12 @@ def test_disconnect_alert_publishes_with_threshold_dedup():
                 assert json.loads(await live.recv()) == {"ok": True}
                 await live.close()
 
-            # 认证一条连接然后断开 → 第一次断连告警
+            # 认证一条连接然后断开 → 阈值后（设备仍离线）告警一次
             await auth_and_close()
             assert await await_for(
                 lambda: len(alerts) == 1
-            ), "首次断连应发布告警"
-            # 快速重连再断开 → 阈值窗内不重复告警（网络抖动不打扰）
+            ), "超阈值仍离线应发布告警"
+            # 快速重连再断开 → 阈值去重窗内不重复告警（网络抖动不打扰）
             await auth_and_close()
             await asyncio.sleep(0.5)
             assert len(alerts) == 1, "阈值窗内重复断连不应再告警"
@@ -515,15 +517,96 @@ def test_disconnect_alert_publishes_with_threshold_dedup():
     asyncio.run(asyncio.wait_for(scenario(), timeout=30))
 
 
-def test_disconnect_alert_disabled_when_threshold_zero():
-    """阈值=0 时关闭断连告警（本地测试实例静默口径）。"""
+def test_disconnect_alert_delayed_until_threshold_elapsed():
+    """断连不立即告警：阈值后才告警（仍在断开状态）；抖动秒级重连不打扰。"""
+    import tempfile
+    from pathlib import Path as _P
+
+    from app.db import DB
+    from app.services.mx_gateway import build_gateway_app
 
     async def scenario():
+        tmp = _P(tempfile.mkdtemp())
+        db = DB(tmp / "alert-delay.db")
+        alerts = []
+        app = build_gateway_app(
+            db,
+            on_external_post=None,
+            alert_publisher=lambda title, content: alerts.append((title, content)),
+            # 阈值 1.2s：断开后仍断开超过该时长才告警
+            disconnect_alert_seconds=1.2,
+        )
+        port, stop = start_server(app)
+        try:
+            live = await pair_and_auth(port, db)
+            # 短暂断连（< 阈值即重连）：不告警——网络抖动不打扰
+            await live.close()
+            await asyncio.sleep(0.4)
+            assert alerts == [], "阈值未到的短暂断连不应告警"
+            # 阈值后仍在断开状态 → 告警（延迟检查任务到期判定）
+            assert await await_for(lambda: len(alerts) == 1), \
+                "超过阈值仍在断开状态应发布告警"
+        finally:
+            stop()
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=30))
+
+
+def test_disconnect_reconnect_before_threshold_no_alert():
+    """断连后阈值前重连：延迟检查发现设备已在线 → 不告警。"""
+
+    async def scenario():
+        import tempfile
+        from pathlib import Path as _P
+
         from app.db import DB
         from app.services.mx_gateway import build_gateway_app
 
-        tmp = Path(tempfile.mkdtemp())
-        db = DB(tmp / "alert-off.db")
+        tmp = _P(tempfile.mkdtemp())
+        db = DB(tmp / "alert-reconnect.db")
+        alerts = []
+        app = build_gateway_app(
+            db,
+            on_external_post=None,
+            alert_publisher=lambda title, content: alerts.append((title, content)),
+            disconnect_alert_seconds=1.0,
+        )
+        port, stop = start_server(app)
+        try:
+            # 同一设备：配对一次，断开→阈值前重连（密钥复用）→ 保持在线
+            code = db.create_mx_pairing_code()
+            async with await ws_connect(port) as ws:
+                await ws.send(json.dumps({"op": "pair", "code": code}))
+                device_key = json.loads(await ws.recv())["device_key"]
+            live = await ws_connect(port)
+            await live.send(json.dumps({"op": "auth", "key": device_key}))
+            assert json.loads(await live.recv()) == {"ok": True}
+            await live.close()
+            # 阈值前重连并保持在线：延迟检查到期时设备已连接 → 不告警
+            live = await ws_connect(port)
+            await live.send(json.dumps({"op": "auth", "key": device_key}))
+            assert json.loads(await live.recv()) == {"ok": True}
+            await asyncio.sleep(1.6)
+            assert alerts == [], "阈值前重连成功不应告警"
+            await live.close()
+        finally:
+            stop()
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=30))
+
+
+def test_disconnect_alert_immediate_when_threshold_zero():
+    """阈值=0 = 立即告警口径（保留旧行为；断连即发）。"""
+
+    async def scenario():
+        import tempfile
+        from pathlib import Path as _P
+
+        from app.db import DB
+        from app.services.mx_gateway import build_gateway_app
+
+        tmp = _P(tempfile.mkdtemp())
+        db = DB(tmp / "alert-zero.db")
         alerts = []
         app = build_gateway_app(
             db,
@@ -533,11 +616,210 @@ def test_disconnect_alert_disabled_when_threshold_zero():
         )
         port, stop = start_server(app)
         try:
+            # 阈值 0 = 立即告警：断连后马上断（无延迟检查窗口）
             live = await pair_and_auth(port, db)
             await live.close()
-            await asyncio.sleep(0.5)
-            assert alerts == [], "阈值 0 应关闭断连告警"
+            assert await await_for(lambda: len(alerts) == 1), \
+                "阈值 0 应立即告警"
         finally:
             stop()
 
     asyncio.run(asyncio.wait_for(scenario(), timeout=30))
+
+
+def test_disconnect_alert_disabled_when_alerts_publisher_none():
+    """未配置告警发布器（生产纯 UI 调试模式）时断连不告警（静默口径）。"""
+
+    async def scenario():
+        import tempfile
+        from pathlib import Path as _P
+
+        from app.db import DB
+        from app.services.mx_gateway import build_gateway_app
+
+        tmp = _P(tempfile.mkdtemp())
+        db = DB(tmp / "alert-none.db")
+        app = build_gateway_app(db, on_external_post=None, alert_publisher=None)
+        port, stop = start_server(app)
+        try:
+            live = await pair_and_auth(port, db)
+            await live.close()
+            await asyncio.sleep(0.5)
+            # 断连事件照常记录（排障面），只是无告警发布
+            assert any(
+                e["event"] == "disconnect" for e in db.list_mx_ingest_events()
+            ), "断连事件应照常记录"
+        finally:
+            stop()
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=30))
+
+
+# ---- 管理面路由（S1）：配对码签发 / 设备清单 / 吊销 ----
+
+
+def make_gateway_with_admin(db_path=None, admin_token="admin-test-token-123"):
+    """造带管理面路由的网关 app + 共享 DB（管理面用例专用）。"""
+    import tempfile
+    from pathlib import Path as _P
+
+    from app.db import DB
+    from app.services.mx_gateway import build_gateway_app
+
+    tmp = _P(tempfile.mkdtemp())
+    db = DB(db_path or (tmp / "gateway-admin.db"))
+    app = build_gateway_app(
+        db,
+        on_external_post=None,
+        alert_publisher=None,
+        admin_token=admin_token,
+    )
+    return app, db
+
+
+def _admin_headers():
+    return {"Authorization": "Bearer admin-test-token-123"}
+
+
+def test_admin_routes_require_token():
+    """管理面路由无 token / 错 token 一律 404（不暴露存在性，mx_shot 先例）。"""
+    import httpx
+
+    async def scenario():
+        app, db = make_gateway_with_admin()
+        transports = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transports,
+                                     base_url="http://test") as client:
+            # 无 Authorization：404
+            r = await client.post("/api/admin/mx-ingest/pairing-code")
+            assert r.status_code == 404, r.status_code
+            # 错 token：404
+            r = await client.post(
+                "/api/admin/mx-ingest/pairing-code",
+                headers={"Authorization": "Bearer wrong"},
+            )
+            assert r.status_code == 404, r.status_code
+            # GET devices / revoke 同口径
+            r = await client.get("/api/admin/mx-ingest/devices")
+            assert r.status_code == 404, r.status_code
+            r = await client.post(
+                "/api/admin/mx-ingest/devices/1/revoke",
+                headers={"Authorization": "Bearer wrong"},
+            )
+            assert r.status_code == 404, r.status_code
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=15))
+
+
+def test_admin_mint_pairing_code_and_devices_list():
+    """管理面签发配对码 → 扩展用它配对成功 → 设备清单可查（不含密钥哈希）。"""
+    import httpx
+
+    async def scenario():
+        app, db = make_gateway_with_admin()
+        # 管理面签发配对码（带 expires_at 返回）
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            r = await client.post(
+                "/api/admin/mx-ingest/pairing-code", headers=_admin_headers()
+            )
+            assert r.status_code == 200, (r.status_code, r.text)
+            body = r.json()
+            code = body["code"]
+            assert len(code) == 8 and code.isdigit(), body
+            assert float(body["expires_at"]) > time.time(), body
+
+        # 扩展用该码走配对（同一条真实 ws 链路）
+        port, stop = start_server(app)
+        try:
+            async with await ws_connect(port) as ws:
+                await ws.send(json.dumps({"op": "pair", "code": code}))
+                resp = json.loads(await ws.recv())
+                assert resp.get("ok") is True, resp
+
+            # 设备清单：1 台设备，未吊销
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                r = await client.get(
+                    "/api/admin/mx-ingest/devices", headers=_admin_headers()
+                )
+                assert r.status_code == 200
+                devices = r.json()["devices"]
+                assert len(devices) == 1, devices
+                assert devices[0]["revoked"] == 0
+                assert "key_hash" not in devices[0], "密钥哈希不回传"
+        finally:
+            stop()
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=30))
+
+
+def test_admin_revoke_kills_live_connection():
+    """管理面吊销路由：吊销后存量连接被断（close 4003）+ 设备清单标记吊销。"""
+    import httpx
+
+    async def scenario():
+        app, db = make_gateway_with_admin()
+        port, stop = start_server(app)
+        try:
+            # 管理面签码
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                r = await client.post(
+                    "/api/admin/mx-ingest/pairing-code", headers=_admin_headers()
+                )
+                code = r.json()["code"]
+
+            # 扩展配对 + 认证保持在线
+            async with await ws_connect(port) as ws:
+                await ws.send(json.dumps({"op": "pair", "code": code}))
+                device_key = json.loads(await ws.recv())["device_key"]
+            live = await ws_connect(port)
+            await live.send(json.dumps({"op": "auth", "key": device_key}))
+            assert json.loads(await live.recv()) == {"ok": True}
+
+            # 管理面吊销该设备：存量连接即断（走路由接线，非直调 notify）
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                r = await client.get(
+                    "/api/admin/mx-ingest/devices", headers=_admin_headers()
+                )
+                device_id = r.json()["devices"][0]["id"]
+                r = await client.post(
+                    f"/api/admin/mx-ingest/devices/{device_id}/revoke",
+                    headers=_admin_headers(),
+                )
+                assert r.status_code == 200, r.text
+
+            with pytest.raises(websockets.ConnectionClosed) as ei:
+                await asyncio.wait_for(live.recv(), timeout=5)
+            assert ei.value.rcvd.code == 4003, "吊销后必须以 close 4003 断开"
+
+            # 设备清单显示已吊销
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                r = await client.get(
+                    "/api/admin/mx-ingest/devices", headers=_admin_headers()
+                )
+                assert r.json()["devices"][0]["revoked"] == 1
+        finally:
+            stop()
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=30))
+
+
+def test_full_app_has_admin_ingest_routes(tmp_path):
+    """完整 create_app 组装：管理面路由随网关 router 一起挂载（组装回归）。"""
+    config = Config()
+    config.db_path = str(tmp_path / "full2.db")
+    config.alerts_enabled = False
+    app = create_app(config=config)
+    paths = [getattr(r, "path", "") for r in app.router.routes]
+    assert "/api/admin/mx-ingest/pairing-code" in paths
+    assert "/api/admin/mx-ingest/devices" in paths
+    assert "/api/admin/mx-ingest/devices/{device_id}/revoke" in paths

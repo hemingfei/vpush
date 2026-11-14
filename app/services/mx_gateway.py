@@ -19,8 +19,12 @@ header，故采用「连接后首帧认证」——
     {"op": "pair", "code": "8位配对码"}   → 一次性绑定：下发设备密钥，码作废
     {"op": "auth", "key": "设备密钥"}     → 设备密钥认证；吊销设备立即断开
 
-配对码生成入口 = DB.create_mx_pairing_code（管理端调用；本票只交付 DB 侧，
-后台 UI 接线随扩展票一起做）。设备密钥只存哈希（同 bind_codes 取舍）。
+配对码生成入口 = 管理面路由（本模块 build_ingest_router 内 POST
+/api/admin/mx-ingest/pairing-code，Bearer MX_INGEST_ADMIN_TOKEN 认证，
+mx_shot_token「token 即凭据」同取舍；留空=管理面整体关闭一律 404）；
+设备清单 GET /api/admin/mx-ingest/devices、吊销 POST
+/api/admin/mx-ingest/devices/{id}/revoke（吊销即断存量连接 close 4003）。
+设备密钥只存哈希（同 bind_codes 取舍）。
 
 边界（票 #15 硬约束）：不 import/调用 ws.py 连接层（connect/重连额度/退避/
 风暴标记——那是后续删除票的领域），只用解析层资产
@@ -38,10 +42,18 @@ import secrets
 import time
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    FastAPI,
+    Header,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import JSONResponse
 
 from ..db import DB
-from ..fetchers.base import Post
+from ..fetchers.base import Post, _squeeze
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +70,11 @@ ENGINE_FRAME_RE = re.compile(r"^(?:[023]|4[01])")
 FUZZY_DEDUP_WINDOW_MINUTES = 10
 FUZZY_DEDUP_SIMILARITY = 0.90
 
-# 断连告警阈值（秒）：设备断开后同设备阈值窗内不重复告警（网络抖动秒级
-# 重连不打扰）；超过阈值仍在断开状态即告警。MX_INGEST_DISCONNECT_ALERT_SECONDS
-# 环境变量可调，0=关闭断连告警（本地测试建议关闭）。
+# 断连告警阈值（秒）：断开后延迟检查的等待时长——超过阈值仍在断开状态
+# 即告警（模块头语义 + spec「超过阈值仍在断开状态即告警」）；同时兼作
+# 同设备告警去重窗（阈值窗内重复断连不重复告警，网络抖动秒级重连不打扰）。
+# threshold=0 = 立即告警（无延迟检查窗口，兼容本地测试/脚本断言快路径）。
+# MX_INGEST_DISCONNECT_ALERT_SECONDS 环境变量可调。
 DISCONNECT_ALERT_SECONDS = 300
 
 
@@ -80,14 +94,11 @@ FRAME_TYPES = frozenset({"ws_in", "ws_out", "http", "lifecycle"})
 def content_similarity(a: str, b: str) -> float:
     """跨账号模糊去重的内容相似度：归一化后按最长公共序列比例。
 
-    归一化沿 _squeeze 先例（去空白/标点/链接）——两账号转发同一条消息，
-    平台侧 msg 序列化可能有细微差别（空格/转义），裸文本直比会漏。
+    归一化直接复用 fetchers.base._squeeze（去空白/标点/链接，单一实现
+    不另起炉灶）——两账号转发同一条消息，平台侧 msg 序列化可能有细微
+    差别（空格/转义），裸文本直比会漏。
     """
-    def _norm(text: str) -> str:
-        squeezed = re.sub(r"[\s\W_]+", "", re.sub(r"https?://\S+", "", text or ""), flags=re.UNICODE)
-        return squeezed.lower()
-
-    na, nb = _norm(a), _norm(b)
+    na, nb = _squeeze(a), _squeeze(b)
     if not na or not nb:
         return 0.0
     if na == nb:
@@ -108,6 +119,7 @@ class MxIngestGateway:
         on_external_post=None,
         alert_publisher=None,
         disconnect_alert_seconds: int | None = DISCONNECT_ALERT_SECONDS,
+        api_base: str = "",
     ):
         self.db = db
         # 生产 = Scheduler.ingest_external_post（入库+推送+屏蔽词+缓冲）；
@@ -117,8 +129,18 @@ class MxIngestGateway:
         # KOL 发布闭包，测试置 None 关闭
         self.alert_publisher = alert_publisher
         self.disconnect_alert_seconds = disconnect_alert_seconds
+        # 解析链帖子化所需 api_base（T5：与 fetcher 同源配置，非硬编码；
+        # 缺省回落 MxConfig.api_base 默认值，见 _parse_config）
+        self.api_base = (api_base or "").strip()
         # MxFetcher 惰性实例（解析链帖子化用，与生产同库同缓存）
         self._fetcher = None
+        # 吊销反向通知注册表（正式声明，T4）：device_id -> set[WebSocket]；
+        # 由本类自行维护（连接登记/移除），吊销时 notify_revoked_devices 反查。
+        self.live_connections: dict[int, set[WebSocket]] = {}
+        # 吊销回调（正式声明，T4）：管理端吊销设备后，把已认证的存量连接
+        # 全部 close(4003)。签名 device_id -> None；由 router 注入具体实现
+        # （依赖事件循环，构造期不可执行），缺省 no-op（测试/无连接面场景）。
+        self.notify_revoked_devices = lambda device_id: None
 
     # ---- 认证状态机 ----
 
@@ -237,6 +259,19 @@ class MxIngestGateway:
 
         return SimpleNamespace(ws_namespace="/msg", token="", ws_url="", ws_path="")
 
+    def _api_base(self) -> str:
+        """帖子化用 api_base（T5）：网关构造参数优先，回落 MxConfig 默认值。
+
+        与 fetchers 的配置同源（app.config MxConfig.api_base ← MX_API_BASE
+        env）；build_ingest_router 从 config 传入，测试可覆盖。不再在函数体
+        里硬编码域名——域名漂移时只改配置，不改代码。
+        """
+        if self.api_base:
+            return self.api_base
+        from ..config import MxConfig
+
+        return MxConfig().api_base
+
     def _parse_to_post(self, raw_msg: dict) -> Post | None:
         """原始消息 dict → Post（复用 fetcher._parse_message_to_post，零改动）。
 
@@ -247,7 +282,7 @@ class MxIngestGateway:
             from types import SimpleNamespace
 
             config = SimpleNamespace(
-                api_base="https://mx.2026.foodtop1.com/business-api/4",
+                api_base=self._api_base(),
                 token="",
                 page_size=30,
                 max_history_pages=100,
@@ -324,13 +359,19 @@ def build_ingest_router(
     on_external_post=None,
     alert_publisher=None,
     disconnect_alert_seconds: int | None = None,
+    admin_token: str = "",
+    api_base: str = "",
 ) -> APIRouter:
-    """构造云网关 router（挂 /api/mx-ingest，APIRouter prefix=/api）。
+    """构造云网关 router（挂 /api/mx-ingest + 管理面，APIRouter prefix=/api）。
 
     生产在 main.create_app 里调用并 include；on_external_post 传调度器的
     ingest_external_post（与V平台 KOL webhook 同链路），纯 UI 调试模式传 None。
     disconnect_alert_seconds 缺省读 MX_INGEST_DISCONNECT_ALERT_SECONDS 环境变量
-    （默认 300 秒；0=关闭断连告警）。
+    （默认 300 秒；0=断连立即告警）。
+    admin_token：管理面 Bearer 凭据（空=管理面整体关闭，路由一律 404 不暴露
+    存在性——mx_shot_token 同取舍：token 即凭据、泄露轮换即可）。
+    api_base：帖子化链路用（T5）；缺省回落 MxConfig.api_base（与 fetchers
+    同源配置，build_gateway_app 从 config 透传）。
     """
     if disconnect_alert_seconds is None:
         disconnect_alert_seconds = _disconnect_alert_seconds_from_env()
@@ -340,12 +381,10 @@ def build_ingest_router(
         on_external_post=on_external_post,
         alert_publisher=alert_publisher,
         disconnect_alert_seconds=disconnect_alert_seconds,
+        api_base=api_base,
     )
-    # 吊销反向通知注册表：device_id -> set[WebSocket]；管理端吊销时现存连接即断。
-    # 注册表挂在 gateway 实例上（build_ingest_router 每次调用新建一个 gateway，
-    # 不用模块级全局——多 app 共存（测试/多实例）时不串线）
-    gateway.live_connections = {}
-    # 断连告警去重窗（monotonic 时刻）：同设备阈值窗内只告警一次
+    # 吊销反向通知（T4 正式接线）：注册表在 gateway 实例上（build 每次调用
+    # 新建 gateway，不用模块级全局——多 app 共存（测试/多实例）不串线）
     _disconnect_alert_at: dict[int, float] = {}
 
     def notify_revoked_devices(device_id: int) -> None:
@@ -363,11 +402,122 @@ def build_ingest_router(
             except Exception:
                 logger.debug("MX 云网关：吊销断开失败（忽略）", exc_info=True)
 
-    # 管理端接线点（后台 UI 随扩展票接；吊销管理端点调用本回调）
-    gateway.notify_revoked_devices = notify_revoked_devices  # type: ignore[attr-defined]
+    gateway.notify_revoked_devices = notify_revoked_devices
     # include_router 复制路由、自定义属性不随行：挂 router 属性供
     # build_gateway_app/main.create_app 取出来挂 app.state
     router.mx_ingest_notify_revoked = notify_revoked_devices  # type: ignore[attr-defined]
+
+    # ---- 断连告警：延迟检查 + 去重窗（S4）----
+
+    def _publish_disconnect_alert(device: dict) -> None:
+        device_id = int(device["id"])
+        try:
+            gateway.alert_publisher(
+                "MX 采集器断连",
+                f"设备 {device.get('name') or device_id} 的采集连接已断开"
+                f"超过 {gateway.disconnect_alert_seconds} 秒，如非计划内请检查"
+                "本地行为器/采集器状态。",
+            )
+        except Exception:
+            logger.debug("MX 云网关：断连告警发布失败（忽略）", exc_info=True)
+
+    async def _delayed_disconnect_check(device: dict) -> None:
+        """延迟检查：阈值秒后仍无该设备的活跃连接 → 告警（一次）。"""
+        await asyncio.sleep(gateway.disconnect_alert_seconds)
+        device_id = int(device["id"])
+        if gateway.live_connections.get(device_id):
+            return  # 阈值内重连成功：网络抖动，不告警
+        _publish_disconnect_alert(device)
+
+    def _on_disconnect(device: dict) -> None:
+        """断连记录 + 延迟告警调度（循系统通知 KOL 机制，阈值可配置）。
+
+        语义（S4 对齐 spec「超过阈值仍在断开状态即告警」）：
+        - 断连只记录事件 + 按阈值安排一个延迟检查任务；
+        - 延迟检查到期时设备仍无活跃连接才发告警——秒级抖动重连不打扰；
+        - 去重窗：同设备阈值窗内不重复安排告警（抖动反复断开不刷屏）；
+        - threshold=0 = 立即告警（无延迟窗口；本地测试快路径）。
+        """
+        device_id = int(device["id"])
+        try:
+            db.record_mx_ingest_event(device_id, "", "disconnect", "连接断开")
+        except Exception:
+            logger.debug("MX 云网关：断连事件记录失败（忽略）", exc_info=True)
+        if gateway.alert_publisher is None:
+            return
+        if not gateway.disconnect_alert_seconds:
+            # threshold=0：立即告警（去重窗同时为 0 → 每次断连都告，无缓冲）
+            _publish_disconnect_alert(device)
+            return
+        now = time.monotonic()
+        last = _disconnect_alert_at.get(device_id, 0.0)
+        if now - last < gateway.disconnect_alert_seconds:
+            return  # 去重窗内：已有延迟检查在途/已告警，不再安排新告警
+        _disconnect_alert_at[device_id] = now
+        asyncio.get_event_loop().create_task(_delayed_disconnect_check(device))
+
+    # ---- 管理面（S1）：配对码签发 / 设备清单 / 吊销 ----
+    # 认证循 mx_shot_token 先例（token 即凭据、Bearer 头、404 不暴露存在性）；
+    # 机器对机器接口，非用户会话。
+
+    def _admin_guard(authorization: str | None) -> None:
+        """管理面凭据校验：未配置 token = 功能整体关闭（一律 404）。"""
+        expected = (admin_token or "").strip()
+        if not expected:
+            raise HTTPException(status_code=404, detail="not found")
+        got = ""
+        if authorization and authorization.startswith("Bearer "):
+            got = authorization[7:].strip()
+        if not got or not secrets.compare_digest(got, expected):
+            raise HTTPException(status_code=404, detail="not found")
+
+    @router.post("/admin/mx-ingest/pairing-code")
+    async def admin_mint_pairing_code(
+        authorization: str | None = Header(None)
+    ) -> JSONResponse:
+        """签发 8 位一次性配对码：返回 {code, expires_at}（明文码不出日志）。"""
+        _admin_guard(authorization)
+        ttl = 15 * 60
+        code = db.create_mx_pairing_code(ttl_seconds=ttl)
+        row = db._rows(
+            "SELECT expires_at FROM mx_pairing_codes ORDER BY id DESC LIMIT 1"
+        )
+        expires_at = float(row[0]["expires_at"]) if row else time.time() + ttl
+        return JSONResponse({"code": code, "expires_at": expires_at})
+
+    @router.get("/admin/mx-ingest/devices")
+    async def admin_list_devices(
+        authorization: str | None = Header(None)
+    ) -> JSONResponse:
+        """设备清单（管理面）：id/name/revoked/时间戳 + 是否在线；
+        key_hash 绝不回传（哈希是验证面不是展示面）。"""
+        _admin_guard(authorization)
+        rows = db._rows(
+            "SELECT id, name, revoked, created_at, last_seen_at FROM mx_devices "
+            "ORDER BY id DESC LIMIT 500"
+        )
+        devices = [
+            {
+                "id": int(r["id"]),
+                "name": str(r.get("name") or ""),
+                "revoked": int(r.get("revoked") or 0),
+                "created_at": str(r.get("created_at") or ""),
+                "last_seen_at": str(r.get("last_seen_at") or ""),
+                "online": bool(gateway.live_connections.get(int(r["id"]))),
+            }
+            for r in rows
+        ]
+        return JSONResponse({"devices": devices})
+
+    @router.post("/admin/mx-ingest/devices/{device_id}/revoke")
+    async def admin_revoke_device(
+        device_id: int, authorization: str | None = Header(None)
+    ) -> JSONResponse:
+        """吊销设备：置 revoked + 存量连接即断（close 4003，user story 11）。"""
+        _admin_guard(authorization)
+        db.revoke_mx_device(device_id)
+        gateway.notify_revoked_devices(device_id)
+        return JSONResponse({"ok": True, "device_id": device_id})
 
     async def _connection_session(ws: WebSocket, device: dict) -> None:
         device_id = int(device["id"])
@@ -399,33 +549,6 @@ def build_ingest_router(
                     gateway.live_connections.pop(device_id, None)
             if disconnected:
                 _on_disconnect(device)
-
-    def _on_disconnect(device: dict) -> None:
-        """断连记录 + 超阈值告警（循系统通知 KOL 机制，阈值可配置）。
-
-        「断连超过阈值才告警」：阈值窗内同设备重复断连不重复告警；网络
-        抖动秒级重连不打扰。真断（行为器/采集器挂了）在阈值后才见告警。
-        """
-        device_id = int(device["id"])
-        try:
-            db.record_mx_ingest_event(device_id, "", "disconnect", "连接断开")
-        except Exception:
-            logger.debug("MX 云网关：断连事件记录失败（忽略）", exc_info=True)
-        if gateway.alert_publisher is None or not gateway.disconnect_alert_seconds:
-            return
-        now = time.monotonic()
-        last = _disconnect_alert_at.get(device_id, 0.0)
-        if now - last < gateway.disconnect_alert_seconds:
-            return
-        _disconnect_alert_at[device_id] = now
-        try:
-            gateway.alert_publisher(
-                "MX 采集器断连",
-                f"设备 {device.get('name') or device_id} 的采集连接已断开，"
-                "如非计划内请检查本地行为器/采集器状态。",
-            )
-        except Exception:
-            logger.debug("MX 云网关：断连告警发布失败（忽略）", exc_info=True)
 
     @router.websocket("/mx-ingest")
     async def mx_ingest(ws: WebSocket) -> None:
@@ -465,6 +588,8 @@ def build_gateway_app(
     on_external_post=None,
     alert_publisher=None,
     disconnect_alert_seconds: int | None = None,
+    admin_token: str = "",
+    api_base: str = "",
 ) -> FastAPI:
     """独立小 app（测试/内嵌用）：只含云网关路由。"""
     if disconnect_alert_seconds is None:
@@ -475,6 +600,8 @@ def build_gateway_app(
         on_external_post=on_external_post,
         alert_publisher=alert_publisher,
         disconnect_alert_seconds=disconnect_alert_seconds,
+        admin_token=admin_token,
+        api_base=api_base,
     )
     app.include_router(router)
     # 吊销回调挂 app.state：include_router 会复制路由、自定义属性不随行，
