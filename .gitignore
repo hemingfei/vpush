@@ -12,6 +12,7 @@ backups/
 .DS_Store
 .pi-subagents/
 .zcode/
+.zcodeignore
 .worktrees/
 .impeccable/
 work/ui-validation/kb-prod/
