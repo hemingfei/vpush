@@ -1345,6 +1345,10 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
 def test_holdings_kol_board_tabs_expand_sort(page: Page):
     """大V持股板块（工厂级打桩）：页顶 tab 切换、四榜渲染、行展开大V名单、chip 下钻开
     预估持仓抽屉（非整页）、窗口钮重拉、最近观点滑动栏筛选、清仓榜盈亏排序与割肉/止盈徽。"""
+    # 桩 last_at 是 2026-09-19 写死值，而最近观点滑块上限 30 天按真实墙钟算——
+    # 不 mock 时钟则日期越过 2026-10-19 后该用例必红（日期炸弹，2026-11-14 CI 实锤）。
+    # 装时钟到 2026-09-20 北京 00:00（UTC 09-19 16:00），与桩数据对齐（hdKolRecentPass 读页面 Date）。
+    page.clock.install(time=datetime(2026, 9, 19, 16, 0, tzinfo=UTC))
     page.evaluate("""async () => {
       const { createHoldingsView } = await import('/views/holdings.js');
       const { createMxKolHoldingsView } = await import('/views/mx-kol-holdings.js');
