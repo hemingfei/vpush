@@ -25,12 +25,15 @@ from app.config import Config
 from app.main import create_app
 
 
-def make_gateway(db_path=None, config=None):
+def make_gateway(db_path=None, config=None, ping_seconds=None):
     """造一个只含云网关的最小 FastAPI app + 共享 DB。
 
     不走完整 create_app（会拉起 NewsService/FeishuDocuments 等一堆无关
     服务）；云网关路由自包含（DB + 调度器回调），单测按需注入。
     路由注册进完整 create_app 的形态由 test_full_app_includes_gateway_route 覆盖。
+    ping_seconds：云端→扩展 ping 间隔（Q19 SW 保活用例用亚秒值测 cadence；
+    缺省 None=走 MX_INGEST_PING_SECONDS/15s 生产默认——短用例等不到首帧，
+    存量用例不受影响）。
     """
     from app.db import DB
     from app.services.mx_gateway import build_gateway_app
@@ -46,7 +49,9 @@ def make_gateway(db_path=None, config=None):
         ingested.append(post)
         return post_id
 
-    app = build_gateway_app(db, on_external_post=on_external_post)
+    app = build_gateway_app(
+        db, on_external_post=on_external_post, ping_seconds=ping_seconds
+    )
     return app, db, ingested
 
 
@@ -443,6 +448,137 @@ def test_lifecycle_events_recorded_and_reconnect_backfill_in_order():
             stop()
 
     asyncio.run(asyncio.wait_for(scenario(), timeout=30))
+
+
+# ---- 云端→扩展 ping（Q19 决策「15s ping 兼 SW 保活」）----
+# 协议契约钉死：ping 帧形状恰为 {"op":"ping"}——单向下发帧，无
+# seq/account/type 绝不是上行信封形态；扩展侧 sock.onmessage 对非
+# pair/auth 帧本就是 no-op（收到即达 MV3 SW 保活目的），测试从客户端
+# 面钉住形状与节奏，网关不得把它当信封处理。
+
+
+def test_ping_frames_sent_at_configured_interval():
+    """认证在线期间按配置间隔下发 {"op":"ping"}：帧形状契约 + 节奏可配。"""
+
+    async def scenario():
+        # 0.2s 亚秒间隔测 cadence（生产 15s；间隔参数化的意义所在，
+        # disconnect_alert_seconds 浮点参数同口径）
+        app, db, _ = make_gateway(ping_seconds=0.2)
+        port, stop = start_server(app)
+        try:
+            live = await pair_and_auth(port, db)
+            pings = []
+            t0 = time.monotonic()
+            while len(pings) < 3 and time.monotonic() - t0 < 4:
+                frame = await asyncio.wait_for(live.recv(), timeout=5)
+                pings.append((time.monotonic(), json.loads(frame)))
+            assert len(pings) == 3, f"0.2s 间隔应稳定收到 ping：{pings}"
+            # 契约：形状恰为 {"op":"ping"}（有 op 无 type，可区分于信封）
+            assert all(p[1] == {"op": "ping"} for p in pings), pings
+            # 节奏：3 帧跨 ≥2 个间隔（非一次性突发），单帧间隔 ≥ 半间隔
+            # （非背靠背风暴）
+            span = pings[2][0] - pings[0][0]
+            assert span >= 0.4 * 0.9, f"ping 突发（span={span}）而非按间隔下发"
+            gaps = [b[0] - a[0] for a, b in zip(pings, pings[1:])]  # noqa: RUF007
+            assert all(g >= 0.1 for g in gaps), f"间隔过密：{gaps}"
+            await live.close()
+        finally:
+            stop()
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=20))
+
+
+def test_ping_disabled_when_interval_zero():
+    """MX_INGEST_PING_SECONDS=0 / ping_seconds=0：不下发任何帧、不建任务。"""
+
+    async def scenario():
+        app, db, _ = make_gateway(ping_seconds=0)
+        port, stop = start_server(app)
+        try:
+            live = await pair_and_auth(port, db)
+            # 0.8s 静默窗（远超默认 15s 的首帧时点）：无任何下行帧
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(live.recv(), timeout=0.8)
+            # 任务注册表为空：间隔 0 压根不创建 ping 任务（不是建了不发）
+            assert app.state.mx_ingest_ping_tasks == set()
+            await live.close()
+        finally:
+            stop()
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=15))
+
+
+def test_ping_frames_do_not_disturb_ingest():
+    """ping 与上行信封共存：收帧循环 + ping 任务并行，入库照常不受打扰。"""
+
+    async def scenario():
+        app, db, ingested = make_gateway(ping_seconds=0.2)
+        make_room(db)
+        port, stop = start_server(app)
+        try:
+            live = await pair_and_auth(port, db)
+            envelope = {
+                "seq": 1,
+                "ts": int(time.time() * 1000),
+                "account": "main",
+                "type": "ws_in",
+                "payload": room_msg_frame(
+                    9101, '[{"type": "text", "msg": "ping 伴行入库"}]'
+                ),
+            }
+            await live.send(json.dumps(envelope, ensure_ascii=False))
+            assert await await_for(lambda: len(ingested) == 1), \
+                "ping 活跃期间上行帧未入库"
+            assert ingested[0].external_id == "9101"
+            # ping 伴行不停：入库后仍持续收到形状正确的 ping（服务端对信封
+            # 无响应帧，此处能收到的只可能是 ping）
+            frame = await asyncio.wait_for(live.recv(), timeout=5)
+            assert json.loads(frame) == {"op": "ping"}
+            await live.close()
+        finally:
+            stop()
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=30))
+
+
+def test_disconnect_still_recorded_with_pings_active():
+    """ping 活跃期间断开：断连事件照常记录 + ping 任务不跨连接泄漏。"""
+
+    async def scenario():
+        app, db, _ = make_gateway(ping_seconds=0.2)
+        port, stop = start_server(app)
+        try:
+            live = await pair_and_auth(port, db)
+            # 先证实 ping 任务在飞（收到一帧），再断开
+            frame = await asyncio.wait_for(live.recv(), timeout=5)
+            assert json.loads(frame) == {"op": "ping"}
+            await live.close()
+            # 标准断开路径必须照跑：disconnect 事件记录在案
+            assert await await_for(lambda: any(
+                e["event"] == "disconnect" for e in db.list_mx_ingest_events()
+            )), "ping 活跃时断连事件未记录"
+            # 断开 finally cancel+落账：注册表清空，无任务跨连接泄漏
+            assert await await_for(
+                lambda: app.state.mx_ingest_ping_tasks == set()
+            ), "ping 任务跨连接泄漏"
+        finally:
+            stop()
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=20))
+
+
+def test_ping_seconds_env_parsing(monkeypatch):
+    """MX_INGEST_PING_SECONDS：缺省 15 / 合法值生效 / 0=禁用 / 坏值回落。"""
+    from app.services.mx_gateway import PING_SECONDS, _ping_seconds_from_env
+
+    monkeypatch.delenv("MX_INGEST_PING_SECONDS", raising=False)
+    assert _ping_seconds_from_env() == PING_SECONDS == 15
+    monkeypatch.setenv("MX_INGEST_PING_SECONDS", "30")
+    assert _ping_seconds_from_env() == 30
+    monkeypatch.setenv("MX_INGEST_PING_SECONDS", "0")
+    assert _ping_seconds_from_env() == 0
+    monkeypatch.setenv("MX_INGEST_PING_SECONDS", "不合法")
+    assert _ping_seconds_from_env() == PING_SECONDS, "坏值必须回落默认"
 
 
 # ---- 生产组装形态：完整 create_app 挂载网关路由 ----

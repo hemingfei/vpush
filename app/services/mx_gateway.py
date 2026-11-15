@@ -18,6 +18,10 @@ header，故采用「连接后首帧认证」——
 
     {"op": "pair", "code": "8位配对码"}   → 一次性绑定：下发设备密钥，码作废
     {"op": "auth", "key": "设备密钥"}     → 设备密钥认证；吊销设备立即断开
+    {"op": "ping"}                       ← 网关→扩展周期下发（Q19 SW 保活），
+                                           无 seq/account/type 不是上行信封，
+                                           扩展侧 sock.onmessage 对非 pair/auth
+                                           帧本就是 no-op，收到即达保活目的
 
 配对码生成入口 = 管理面路由（本模块 build_ingest_router 内 POST
 /api/admin/mx-ingest/pairing-code，Bearer MX_INGEST_ADMIN_TOKEN 认证，
@@ -77,9 +81,30 @@ FUZZY_DEDUP_SIMILARITY = 0.90
 # MX_INGEST_DISCONNECT_ALERT_SECONDS 环境变量可调。
 DISCONNECT_ALERT_SECONDS = 300
 
+# 云端→扩展 ping 间隔（秒，Q19 决策「云端→扩展 15s ping 兼 SW 保活」）：
+# MV3 扩展 Service Worker 空闲约 30s 即被浏览器冻结（spec #14 已知坑），
+# 冻结后 chrome.debugger 事件断流=整台机器采集停摆。网关在设备认证在线
+# 期间每 15s 下发一帧 {"op":"ping"}，浏览器为处理入站消息会唤醒/续期 SW
+# （inbound WS 消息是官方文档明确的 SW 确认项），把 SW 生命周期对齐到
+# 连接生命周期。ping 是网关单向下发帧，非上行信封——无 seq/account/type，
+# 扩展侧 sock.onmessage 对非 pair/auth 帧本就是 no-op（契约已核实），
+# 收到即达成保活目的。MX_INGEST_PING_SECONDS 环境变量可调；0=禁用。
+PING_SECONDS = 15
+
 
 def _disconnect_alert_seconds_from_env(default: int = DISCONNECT_ALERT_SECONDS) -> int:
     raw = os.environ.get("MX_INGEST_DISCONNECT_ALERT_SECONDS", "").strip()
+    if not raw:
+        return default
+    try:
+        return max(int(float(raw)), 0)
+    except ValueError:
+        return default
+
+
+def _ping_seconds_from_env(default: int = PING_SECONDS) -> int:
+    """ping 间隔配置（与断连告警阈值同解析口径：坏值回落默认，0=禁用）。"""
+    raw = os.environ.get("MX_INGEST_PING_SECONDS", "").strip()
     if not raw:
         return default
     try:
@@ -172,6 +197,36 @@ class MxIngestGateway:
         self.db.touch_mx_device(device["id"])
         await ws.send_json({"ok": True})
         return device
+
+    # ---- 云端→扩展 ping（Q19 决策）----
+
+    async def send_pings(self, ws: WebSocket, interval: float) -> None:
+        """周期下发 {"op":"ping"}，直到发送失败/连接关闭自然退出。
+
+        SW 保活原理（模块头 PING_SECONDS 注释）：入站 WS 消息唤醒/续期
+        MV3 Service Worker。该协程只做「定时 send + 失败即收」，不做任何
+        连接登记/清理——send 抛异常（连接已断/正在关闭）时尽力 close，
+        让收帧循环的 receive_text 随即抛 WebSocketDisconnect 走标准断开
+        路径（finally 记录事件/告警/清注册表）；close 自身失败（已被
+        对端关闭等）也忽略。任务本身由 _connection_session 的 finally
+        cancel，绝不反噬收帧循环。
+        interval<=0 由调用方拦下，本方法不重复判断。
+        """
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await ws.send_json({"op": "ping"})
+            except Exception:
+                # 发送失败=连接已不可用：close 让标准断开路径跑（receive_text
+                # 随即抛 WebSocketDisconnect 记录断连事件/清注册表）
+                try:
+                    await ws.close()
+                except Exception:
+                    # close 自身失败（连接已被对端关闭等）按断连处理即可
+                    logger.debug(
+                        "MX 云网关：ping 失败后 close 失败（忽略）", exc_info=True
+                    )
+                return
 
     # ---- 帧处理 ----
 
@@ -361,6 +416,7 @@ def build_ingest_router(
     disconnect_alert_seconds: int | None = None,
     admin_token: str = "",
     api_base: str = "",
+    ping_seconds: float | None = None,
 ) -> APIRouter:
     """构造云网关 router（挂 /api/mx-ingest + 管理面，APIRouter prefix=/api）。
 
@@ -372,9 +428,13 @@ def build_ingest_router(
     存在性——mx_shot_token 同取舍：token 即凭据、泄露轮换即可）。
     api_base：帖子化链路用（T5）；缺省回落 MxConfig.api_base（与 fetchers
     同源配置，build_gateway_app 从 config 透传）。
+    ping_seconds：云端→扩展 ping 间隔（Q19 决策「15s ping 兼 SW 保活」）；
+    缺省读 MX_INGEST_PING_SECONDS 环境变量（默认 15 秒；0=禁用）。
     """
     if disconnect_alert_seconds is None:
         disconnect_alert_seconds = _disconnect_alert_seconds_from_env()
+    if ping_seconds is None:
+        ping_seconds = _ping_seconds_from_env()
     router = APIRouter(prefix="/api")
     gateway = MxIngestGateway(
         db,
@@ -383,6 +443,14 @@ def build_ingest_router(
         disconnect_alert_seconds=disconnect_alert_seconds,
         api_base=api_base,
     )
+    # ping 间隔（Q19）：router 级配置而非 gateway 实例属性——与 admin_token
+    # 同类（连接层行为参数），_connection_session 闭包直接取用。不取整：
+    # 测试用亚秒间隔验证 cadence（disconnect_alert_seconds 浮点参数同口径）
+    _ping_interval = max(float(ping_seconds or 0), 0.0)
+    # ping 任务注册表（leak 观测面）：每条已认证连接恰一个任务，断开的
+    # finally 里 cancel+落账；经 router 属性透出（mx_ingest_live_connections
+    # 同模式），测试断言「断开后无 ping 任务跨连接泄漏」
+    _ping_tasks: set[asyncio.Task] = set()
     # 吊销反向通知（T4 正式接线）：注册表在 gateway 实例上（build 每次调用
     # 新建 gateway，不用模块级全局——多 app 共存（测试/多实例）不串线）
     _disconnect_alert_at: dict[int, float] = {}
@@ -408,6 +476,7 @@ def build_ingest_router(
     router.mx_ingest_notify_revoked = notify_revoked_devices  # type: ignore[attr-defined]
     # 在线连接注册表同样透出（登录态管理面 /admin/mx-ingest/overview 的在线判定用）
     router.mx_ingest_live_connections = gateway.live_connections  # type: ignore[attr-defined]
+    router.mx_ingest_ping_tasks = _ping_tasks  # type: ignore[attr-defined]
 
     # ---- 断连告警：延迟检查 + 去重窗（S4）----
 
@@ -524,6 +593,14 @@ def build_ingest_router(
     async def _connection_session(ws: WebSocket, device: dict) -> None:
         device_id = int(device["id"])
         gateway.live_connections.setdefault(device_id, set()).add(ws)
+        # 云端→扩展 ping 任务（Q19 决策）：认证在线期间周期下发 {"op":"ping"}
+        # 兼 MV3 SW 保活（入站消息唤醒/续期 Service Worker）。ping 失败只在
+        # 任务内退出（send_pings 吞异常返回），绝不反噬收帧循环——下面的
+        # try/except/finally 收帧语义与 ping 引入前完全一致。
+        pinger = None
+        if _ping_interval > 0:
+            pinger = asyncio.create_task(gateway.send_pings(ws, _ping_interval))
+            _ping_tasks.add(pinger)
         disconnected = False
         try:
             while True:
@@ -544,6 +621,13 @@ def build_ingest_router(
         except WebSocketDisconnect:
             disconnected = True
         finally:
+            # 先撤 ping 任务再清注册表：cancel 后等它落地，确保无任务跨连接
+            # 泄漏（泄漏的 pinger 会对已关闭 ws 反复 send 失败——无害但脏）。
+            # asyncio.wait 不透传子任务异常/取消（gather 会 raise）。
+            if pinger is not None:
+                pinger.cancel()
+                await asyncio.wait({pinger})
+                _ping_tasks.discard(pinger)
             conns = gateway.live_connections.get(device_id)
             if conns is not None:
                 conns.discard(ws)
@@ -592,10 +676,13 @@ def build_gateway_app(
     disconnect_alert_seconds: int | None = None,
     admin_token: str = "",
     api_base: str = "",
+    ping_seconds: float | None = None,
 ) -> FastAPI:
     """独立小 app（测试/内嵌用）：只含云网关路由。"""
     if disconnect_alert_seconds is None:
         disconnect_alert_seconds = _disconnect_alert_seconds_from_env()
+    if ping_seconds is None:
+        ping_seconds = _ping_seconds_from_env()
     app = FastAPI()
     router = build_ingest_router(
         db,
@@ -604,9 +691,12 @@ def build_gateway_app(
         disconnect_alert_seconds=disconnect_alert_seconds,
         admin_token=admin_token,
         api_base=api_base,
+        ping_seconds=ping_seconds,
     )
     app.include_router(router)
     # 吊销回调挂 app.state：include_router 会复制路由、自定义属性不随行，
     # 管理端经 app.state 拿（生产 main.create_app 同样透传）
     app.state.mx_ingest_notify_revoked = router.mx_ingest_notify_revoked  # type: ignore[attr-defined]
+    # ping 任务注册表同样透出（观测面）：测试断言断开后无任务跨连接泄漏
+    app.state.mx_ingest_ping_tasks = router.mx_ingest_ping_tasks  # type: ignore[attr-defined]
     return app
