@@ -227,3 +227,40 @@ def test_probe_bad_json_is_port_closed():
             return "{not json"
 
     assert probe_health(config=_cfg(), fetch=_BadJson())["kind"] == "port_closed"
+
+
+# ---- tick 语义：agent 锁与端口真空的解耦（2026-11-15 演练实锤）----
+
+
+def test_tick_spawns_when_agent_lock_held_but_port_closed(monkeypatch, tmp_path):
+    """agent 锁被持 ≠ agent 有浏览器：端口空必须拉起（agent 下一 tick adopt）。
+
+    回归锁定：原实现「锁在即让位」导致采集宿主被杀后 9223 空转无人接管。
+    """
+    from scripts import mx_collector_guard as g
+
+    calls = []
+    monkeypatch.setattr(g, "agent_owns_port", lambda: True)
+    monkeypatch.setattr(
+        g, "probe_health", lambda config, fetch: {"kind": "port_closed"}
+    )
+    monkeypatch.setattr(g, "spawn_collector", lambda cfg: calls.append(cfg))
+    monkeypatch.setattr(g, "_log", lambda msg: None)
+    result = g.tick(_cfg(), fetch=_FakeFetch(fail=True))
+    assert result["spawned"] is True
+    assert len(calls) == 1
+
+
+def test_tick_stands_down_only_for_foreign_browser(monkeypatch):
+    """锁在 + 端口在但非本扩展宿主（agent branded 领地）→ 让位不碰。"""
+    from scripts import mx_collector_guard as g
+
+    calls = []
+    monkeypatch.setattr(g, "agent_owns_port", lambda: True)
+    monkeypatch.setattr(g, "probe_health", lambda config, fetch: {"kind": "foreign"})
+    monkeypatch.setattr(g, "spawn_collector", lambda cfg: calls.append(cfg))
+    monkeypatch.setattr(g, "_log", lambda msg: None)
+    result = g.tick(_cfg(), fetch=_FakeFetch())
+    assert result["kind"] == "foreign"
+    assert result["spawned"] is False
+    assert calls == []

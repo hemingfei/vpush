@@ -258,11 +258,17 @@ def _log(msg: str) -> None:
 
 
 def tick(config: CollectorConfig | None = None, *, fetch=_fetch) -> dict:
-    """单次守护决策（幂等；返回决策供 --validate/测试断言）。"""
+    """单次守护决策（幂等；返回决策供 --validate/测试断言）。
+
+    2026-11-15 演练实锤修正：agent 持锁 ≠ agent 有浏览器——采集宿主被杀后
+    agent 锁还活着（agent 进程没死，它只认「9223 上有 Chrome 就 adopt」，
+    不会自己拉起带扩展的宿主），原判定「锁在即让位」导致 9223 空转无人接管。
+    修正语义：锁被持有时仍须探端口——端口空一律拉起采集宿主（agent 下一
+    tick 自动 adopt 之，切房与采集同浏览器）；只有「端口在但非本扩展宿主」
+    才是 agent 自有 branded Chrome 的领地，让位不碰。
+    """
     config = config or load_collector_config()
-    if agent_owns_port():
-        _log("agent holds 9223 — collector host not managed this tick")
-        return {"kind": "agent_owns_port", "spawned": False}
+    agent_lock = agent_owns_port()
     health = probe_health(config=config, fetch=fetch)
     kind = health["kind"]
     if kind == "healthy":
@@ -275,12 +281,15 @@ def tick(config: CollectorConfig | None = None, *, fetch=_fetch) -> dict:
         )
         return {"kind": "mx_tab_missing", "spawned": False}
     if kind == "foreign":
+        # 端口被异种 Chrome 占（agent 自有 branded/pytest 残留/日常浏览器）：
+        # 绝不杀不抢（agent adopt 域 + 2026-11-15 事故教训）
         _log(
             f"WARN: port {config.cdp_port} held by a non-collector Chrome "
             "(no unpacked sw.js target) — not touching (agent/foreign "
             "browser domain)"
         )
         return {"kind": "foreign", "spawned": False}
+    # port_closed：无论 agent 锁状态，端口真空 = 采集宿主缺位 = 拉起
     spawn_collector(config)
     return {"kind": "port_closed", "spawned": True}
 
