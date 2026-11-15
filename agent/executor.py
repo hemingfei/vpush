@@ -92,20 +92,22 @@ def wait_cdp_port_open(*, port: int, timeout_seconds: float,
     参数全部注入（sleep/connect/poll），可纯单测/复现脚本复用：
     - sleep(seconds)；connect(port) → 成功返回、失败抛 OSError 的回调；
     - process_poll() → 浏览器进程退出码（None=存活）。
-    进程退出立即返回 False（启动即退，不用等满超时）。
+    进程退出先探端口再判死（2026-11-15 事故二次修复）：「转发 URL 给既有
+    实例后退出」时新进程会退，但端口上仍有活的既有 Chrome——先 connect
+    成功就按「可用」返回；探不到端口才按「启动即退」判失败。
     """
     deadline = timeout_seconds
     waited = 0.0
     while waited < deadline:
         sleep(0.5)
         waited += 0.5
-        if process_poll() is not None:
-            return False  # 浏览器启动即退：不再等
         try:
             connect(port)
             return True
         except OSError:
-            continue
+            pass
+        if process_poll() is not None:
+            return False  # 端口也探不到 + 进程已退：启动即退
     return False
 
 

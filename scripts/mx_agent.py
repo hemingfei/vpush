@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -45,6 +46,16 @@ def _load_env() -> None:
         load_dotenv(REPO / ".env")
     except ImportError:
         pass
+
+
+def _acquire_single_instance():
+    """单实例锁（data/agent/agent.lock；2026-11-15 事故修复：守护误判曾致
+    8 实例并存共抢 9223）。抢不到锁=已有实例，返回 None 由调用方退出。"""
+    from agent.single_instance import acquire_lock
+
+    data_raw = os.environ.get("MX_AGENT_DATA_DIR", "").strip()
+    data_dir = Path(data_raw) if data_raw else Path("data") / "agent"
+    return acquire_lock(data_dir / "agent.lock")
 
 
 def _build_components():
@@ -114,12 +125,23 @@ def main(argv=None) -> int:
     if args.validate:
         return _validate()
 
+    # 常驻模式才持单实例锁（诊断模式 --validate/--dump-config 不该占锁，
+    # 也不该被已有实例挡住——它们不碰浏览器不抢 9223）
+    lock = _acquire_single_instance()
+    if lock is None or not lock.held:
+        print("已有行为器实例在运行（agent.lock 被持有），本次启动退出", flush=True)
+        return 0
+
     config, _log, runner = _build_components()
     try:
         asyncio.run(runner.run())
     except KeyboardInterrupt:
         print("\n行为器停止（Ctrl+C）")
         return 0
+    finally:
+        from agent.single_instance import release_lock
+
+        release_lock(lock)
     return 0
 
 

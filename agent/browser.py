@@ -61,8 +61,18 @@ class BrowserRuntime:
         )
 
     async def start(self) -> None:
-        """干净启动专用 Chrome + connect_over_cdp 附着（spike 先例全链路）。"""
+        """开浏览器：先附着既有专用 Chrome（adopt），拿不到再干净启动。
+
+        adopt 优先（2026-11-15 事故根因修复）：9223 上已有本 profile 的
+        Chrome 时（上次会话残留/采集器仍连着），新 spawn 的 Chrome 只会把
+        URL 转发给既有实例即退出（「正在现有的浏览器会话中打开」）——
+        看门狗判「启动即退」每 30s 重试，就是疯狂开窗事故。既有的活着就
+        直接 connect_over_cdp 复用，spawn 只发生在端口真空时。
+        """
         if self._proc is not None:
+            return
+        adopted = await self._try_adopt()
+        if adopted:
             return
         self.executor.user_data_dir.mkdir(parents=True, exist_ok=True)
         err_path = self.executor.user_data_dir / "chrome_stderr.log"
@@ -93,17 +103,57 @@ class BrowserRuntime:
                 pass
             raise RuntimeError(f"Chrome 启动失败（CDP 端口未监听）stderr 尾部：{tail}")
 
+        await self._attach_cdp()
+
+    async def _try_adopt(self) -> bool:
+        """尝试附着既有专用 Chrome：端口通 + CDP 端点可用即复用。
+
+        任何失败（端口不通/CDP 握手失败）都返回 False 走干净启动——
+        adopt 是优化路径不是正确性前提。采集器也可能连着同一实例：
+        多 CDP 客户端并发连接是 CDP 原生支持的（每客户端独立 session）。
+        """
+        import socket
+
+        def _port_open() -> bool:
+            try:
+                with socket.create_connection(
+                        ("127.0.0.1", self.executor.cdp_port), timeout=0.5):
+                    return True
+            except OSError:
+                return False
+
+        if not await asyncio.to_thread(_port_open):
+            return False
+        try:
+            await self._attach_cdp()
+        except Exception:  # noqa: BLE001 - 端口在但 CDP 不可用（异种服务/半死）
+            logger.info("端口 %s 在但 CDP 附着失败，走干净启动", self.executor.cdp_port)
+            return False
+        logger.info("附着既有专用 Chrome（9223 存活实例复用）")
+        return True
+
+    async def _attach_cdp(self) -> None:
+        """connect_over_cdp 附着 + 拿首个页面（adopter 与 spawner 共用尾段）。"""
         from playwright.async_api import async_playwright
 
         self._pw = await async_playwright().start()
-        self._browser = await self._pw.chromium.connect_over_cdp(
-            self.executor.endpoint_url()
-        )
+        try:
+            self._browser = await self._pw.chromium.connect_over_cdp(
+                self.executor.endpoint_url()
+            )
+        except Exception:
+            await self._pw.stop()
+            self._pw = None
+            raise
         ctx = self._browser.contexts[0]
         self._page = ctx.pages[0] if ctx.pages else await ctx.new_page()
 
     async def stop(self) -> None:
-        """关浏览器（窗口结束/接力下线）；进程与 CDP 会话一并收。"""
+        """关浏览器（窗口结束/接力下线）；进程与 CDP 会话一并收。
+
+        adopt 来的实例（_proc=None）只断自己的 CDP 会话——进程可能仍被
+        采集器使用，不由行为器收尸（互不感知，ADR-0001）。
+        """
         if self._browser is not None:
             try:
                 await self._browser.close()
