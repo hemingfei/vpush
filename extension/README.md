@@ -157,6 +157,50 @@ Out of Scope 终端用户分发）：
   `<扩展ID>;<update_url>`；或 Chrome 企业策略模板 `ExtensionInstallForcelist`。
   配合自托管 update manifest。
 
+> **#22 会话裁定（2026-11-15）：上面两条路对运营方部署被否决**——CRX/
+> 组策略 force-install 会把 debugger 扩展装进运营者的**日常浏览器**，违背
+> ADR-0001「专用实例，不碰日常浏览器」红线。可长期存续的形态是**专用
+> Playwright Chromium 宿主**（持久 profile + `--load-extension`，配对态存
+> `chrome.storage.local` 重启免配对），平台已实证接受（真实 MX 会话在该
+> 宿主上连跑数日，2026-11-15 E2E）。宿主的进程守护见下节。
+
+## 采集宿主守护（#22 宿主守护，`scripts/mx_collector_guard.py`）
+
+采集器活在浏览器里——宿主死=采集死（#22 实锤：宿主随临时进程消失，生产
+断流 7 小时）。守护镜像 `scripts/mx_agent_guard.py` 的 schtasks 每分钟
+幂等模式，手动关浏览器/电脑重启后 ≤60s 自愈：
+
+1. **一次性注册计划任务**（与 MXAgentGuard 同款，开机自启由每分钟
+   cadence 覆盖，登录后首个 tick ≤60s）：
+
+   ```
+   schtasks /Create /TN "MXCollectorGuard" /SC MINUTE /MO 1 ^
+       /TR "wscript.exe \"C:\Users\hemin\Documents\vpush\scripts\mx_collector_guard.vbs\"" /F
+   ```
+
+2. **每分钟 tick 的判定顺序**（硬前提判定，不枚举进程——2026-11-15 事故
+   教训）：agent 单实例锁（`data/agent/agent.lock`）被活进程持有 → 9223
+   归 agent 管，本 tick 什么都不做；锁空闲 → CDP 探测 9223：有本扩展
+   `chrome-extension://*/sw.js` 目标 = 健康；端口不通 = 拉起（手动恢复
+   配方原样：Playwright Chromium + `--load-extension=extension/` + 持久
+   profile + 9223 + MX 首页）；端口被异种 Chrome 占（pytest 残留/日常
+   浏览器）= 只记告警**绝不动**；MX 标签没了 = 只告警（开页归 agent 的
+   browser_open 流，本守护只保宿主进程）。
+
+3. **配置旋钮**（`.env`，缺省即 2026-11-15 实证配方；干跑自检
+   `python scripts/mx_collector_guard.py --validate`）：
+   - `MX_COLLECTOR_CHROME_EXE`（默认探测 Playwright Chromium）
+   - `MX_COLLECTOR_PROFILE_DIR`（默认 `.scratch/mx-collector-profile`，
+     配对态/seq/缓冲都在这个 profile 的 `chrome.storage.local`，换目录
+     = 换设备 = 重新配对）
+   - `MX_COLLECTOR_EXTENSION_DIR`（默认 `extension/`）
+   - `MX_COLLECTOR_ORIGIN`（默认 `MX_LOGIN_ORIGIN` / 平台现域）
+   - `MX_COLLECTOR_CDP_PORT`（默认 9223，与 agent 同端口——adopter 语义：
+     切房与采集同一浏览器）
+
+日志：`data/collector_guard.log`（append-only，结构化一行一事件）、
+`data/collector_stdout.log`（浏览器进程输出）。
+
 ## 设计决策（spike 继承，不得回退）
 
 1. attach 过滤配置**每次事件时 `await` storage 读取**（顶层一次性读取在 SW
