@@ -257,36 +257,44 @@ class BrowserRuntime:
         )
 
     async def _expand_room_groups(self) -> None:
-        """展开侧栏全部折叠分组（幂等：只点「房间容器 0×0」的组）。
+        """恢复侧栏房间列表可见（幂等：只在列表 0×0 时触发一次 reload）。
 
-        纯 JS 单次求值（2026-11-15 实机 DOM：toggle 在 .group-header 里、
-        .group-rooms 在分组容器另一支，Playwright locator/xpath 组合容易
-        写错——JS 里用「最近同时包含两者的祖先」判定，结构容错）。
-        返回展开的组数（日志用）。
+        实机状态机（2026-11-15 CDP 实测，比首版认知深一层）：
+        - 折叠标志 {"0":false} 或「小窗口(<~1100 CSS px)隐藏列表后不自动
+          恢复」的粘滞态，症状都是 .group-rooms 0×0；
+        - 粘滞态下点 group-toggle 只翻转标志、列表**不显示**（0×0 不变），
+          toggle 点了会震荡（true→false→true）毫无效果；
+        - 唯一可靠恢复 = 持久化标志为 true 后 reload 页面（登录态在
+          localStorage，reload 无副作用）。
+        因此策略：把所有分组标志写 true → 若 rooms 仍 0×0 → reload 一次。
+        返回是否触发了 reload（日志用）。
         """
         page = self._page
-        expanded = await page.evaluate(
+        await page.evaluate(
             """() => {
-              let clicked = 0;
-              for (const toggle of document.querySelectorAll('.group-toggle')) {
-                // 最近公共祖先：toggle 的祖先里最小的同时含 .group-rooms 的元素
-                let anc = toggle.parentElement;
-                let rooms = null;
-                while (anc && !rooms) {
-                  rooms = anc.querySelector(':scope .group-rooms');
-                  if (!rooms) anc = anc.parentElement;
-                }
-                if (!rooms) continue;
-                const box = rooms.getBoundingClientRect();
-                if (box.width > 0 && box.height > 0) continue; // 已展开
-                toggle.click();
-                clicked += 1;
-              }
-              return clicked;
+              try {
+                const raw = localStorage.getItem('mx_web_room_group_open');
+                const state = raw ? JSON.parse(raw) : {};
+                for (const k of Object.keys(state)) state[k] = true;
+                state["0"] = true; // 默认分组兜底
+                localStorage.setItem('mx_web_room_group_open', JSON.stringify(state));
+              } catch { /* 坏值下次 reload 由站点自愈 */ }
+              return true;
             }"""
         )
-        if expanded:
+        rooms_box = await page.evaluate(
+            """() => {
+              const g = document.querySelector('.group-rooms');
+              if (!g) return null;
+              const b = g.getBoundingClientRect();
+              return {w: b.width, h: b.height};
+            }"""
+        )
+        if rooms_box is None or rooms_box.get("w", 0) == 0:
+            # 标志已 true 但列表仍不可见（粘滞隐藏态/小窗口史）：reload 恢复
+            await page.reload(wait_until="domcontentloaded")
+            await asyncio.sleep(3)  # SPA 首屏渲染
             import logging
 
-            logging.getLogger(__name__).info("展开折叠分组 %s 个", expanded)
+            logging.getLogger(__name__).info("房间列表不可见，已重载页面恢复（粘滞态）")
 
