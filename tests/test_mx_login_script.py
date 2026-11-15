@@ -3,8 +3,8 @@
 核心契约：
 - 登录/验证码请求与官方前端逐字段一致（URL、body 字段名、头形态）；
 - 密码与验证码答案绝不出现在任何输出/异常文本里；
-- 写回 API 模式只发 token（及探针触发的 api_base/ws_url 切换），走与后台
-  手粘相同的 PUT 端点。
+- 云端写回模式（--write api/config）已随 ADR-0001 退役：argparse 层
+  中文报错，不留静默死路径（#21）。
 """
 
 import base64
@@ -230,11 +230,9 @@ def test_probe_token_accepts_and_rejects():
     assert mx_login_script.probe_token("https://mx.test/business-api/5", "t", expired._session) is False
 
 
-def test_origin_and_ws_url_helpers():
+def test_origin_and_helpers():
     assert mx_login_script.api_base_of("https://mx.2026.foodtop1.com") == \
         "https://mx.2026.foodtop1.com/business-api/4"
-    assert mx_login_script.ws_url_of("https://x.test/business-api/4") == \
-        "wss://x.test/business-api/4"
     assert mx_login_script.resolve_origin(None, "https://a.test/business-api/4") == "https://a.test"
     assert mx_login_script.resolve_origin("https://b.test", "https://a.test/business-api/4") == "https://b.test"
     assert mx_login_script.mask("abcdefghijklmnop") == "abcd…mnop"
@@ -258,168 +256,74 @@ def test_business_base_of_handles_all_hosturl_forms():
     assert mx_login_script.business_base_of("/", origin) == f"{origin}/business-api/4"
 
 
-# ---- 写回 API ----
+# ---- 云端写回模式退役（#21：--write api/config 随 ADR-0001 收口） ----
 
-def _skip_url_gate(monkeypatch):
-    """push_via_api 的公网校验走真实 DNS/保留段判断，传输层测试直接放行。"""
-    import app.url_safety as url_safety_mod
-    monkeypatch.setattr(url_safety_mod, "is_safe_http_url", lambda _url: True)
+def test_write_api_mode_retired_argparse_rejects(monkeypatch, capsys):
+    """--write api：argparse 层中文报错（云端直连已随 ADR-0001 退役，
+    token 由本地行为器登录链路管理），绝不能走到登录/写回逻辑。"""
+    exploded = []
 
+    def _fail_login_flow(*_a, **_k):
+        exploded.append("run_login_flow 不应被调用")
 
-def test_fetch_current_mx_api_base_reads_production(monkeypatch):
-    """探针基线读取生产实况：登录 → GET sources/mx → 返回 api_base。"""
-    import httpx
+    def _fail_load_config(*_a, **_k):
+        exploded.append("load_config 不应被调用")
 
-    _skip_url_gate(monkeypatch)
-    monkeypatch.setenv("VPUSH_URL", "https://vpush.test")
-    monkeypatch.setenv("VPUSH_ADMIN_USER", "admin")
-    monkeypatch.setenv("VPUSH_ADMIN_PASSWORD", "vp-pw")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/auth/login":
-            return httpx.Response(200, json={"token": "bearer-t"})
-        assert request.headers["Authorization"] == "Bearer bearer-t"
-        return httpx.Response(200, json={
-            "api_base": "https://mx.2026.naaifu.cn/business-api/5 ",
-        })
-
-    base = mx_login_script.fetch_current_mx_api_base(
-        transport=httpx.MockTransport(handler))
-    # 尾空白清掉：探针/写回比较都基于归一化形态
-    assert base == "https://mx.2026.naaifu.cn/business-api/5"
-
-
-def test_fetch_current_mx_api_base_fails_soft(monkeypatch):
-    """读不到（凭据缺失/接口异常）返回 None 回落本地基线，绝不抛出。"""
-    _skip_url_gate(monkeypatch)
-    monkeypatch.setenv("VPUSH_URL", "https://vpush.test")
-    monkeypatch.delenv("VPUSH_ADMIN_USER", raising=False)
-
-    assert mx_login_script.fetch_current_mx_api_base() is None
-
-    import httpx
-    monkeypatch.setenv("VPUSH_ADMIN_USER", "admin")
-    monkeypatch.setenv("VPUSH_ADMIN_PASSWORD", "vp-pw")
-
-    def boom(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500)
-
-    assert mx_login_script.fetch_current_mx_api_base(
-        transport=httpx.MockTransport(boom)) is None
-
-
-def test_push_via_api_puts_token_only(monkeypatch):
-    import httpx
-
-    _skip_url_gate(monkeypatch)
-    seen = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen[request.url.path] = request
-        if request.url.path == "/api/auth/login":
-            assert json.loads(request.content) == {"username": "admin", "password": "vp-pw"}
-            return httpx.Response(200, json={"token": "bearer-t", "user": {}})
-        assert request.headers["Authorization"] == "Bearer bearer-t"
-        return httpx.Response(200, json={"ok": True})
-
-    transport = httpx.MockTransport(handler)
-    body = mx_login_script.push_via_api(
-        "https://vpush.test", "admin", "vp-pw", "new-mx-token", transport=transport,
-    )
-    assert body == {"token": "new-mx-token"}
-    put = seen["/api/admin/sources/mx"]
-    assert put.method == "PUT"
-    assert json.loads(put.content) == {"token": "new-mx-token"}
-
-
-def test_push_via_api_includes_switched_base(monkeypatch):
-    import httpx
-
-    _skip_url_gate(monkeypatch)
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/auth/login":
-            return httpx.Response(200, json={"token": "bearer-t"})
-        return httpx.Response(200, json={"ok": True})
-
-    body = mx_login_script.push_via_api(
-        "https://vpush.test", "admin", "pw", "tok",
-        api_base="https://alt.test/business-api/5",
-        ws_url="wss://alt.test/business-api/5",
-        transport=httpx.MockTransport(handler),
-    )
-    assert body["api_base"] == "https://alt.test/business-api/5"
-    assert body["ws_url"] == "wss://alt.test/business-api/5"
-
-
-def test_push_via_api_hot_apply_false_marks_body(monkeypatch):
-    """hot_apply=False：PUT body 带 hot_apply=false（无人值守回填——保存后由
-    Jenkins 重启容器生效），默认不带该键（与后台手粘同一条热应用链路）。"""
-    import httpx
-
-    _skip_url_gate(monkeypatch)
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/auth/login":
-            return httpx.Response(200, json={"token": "bearer-t"})
-        return httpx.Response(200, json={"ok": True})
-
-    body = mx_login_script.push_via_api(
-        "https://vpush.test", "admin", "pw", "tok",
-        transport=httpx.MockTransport(handler), hot_apply=False,
-    )
-    assert body["hot_apply"] is False
-
-
-def test_main_api_write_no_hot_apply_flag(monkeypatch, capsys):
-    """--no-hot-apply：api 写回落 hot_apply=False，输出与回调都说明待容器重启生效。"""
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
-    monkeypatch.setenv("MX_ACCOUNT", "acct")
-    monkeypatch.setenv("MX_PASSWORD", "pw")
-    monkeypatch.setenv("VPUSH_URL", "https://vpush.test")
-    monkeypatch.setenv("VPUSH_ADMIN_USER", "admin")
-    monkeypatch.setenv("VPUSH_ADMIN_PASSWORD", "vp-pw")
-    monkeypatch.delenv("MX_LOGIN_ORIGIN", raising=False)
-    fake = _fake_client_for_main([
-        {"code": 200, "token": "tok-defer", "hosturl": "", "info": None},
-    ])
-    monkeypatch.setattr(mx_login_script, "MXClient", lambda *a, **k: fake)
-    monkeypatch.setattr(mx_login_script, "probe_token", lambda *a, **k: True)
-    seen = {}
+    monkeypatch.setattr(mx_login_script, "run_login_flow", _fail_login_flow)
+    monkeypatch.setattr(mx_login_script, "MXClient", lambda *a, **k: None)
+    import app.config as config_mod
+    monkeypatch.setattr(config_mod, "load_config", _fail_load_config)
 
-    def fake_push(base_url, user, pw, token, **kwargs):
-        seen["hot_apply"] = kwargs.get("hot_apply")
-        return {"token": token, "hot_apply": False}
-
-    monkeypatch.setattr(mx_login_script, "push_via_api", fake_push)
-    monkeypatch.setattr(mx_login_script, "notify_vpush",
-                        lambda title, text: seen.setdefault("notify", (title, text)))
-
-    rc = mx_login_script.main(
-        ["--captcha-key", "kk-1", "--code", "9x6", "--write", "api", "--no-hot-apply"]
-    )
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert seen["hot_apply"] is False
-    assert "待容器重启生效" in out
-    assert "容器重启后冷启动生效" in seen["notify"][1]
-    assert "未热应用" in seen["notify"][1]
+    with pytest.raises(SystemExit) as exc_info:
+        mx_login_script.main(["--write", "api"])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "--write api 已退役" in err
+    assert "ADR-0001" in err
+    assert "本地行为器" in err
+    assert "print" in err
+    assert exploded == []
 
 
-def test_push_via_api_turnstile_hint(monkeypatch):
-    import httpx
+def test_write_config_mode_retired_argparse_rejects(monkeypatch, capsys):
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+    exploded = []
+    monkeypatch.setattr(mx_login_script, "run_login_flow",
+                        lambda *a, **k: exploded.append("不应登录"))
+    monkeypatch.setattr(mx_login_script, "MXClient", lambda *a, **k: None)
 
-    _skip_url_gate(monkeypatch)
+    with pytest.raises(SystemExit) as exc_info:
+        mx_login_script.main(["--write", "config"])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "--write config 已退役" in err
+    assert "本地行为器" in err
+    assert exploded == []
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(403, json={"detail": "人机验证失败，请重试"})
 
-    with pytest.raises(MXLoginError) as exc_info:
-        mx_login_script.push_via_api(
-            "https://vpush.test", "admin", "pw", "tok",
-            transport=httpx.MockTransport(handler),
-        )
-    assert "Turnstile" in str(exc_info.value)
+def test_write_mode_unknown_value_still_rejected(monkeypatch, capsys):
+    """非退役的未知取值仍报错（守卫兜底，防退役名单外混入新直写模式）。"""
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+    monkeypatch.setattr(mx_login_script, "MXClient", lambda *a, **k: None)
+
+    with pytest.raises(SystemExit) as exc_info:
+        mx_login_script.main(["--write", "bogus"])
+    assert exc_info.value.code == 2
+    assert "合法取值" in capsys.readouterr().err
+
+
+def test_retired_write_functions_removed():
+    """push_via_api / write_local_config / fetch_current_mx_api_base 连同
+    :385 的 `from app.db import Database` 死导入（app.db 类名是 DB，P1）一并
+    删除——模块上不留任何已删符号（防测试外的旧调用点静默 NameError）。"""
+    for name in ("push_via_api", "write_local_config", "fetch_current_mx_api_base",
+                 "ws_url_of"):
+        assert not hasattr(mx_login_script, name), f"已退役符号残留：{name}"
+    source = (REPO / "scripts" / "mx_login.py").read_text(encoding="utf-8")
+    assert "from app.db import" not in source
+    # 管理 API 调用体（docstring 的退役说明不含 http 调用形态）
+    assert "http.post" not in source and "http.put" not in source
 
 
 # ---- 无人值守：AI 视觉识码 ----
@@ -645,12 +549,6 @@ def test_notify_failure_feishu_webhook(monkeypatch):
     assert body["msg_type"] == "text" and "写回失败" in body["content"]["text"]
 
 
-def test_push_via_api_rejects_non_public_url():
-    with pytest.raises(MXLoginError) as exc_info:
-        mx_login_script.push_via_api("http://192.168.1.9:8000", "u", "p", "tok")
-    assert "公网" in str(exc_info.value)
-
-
 # ---- CLI 入口 ----
 
 def test_main_missing_credentials_exits(monkeypatch, capsys):
@@ -663,11 +561,12 @@ def test_main_missing_credentials_exits(monkeypatch, capsys):
 
 
 def test_main_auto_mode_prints_token_without_push(monkeypatch, capsys):
-    """auto 模式在无 VPUSH_URL 时退化为 print：只打印 token，不发管理请求。"""
+    """auto 模式（历史默认）现与 print 等价：只打印 token，绝不发管理请求
+    （云端写回已随 ADR-0001 退役）。VPUSH_URL 残留时也不得走任何写回。"""
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
     monkeypatch.setenv("MX_ACCOUNT", "acct")
     monkeypatch.setenv("MX_PASSWORD", "pw")
-    monkeypatch.delenv("VPUSH_URL", raising=False)
+    monkeypatch.setenv("VPUSH_URL", "https://vpush.test")  # 残留配置：auto 也不写回
     monkeypatch.delenv("MX_LOGIN_ORIGIN", raising=False)
     monkeypatch.setattr(mx_login_script, "run_login_flow",
                         lambda *a, **k: {"token": "tok-print-123456", "hosturl": "", "info": None})
@@ -680,6 +579,8 @@ def test_main_auto_mode_prints_token_without_push(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "tok-print-123456" in out
+    assert "已通过管理 API 写回" not in out
+    assert "已直写" not in out
 
 
 def _fake_client_for_main(payloads):

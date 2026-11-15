@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""MX 平台半自动换 TOKEN：拉验证码 → 人工/OCR 输码 → 登录 → 写回 vpush。
+"""MX 平台半自动换 TOKEN：拉验证码 → 人工/OCR 输码 → 登录 → 打印 token。
 
 用法（仓库根目录）：
-    python scripts/mx_login.py                 # 默认 --write auto，交互输验证码
+    python scripts/mx_login.py                 # 默认 --write auto（同 print），交互输验证码
     python scripts/mx_login.py --ocr           # ddddocr 自动识别验证码（需 pip install ddddocr）
-    python scripts/mx_login.py --write print   # 只打印/复制 token，手动粘后台
     # 两段式（外部识码 / 无交互终端）：
     python scripts/mx_login.py --show-captcha                    # 出验证码图 + captcha-key
     python scripts/mx_login.py --captcha-key <key> --code <答案>  # 用该答案直接登录
+
+云端写回模式（--write api / --write config）已随 ADR-0001 分层删除退役：云端
+不再直连 MX，`PUT /api/admin/sources/mx` 端点已不存在，token 由本地行为器
+（agent/login.py + 账号注册表）的登录链路管理。本脚本只保留登录引擎与
+print 输出，供人工兜底与两段式识码使用。
 
 凭据只从环境变量 / 根目录 .env 读取，源码、日志、文档不落任何凭据：
     MX_ACCOUNT / MX_PASSWORD          MX 平台账号密码（必填）
     MX_LOGIN_ORIGIN                   登录域名覆盖（默认取当前配置 api_base 的域名，
                                       平台换域名重定向时用它指定，如 https://mx.2026.foodtop1.com）
-    VPUSH_URL / VPUSH_ADMIN_USER / VPUSH_ADMIN_PASSWORD
-                                      --write api 模式写回 vpush 生产实例所需
-                                      （POST /api/auth/login + PUT /api/admin/sources/mx，
-                                      与后台手粘同一条热应用链路）。VPUSH_URL 未配置时
-                                      auto 模式退化为 print。
 
 防风控口径：请求走 app.fetchers.mx 的同一 impersonate 人格与 XHR 头形态；
 保持 2 天一次的人工低频轮换，不做无人值守自动定时登录（连续失败登录
@@ -54,6 +53,12 @@ DEFAULT_API_BASE = "https://mx.2026.foodtop1.com/business-api/4"
 # 登录的风控信号——命中即熔断本轮，剩余次数不烧，等人工处置
 _FATAL_LOGIN_MSG_MARKERS = ("密码", "账号", "锁定", "冻结", "封禁", "禁止", "不存在")
 
+# 云端写回模式退役口径（ADR-0001：云端直连已删除，token 由本地行为器管理）
+_WRITE_MODE_RETIRED_MSG = (
+    "--write {mode} 已退役：云端直连已随 ADR-0001 分层删除退役，"
+    "token 由本地行为器（agent）登录链路管理——请改用 --write print 取 token"
+)
+
 
 def mask(token: str) -> str:
     return f"{token[:4]}…{token[-4:]}" if len(token) > 12 else "***"
@@ -70,11 +75,6 @@ def resolve_origin(origin_arg: str | None, config_api_base: str) -> str:
 
 def api_base_of(origin: str) -> str:
     return f"{origin.rstrip('/')}/business-api/4"
-
-
-def ws_url_of(api_base: str) -> str:
-    scheme = "wss" if api_base.startswith("https://") else "ws"
-    return f"{scheme}://{api_base.split('://', 1)[1]}".rstrip("/")
 
 
 def business_base_of(cand: str, origin: str) -> str:
@@ -102,41 +102,6 @@ def probe_token(api_base: str, token: str, session) -> bool:
     if isinstance(info, dict) and info.get("code") not in (None, 200):
         return False
     return True
-
-
-def fetch_current_mx_api_base(transport=None) -> str | None:
-    """读生产实例当前存着的 MX api_base（--write api 模式的探针基线用）。
-
-    平台域名漂移时，要自愈的是「生产存的旧基址」，而不是本脚本的默认值——
-    用生产实况做基线，探针失败才会触发 hosturl 切换写回。读不到（凭据缺失/
-    网络抖动）返回 None，调用方回落本地基线，行为与旧版一致。
-    transport 供测试注入假传输层。"""
-    from app.url_safety import is_safe_http_url
-
-    base_url = (os.environ.get("VPUSH_URL") or "").strip().rstrip("/")
-    user = os.environ.get("VPUSH_ADMIN_USER") or ""
-    password = os.environ.get("VPUSH_ADMIN_PASSWORD") or ""
-    if not (base_url and user and password) or not is_safe_http_url(base_url):
-        return None
-    try:
-        import httpx
-
-        client_kwargs = {"base_url": base_url, "timeout": 30.0}
-        if transport is not None:
-            client_kwargs["transport"] = transport
-        with httpx.Client(**client_kwargs) as http:
-            resp = http.post("/api/auth/login",
-                             json={"username": user, "password": password})
-            if resp.status_code != 200:
-                return None
-            headers = {"Authorization": f"Bearer {resp.json()['token']}"}
-            resp = http.get("/api/admin/sources/mx", headers=headers)
-            if resp.status_code != 200:
-                return None
-            api_base = str(resp.json().get("api_base") or "").strip().rstrip("/")
-            return api_base or None
-    except Exception:  # noqa: BLE001 - 基线读取尽力而为，失败回落本地默认
-        return None
 
 
 def ocr_image(image_bytes: bytes) -> str | None:
@@ -227,7 +192,7 @@ def notify_vpush(title: str, text: str) -> None:
             hmac.new(f"{ts}\n{secret}".encode(), digestmod=hashlib.sha256).digest()
         ).decode()
         body = json.dumps({"title": title, "text": text, "timestamp": ts, "sign": sign},
-                           ensure_ascii=False).encode()
+                          ensure_ascii=False).encode()
         with httpx.Client() as client:
             safe_request_limited(client, "POST", url, max_bytes=65536,
                                  headers={"Content-Type": "application/json"},
@@ -324,76 +289,6 @@ def run_login_flow(client, account: str, password: str, *, attempts: int = 3,
     raise MXLoginError(f"连续 {attempts} 次未成功：{last_err or '未识别出验证码'}")
 
 
-# ---- token 写回 ----
-
-def _push_detail(exc_response) -> str:
-    try:
-        detail = exc_response.json().get("detail") or exc_response.text[:200]
-    except Exception:  # noqa: BLE001
-        detail = exc_response.text[:200]
-    return str(detail)
-
-
-def push_via_api(base_url: str, admin_user: str, admin_password: str,
-                 new_token: str, api_base: str | None = None,
-                 ws_url: str | None = None, transport=None,
-                 hot_apply: bool = True) -> dict:
-    """登录 vpush 管理 API 并 PUT 新 token。默认与后台手粘完全同一条热应用链路；
-    hot_apply=False 时 body 带 hot_apply=false 只保存不热应用——由调用方重启
-    容器冷启动生效（Jenkins 无人值守回填口径）。
-    VPUSH_URL 须为公网 http(s) 地址（安全体拒绝内网/环回）；transport 供测试注入。"""
-    from app.url_safety import is_safe_http_url
-
-    if not is_safe_http_url(base_url.rstrip("/")):
-        raise MXLoginError(f"VPUSH_URL 不是安全的公网地址：{base_url}")
-    import httpx
-
-    client_kwargs = {"base_url": base_url.rstrip("/"), "timeout": 30.0}
-    if transport is not None:
-        client_kwargs["transport"] = transport
-    with httpx.Client(**client_kwargs) as http:
-        resp = http.post("/api/auth/login",
-                         json={"username": admin_user, "password": admin_password})
-        if resp.status_code == 403 and "人机验证" in resp.text:
-            raise MXLoginError(
-                "vpush 已开启 Turnstile 人机验证，API 登录不可用；"
-                "请改用 --write print 取 token 后到后台手粘"
-            )
-        if resp.status_code != 200:
-            raise MXLoginError(f"vpush 管理登录失败：{_push_detail(resp)}")
-        headers = {"Authorization": f"Bearer {resp.json()['token']}"}
-
-        body = {"token": new_token}
-        if api_base and ws_url:
-            body["api_base"] = api_base
-            body["ws_url"] = ws_url
-        if not hot_apply:
-            body["hot_apply"] = False
-        resp = http.put("/api/admin/sources/mx", headers=headers, json=body)
-        if resp.status_code != 200:
-            raise MXLoginError(f"写入 MX 配置失败：{_push_detail(resp)}")
-    return body
-
-
-def write_local_config(new_token: str, api_base: str | None = None,
-                       ws_url: str | None = None) -> str:
-    """直写本机 config.yaml + DB（同机部署且不方便走 API 时用）。
-
-    注意：不经服务进程，运行中的服务不会热应用——需重启，或到后台点「登录」。
-    """
-    from app.config import load_config, save_config
-    from app.db import Database
-
-    config = load_config()
-    config.sources.mx.token = new_token
-    if api_base and ws_url:
-        config.sources.mx.api_base = api_base
-        config.sources.mx.ws_url = ws_url
-    save_config(config)
-    Database(config.db_path).set_setting("mx_token_updated_at", str(int(time.time())))
-    return os.environ.get("CONFIG_PATH") or "config.yaml"
-
-
 def copy_to_clipboard(text: str) -> bool:
     """Windows clip 最佳努力复制（token 通常为 ASCII）。"""
     if os.name != "nt":
@@ -420,10 +315,28 @@ def _present_captcha(image_bytes: bytes) -> str:
     return f"{path} {hint}"
 
 
+class _RetiredWriteAction(argparse.Action):
+    """--write 的取值守卫：不在 argparse choices 里写死合法值——已退役的
+    api/config 由本守卫显式给中文报错（否则 argparse 的英文 invalid choice
+    会先于守卫触发），auto/print 照常通过。"""
+
+    _RETIRED = ("api", "config")
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if values in self._RETIRED:
+            parser.error(_WRITE_MODE_RETIRED_MSG.format(mode=values))
+        if values not in ("auto", "print"):
+            parser.error(f"--write 的合法取值：auto / print（收到：{values}）")
+        setattr(namespace, self.dest, values)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="MX 平台半自动换 TOKEN")
-    parser.add_argument("--write", choices=["auto", "api", "config", "print"], default="auto",
-                        help="写回方式：auto=有 VPUSH_URL 走 api 否则 print")
+    parser.add_argument("--write", default="auto", action=_RetiredWriteAction,
+                        metavar="{auto,print}",
+                        help="输出方式：auto=同 print（历史默认值，云端写回已随"
+                             " ADR-0001 退役，token 由本地行为器登录链路管理）；"
+                             "api/config 已退役，传入即显式报错")
     parser.add_argument("--origin", default=None, help="登录域名覆盖（平台换域名时用）")
     parser.add_argument("--ocr", action="store_true",
                         help="ddddocr 自动识别验证码（平台 SVG 码暂无效，需栅格化）")
@@ -431,9 +344,6 @@ def main(argv=None) -> int:
                         help="无人值守：视觉模型自动识别验证码"
                              "（需 MX_VISION_* 或 LLM_* 指向具备视觉能力的模型）")
     parser.add_argument("--attempts", type=int, default=3, help="验证码重试次数（默认 3）")
-    parser.add_argument("--no-hot-apply", action="store_true",
-                        help="写回只保存不热应用（Jenkins 无人值守用：写回后由流水线"
-                             "重启 vpush 容器冷启动生效，避免写回链路立刻登录）")
     parser.add_argument("--show-captcha", action="store_true",
                         help="只拉一张验证码并出图/题面与 captcha-key（配合两段式），无需账密")
     parser.add_argument("--captcha-key", default=None,
@@ -510,15 +420,8 @@ def main(argv=None) -> int:
     new_token = result["token"]
     print(f"✓ 登录成功，新 TOKEN：{mask(new_token)}（hosturl：{result['hosturl'] or '未下发'}）")
 
-    # 探针基线：--write api 模式优先读生产实例实际存的 api_base——平台域名漂移
-    # 时要自愈的是生产存的旧基址（本地默认值探针必过，永远发现不了漂移）
-    prod_api_base = fetch_current_mx_api_base() if os.environ.get("VPUSH_URL") else None
-    if prod_api_base and prod_api_base != current_api_base:
-        print(f"！生产实例当前 api_base：{prod_api_base}（本地基线：{current_api_base}），按生产实况探针")
-        current_api_base = prod_api_base
     # 探针：新 token 在当前 api_base 不行时，按 hosturl/登录域名切换（官方登录后
-    # 也会按 hosturl 切业务域）。切换信息会随写回一并下发。探针复用登录会话，
-    # 全部结束后再统一关闭。
+    # 也会按 hosturl 切业务域）。探针复用登录会话，全部结束后再统一关闭。
     switch_base = None
     if not probe_token(current_api_base, new_token, client._session):
         candidates = []
@@ -533,54 +436,18 @@ def main(argv=None) -> int:
         if switch_base:
             print(f"！当前 api_base 不可用，切换为 {switch_base}")
         else:
-            print("⚠ 探针全部失败：token 仍会写回，但可能需要检查 api_base 域名")
+            print("⚠ 探针全部失败：token 仍会打印，但可能需要检查 api_base 域名")
     client.close()
 
-    mode = args.write
-    if mode == "auto":
-        mode = "api" if os.environ.get("VPUSH_URL") else "print"
-    try:
-        if mode == "api":
-            body = push_via_api(
-                os.environ["VPUSH_URL"],
-                os.environ["VPUSH_ADMIN_USER"],
-                os.environ["VPUSH_ADMIN_PASSWORD"],
-                new_token,
-                api_base=switch_base,
-                ws_url=(ws_url_of(switch_base) if switch_base else None),
-                hot_apply=not args.no_hot_apply,
-            )
-            print(f"✓ 已通过管理 API 写回（键：{sorted(body)}），"
-                  + ("服务已热应用" if not args.no_hot_apply
-                     else "未热应用，待容器重启生效"))
-            notify_vpush(
-                "MX TOKEN 已更换",
-                f"新 TOKEN {mask(new_token)} 已写回生产"
-                + ("并热应用" if not args.no_hot_apply
-                   else "（未热应用，容器重启后冷启动生效）")
-                + (f"，api_base 切换为 {switch_base}" if switch_base else "")
-                + f"（hosturl：{result['hosturl'] or '未下发'}）",
-            )
-        elif mode == "config":
-            path = write_local_config(new_token, switch_base,
-                                      ws_url_of(switch_base) if switch_base else None)
-            print(f"✓ 已直写 {path}；运行中的服务不热应用——重启或在后台点「登录」")
-            notify_vpush(
-                "MX TOKEN 已更换",
-                f"新 TOKEN {mask(new_token)} 已直写 {path}"
-                + (f"，api_base 切换为 {switch_base}" if switch_base else "")
-                + "；需重启或后台点「登录」热应用",
-            )
-        else:
-            print(f"\nTOKEN（已复制到剪贴板可直接粘贴）：\n{new_token}\n")
-            copy_to_clipboard(new_token)
-    except KeyError as exc:
-        print(f"缺少环境变量 {exc}（--write api 需要 VPUSH_URL / VPUSH_ADMIN_USER / VPUSH_ADMIN_PASSWORD）")
-        return 2
-    except MXLoginError as exc:
-        print(f"✗ {exc}")
-        notify_failure(f"写回失败：{exc}")
-        return 1
+    print(f"\nTOKEN（已复制到剪贴板可直接粘贴）：\n{new_token}\n")
+    copy_to_clipboard(new_token)
+    notify_vpush(
+        "MX TOKEN 已更换",
+        f"新 TOKEN {mask(new_token)} 登录成功"
+        + (f"，可用 api_base 切换为 {switch_base}" if switch_base else "")
+        + f"（hosturl：{result['hosturl'] or '未下发'}；云端写回已随 ADR-0001 退役，"
+          "token 请交本地行为器登录链路使用）",
+    )
     return 0
 
 

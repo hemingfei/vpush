@@ -4,10 +4,16 @@
 > 所述云端自动换 TOKEN（原 `app/services/mx_auto_renew.py` / MxAutoRenewer +
 > scheduler 接线）已随 ADR-0001 分层删除（云端直连链路退役，见
 > `docs/adr/0001-local-dual-component-capture.md`）一并退役，触发点
-> （WS 风暴/永久放弃）已不存在；本脚本的手动换 token 与 Jenkins
-> `vpush-mx-token` 任务（mx-shot 等旁路功能依赖）不受影响，照常使用。
+> （WS 风暴/永久放弃）已不存在；本脚本的手动换 token 不受影响，照常使用。
 
-> `python scripts/mx_login.py` —— 拉验证码 → 人工/OCR 输码 → 登录 → 写回 vpush。
+> **2026-11-15 注（#21）**：云端写回模式 `--write api` / `--write config`
+> 已随 ADR-0001 分层删除退役——`PUT /api/admin/sources/mx` 端点已不存在，
+> config 直写的 `token`/`ws_url` 字段也已删。argparse 传入即中文报错；本脚本
+> 只保留登录引擎与 print 输出，token 由本地行为器（agent）登录链路管理。
+> 下文第三节「写回三模式」及第六节的 `--no-hot-apply`/`VPUSH_URL` 写回链路
+> 为历史记录，已按退役口径标注（~~删除线~~段）。
+
+> `python scripts/mx_login.py` —— 拉验证码 → 人工/OCR 输码 → 登录 → 打印 token。
 > 取代旧流程「浏览器登录 → F12 抠 token → 后台手粘」，把每次换 token 的成本
 > 从几分钟降到约 15 秒（输一次验证码）。
 >
@@ -32,7 +38,7 @@
 ## 二、用法
 
 ```bash
-# 常规（交互输验证码；--write auto：有 VPUSH_URL 走 api，否则 print）
+# 常规（交互输验证码；--write auto 同 print：登录后打印 token）
 python scripts/mx_login.py
 
 # ddddocr 自动识别（可选依赖：pip install ddddocr）。注意：平台实测（2026-09-29）
@@ -54,15 +60,17 @@ python scripts/mx_login.py --captcha-key <key> --code <答案>   # 用该答案�
 |---|---|
 | `MX_ACCOUNT` / `MX_PASSWORD` | MX 平台账密（必填） |
 | `MX_LOGIN_ORIGIN` | 登录域名覆盖 |
-| `VPUSH_URL` / `VPUSH_ADMIN_USER` / `VPUSH_ADMIN_PASSWORD` | `--write api` 推送凭据 |
 
-## 三、写回三模式
+（原 `VPUSH_URL` / `VPUSH_ADMIN_USER` / `VPUSH_ADMIN_PASSWORD` 为 `--write api`
+推送凭据，随该模式退役不再使用。）
+
+## 三、写回模式（#21 退役后仅剩 print）
 
 | 模式 | 行为 | 适用 |
 |---|---|---|
-| `api`（auto 默认尝试） | `POST /api/auth/login` + `PUT /api/admin/sources/mx`——与后台手粘**完全同一条热应用链路**（触发 `on_mx_config_changed` 重建抓取器/重启 WS）；`--no-hot-apply` 时 body 带 `hot_apply=false` 只保存不热应用，由调用方重启容器生效 | 生产开了 Turnstile 时会被 403，回落 print |
-| `config` | 直写本机 `config.yaml` + DB `mx_token_updated_at` | 与服务同机且不便走 API；**不热应用**，需重启或后台点「登录」 |
-| `print` | 打印完整 token（Windows 顺带复制剪贴板） | 兜底，手粘后台 |
+| `print`（auto 同） | 打印完整 token（Windows 顺带复制剪贴板） | 兜底，手粘后台 / 交本地行为器 |
+| ~~`api`~~（已退役） | 原走 `PUT /api/admin/sources/mx` 管理链路——端点已随 ADR-0001 分层删除 | argparse 传入即报错 |
+| ~~`config`~~（已退役） | 原直写本机 `config.yaml`（token/ws_url 字段已删） | argparse 传入即报错 |
 
 ## 四、登录协议事实（2026-09-29 前端 bundle 静态分析）
 
@@ -78,43 +86,50 @@ python scripts/mx_login.py --captcha-key <key> --code <答案>   # 用该答案�
 - **域名轮转**：2026-09-29 实测根域 `mx.2026.naaifu.cn` 已变为跳转页，指向
   `mx.2026.foodtop1.com`。脚本登录后用官方冷启动的 `user/info` 只读探针验证
   新 token 在当前 `api_base` 是否可用；不可用时按 `hosturl` / 登录域名探测
-  切换 `api_base`/`ws_url`（保持 `/business-api/5` 后缀），并随写回一并下发。
+  切换探针基址（历史版本会随写回一并下发 `api_base`/`ws_url`，#21 退役后
+  只打印探测结果）。
 
 ## 五、实现与测试
 
 - 核心：`app/fetchers/mx/login.py`（`fetch_captcha` / `classify_captcha` /
   `rasterize_svg` / `login`，`MXLoginError` 只带平台 msg，绝不拼接请求体）。
-- CLI：`scripts/mx_login.py`（`run_login_flow` 重试循环、探针与切换、三模式写回）。
+- CLI：`scripts/mx_login.py`（`run_login_flow` 重试循环、探针与切换、print 输出；
+  云端写回已退役）。
 - 测试：`tests/test_mx_login_script.py`——协议字段逐项断言、密码不进任何
-  输出/异常文本、写回 body 只含 token（及探针触发的 api_base/ws_url）、
-  Turnstile 403 提示、两段式两条命令。
+  输出/异常文本、退役模式 argparse 中文报错、两段式两条命令。
 
-## 六、无人值守（Jenkins 定时 + AI 视觉识码）
+## 六、无人值守（Jenkins 定时 + AI 视觉识码）——写回链路已随 #21 退役
+
+> **2026-11-15 注**：本节所述 Jenkins `vpush-mx-token` 定时任务（`--ai-ocr
+> --no-hot-apply` + `VPUSH_URL` 管理 API 写回 + `docker restart vpush`）为
+> 历史记录——`--no-hot-apply` 选项与 `VPUSH_*` 写回凭据已随 #21 移除，云端
+> 直连删除后 vpush 也不再用 MX token 直连（token 由本地行为器管理）。
+> 识码引擎（`--ai-ocr` 视觉识码、探针、webhook 告警）仍在 agent 无人值守
+> 登录链路中复用，保留备查。
 
 架构：Jenkins 定时触发（每 2 天）→ `docker run python:3.12-slim` 内
 `pip install -r requirements.txt` → `python scripts/mx_login.py --ai-ocr
---no-hot-apply --origin https://mx.2026.foodtop1.com` → SVG 验证码经 resvg-py
+--origin https://mx.2026.foodtop1.com` → SVG 验证码经 resvg-py
 栅格化 → 视觉模型（OpenAI 兼容，`MX_VISION_*` 三键，须具备视觉能力）识码 →
-登录 → 探针校验 → `VPUSH_URL` 管理 API 自动写回（`--no-hot-apply`：只保存
-不热应用）→ 写回成功后流水线在宿主机 `docker restart vpush` 冷启动生效。
+登录 → 探针校验 → ~~`VPUSH_URL` 管理 API 自动写回~~（已退役，token 只打印）。
 失败（识码连续错/接口异常）退出码非 0，Jenkins 标红；配了
 `BARK_*`/`FEISHU_WEBHOOK_URL` 时脚本还会直接推告警（webhook 走
 `app.url_safety` 安全体，仅公网地址）。
 
-**写回后重启而非热应用（2026-09-29 起）**：无人值守写回带 `hot_apply=false`
+~~**写回后重启而非热应用（2026-09-29 起）**：无人值守写回带 `hot_apply=false`
 （端点默认热应用，仅脚本显式关闭）——vpush 只保存新 token，随后流水线在
 宿主机 `docker restart vpush`（容器名以 `docker ps` 为准）冷启动生效。
 重启落在工作日 08:00-22:00 且 TOKEN 未超 49h 时效门槛时，窗口循环 30s 内
 自动补登一次（官方冷启动序列 + 新 token）；周末/超龄则等下个运行时段。
 若重启步骤失败：新 token 已落盘但运行中的服务仍持旧 token（内存态），
-下次服务重启生效；急用可到后台重存一次配置立即热应用，或手动「登录」。
+下次服务重启生效；急用可到后台重存一次配置立即热应用，或手动「登录」。~~
 
 凭据全部放 Jenkins 凭据库（Secret Text），仓库与聊天不落任何凭据：
 `mx-account`、`mx-password`、`mx-vision-api-base`、`mx-vision-api-key`、
-`mx-vision-model`、`vpush-url`、`vpush-admin-user`、`vpush-admin-password`、
-`mx-notify-webhook-url`、`mx-notify-webhook-secret`。
+`mx-vision-model`、~~`vpush-url`、`vpush-admin-user`、`vpush-admin-password`~~
+（写回凭据已随退役移除）、`mx-notify-webhook-url`、`mx-notify-webhook-secret`。
 
-**结果回调**：脚本自身在成功（token 写回完成）与失败（登录熔断/写回失败）时
+**结果回调**：脚本自身在成功（token 打印）与失败（登录熔断）时
 回调 vpush 的 KOL webhook（`MX_NOTIFY_WEBHOOK_URL`/`_SECRET`，飞书同款签名
 `sign = base64(hmac_sha256(key="{ts}\n{secret}))`，走 url_safety 安全体）——
 Jenkins 凭据注入后即推到订阅了该 KOL 的手机。未配置时失败回落 Bark/飞书。
@@ -127,12 +142,12 @@ Jenkins 凭据注入后即推到订阅了该 KOL 的手机。未配置时失败�
 - 视觉模型有误读率（实测约一成），单次失败属正常，靠重试与告警兜底；
 - 登录请求与现网同一 Chrome impersonate 人格与头形态（见第四节）。
 
-基础设施现状（2026-09-29 搭建，jenkins.hegame.tech）：任务 `vpush-mx-token`
+~~基础设施现状（2026-09-29 搭建，jenkins.hegame.tech）：任务 `vpush-mx-token`
 照本 Jenkins 家规实现——流水线内 `ssh root@172.22.0.1` 到宿主机，curl 拉
 仓库 tarball 后 `docker run python:3.12-slim` 执行；随「写回后重启」口径，
 任务需同步两处：脚本命令追加 `--no-hot-apply`，`docker run` 退出码 0 后
 同一 ssh 会话追加 `docker restart vpush`（重启失败跟随该 stage 标红，
-token 已落盘不丢）。凭据由 Jenkins
+token 已落盘不丢）。~~凭据由 Jenkins
 credentials() 注入、经 stdin 写宿主机临时 env-file 交给
 `docker run --env-file`（不落在进程命令行），跑完即删。**不要**在流水线
 environment 块里覆写 PATH 指向 /var/jenkins_home/bin 再直接调 docker——
@@ -140,9 +155,9 @@ environment 块里覆写 PATH 指向 /var/jenkins_home/bin 再直接调 docker�
 定时 `30 8 1,3,5,...,29 * *`（隔天 8:30 固定触发）+ 流水线首阶段
 **真随机延迟 0–30 分钟**（`/dev/urandom` 取秒数，每次执行点都不同，实际落在
 8:30–9:00 窗口内）；手动「立即构建」自动跳过延迟（按构建原因识别
-TimerTrigger）。总超时 40 分钟容纳 sleep。构建保留 30 次。8 个 Secret Text
+TimerTrigger）。总超时 40 分钟容纳 sleep。构建保留 30 次。~~8 个 Secret Text
 凭据：mx-account / mx-password / mx-vision-{base,key} / mx-vision-model /
-vpush-{url,admin-user,admin-password}。
+vpush-{url,admin-user,admin-password}。~~
 
 **pip 缓存挂载（2026-10-09 起）**：任务里的 `docker run` 追加
 `-v /root/workspace/mx-pipcache:/root/.cache/pip`——缓存目录刻意放在 `$D`
