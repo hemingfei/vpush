@@ -59,7 +59,7 @@ jobs:
               fi
               while IFS= read -r file; do
                 case "${file}" in
-                  app/*|tests/*|scripts/*|requirements.txt|requirements-test.txt|Dockerfile|docker-compose.yml|docker-compose.prod.yml|docker-compose.unraid.yml|.dockerignore|pyproject.toml|.github/workflows/docker-publish.yml)
+                  app/*|agent/*|tests/*|scripts/*|requirements.txt|requirements-test.txt|Dockerfile|docker-compose.yml|docker-compose.prod.yml|docker-compose.unraid.yml|.dockerignore|pyproject.toml|.github/workflows/docker-publish.yml)
                     python=true
                     ;;
                   waf-bot/*)
