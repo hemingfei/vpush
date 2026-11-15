@@ -2936,8 +2936,6 @@ pre.content-cell { white-space: pre-wrap; overflow-wrap: break-word; min-width: 
 .mx-raw-empty { margin: 0; }
 
 /* ---------- MX 管理面板（数据源页 st-mx） ---------- */
-.mx-config-actions { margin-top: 16px; }
-#mx-ws-status { margin-top: 12px; }
 .mx-rooms-head-actions { margin-top: 12px; }
 .mx-rooms-enabled-only { margin-left: 8px; }
 #mx-rooms-list { margin-top: 16px; }

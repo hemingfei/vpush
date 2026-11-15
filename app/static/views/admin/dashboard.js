@@ -315,70 +315,9 @@ export function createAdminDashboardView(dependencies) {
     <div id="st-mx" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-mx" style="display:none">
       <section class="section-panel">
         <header class="section-head">
-          <div><h2 class="section-title">MX平台配置</h2>
-          <p class="section-meta">配置 MX 平台的 API Token、同步和 WebSocket 推送。</p>
-          <p class="section-meta" id="mx-token-updated" style="display:none"></p></div>
+          <div><h2 class="section-title">MX平台</h2>
+          <p class="section-meta">MX 数据源已改为本地采集架构（ADR-0001）：本地真实浏览器 + 采集器扩展经 wss 上行云网关，此处仅管理房间与采集设备。</p></div>
         </header>
-        <div class="cfg-grid">
-          <div class="cfg-group">
-            <p class="cfg-group-title">基础设置</p>
-            <div class="cfg-fields">
-              <label class="cfg-field cfg-check">
-                <input id="mx-enabled" type="checkbox">
-                <span class="cfg-flag-text">启用 MX 平台</span>
-              </label>
-              <label class="cfg-field">
-                <span>API Token</span>
-                <input id="mx-token" type="text" class="form-control" placeholder="输入 MX API Token">
-              </label>
-              <label class="cfg-field">
-                <span>API 地址</span>
-                <input id="mx-api-base" type="text" class="form-control" placeholder="https://mx.2026.naaifu.cn/business-api/5">
-              </label>
-            </div>
-          </div>
-          <div class="cfg-group">
-            <p class="cfg-group-title">WebSocket 推送</p>
-            <div class="cfg-fields">
-              <label class="cfg-field cfg-check">
-                <input id="mx-ws-enabled" type="checkbox">
-                <span class="cfg-flag-text">启用实时推送</span>
-              </label>
-              <label class="cfg-field">
-                <span>WebSocket 地址</span>
-                <input id="mx-ws-url" type="text" class="form-control" placeholder="wss://mx.2026.naaifu.cn/business-api/5">
-              </label>
-              <label class="cfg-field">
-                <span>WebSocket 路径</span>
-                <input id="mx-ws-path" type="text" class="form-control" placeholder="/socket.io">
-              </label>
-              <label class="cfg-field">
-                <span>WebSocket Namespace</span>
-                <input id="mx-ws-namespace" type="text" class="form-control" placeholder="/msg">
-              </label>
-            </div>
-          </div>
-          <div class="cfg-group">
-            <p class="cfg-group-title">同步与抓取</p>
-            <div class="cfg-fields">
-              <label class="cfg-field">
-                <span>单页房间消息数</span>
-                <input id="mx-page-size" type="number" class="form-control" min="1" max="100">
-              </label>
-              <label class="cfg-field">
-                <span>最大历史页数</span>
-                <input id="mx-max-pages" type="number" class="form-control" min="1" max="100">
-              </label>
-            </div>
-          </div>
-        </div>
-        <div class="toolbar mx-config-actions">
-          <button type="button" class="btn-normal" id="mx-save-btn" onclick="saveMxConfig()">保存配置</button>
-          <button type="button" class="btn-ghost" id="mx-login-btn" onclick="mxSessionLogin()">登录</button>
-          <button type="button" class="btn-ghost" id="mx-logout-btn" onclick="mxSessionLogout()">退出</button>
-        </div>
-        <p class="section-meta" id="mx-ws-status">WebSocket 状态：加载中...</p>
-        <div id="mx-api-status" class="section-meta" style="margin-top:6px">接口状态：尚未执行（点击「登录」后显示逐接口结果）</div>
       </section>
       <section class="section-panel">
         <header class="section-head">

@@ -8755,27 +8755,13 @@ function reloadKolImageSettings() {
 
 
 // ---------- MX 数据源管理（数据源页 st-mx 面板；由 switchStatsTab('mx') 触发加载） ----------
+// 云端直连已退役（#18/#19）：配置/登录/WS 状态端点删除，面板只剩房间管理 + 本地采集设备。
 async function loadMxAdmin() {
   const box = $("#st-mx");
   if (!box) return;
   try {
-    // Load MX config
-    const config = await api("/api/admin/sources/mx");
-    $("#mx-enabled").checked = config.enabled;
-    $("#mx-token").value = config.token || "";
-    $("#mx-api-base").value = config.api_base || "https://mx.2026.naaifu.cn/business-api/5";
-    $("#mx-ws-url").value = config.ws_url || "wss://mx.2026.naaifu.cn/business-api/5";
-    $("#mx-ws-path").value = config.ws_path || "/socket.io";
-    $("#mx-ws-namespace").value = config.ws_namespace || "/msg";
-    $("#mx-ws-enabled").checked = config.ws_enabled;
-    $("#mx-page-size").value = config.page_size || 30;
-    $("#mx-max-pages").value = config.max_history_pages || 100;
-    updateMxTokenUpdatedLabel(config);
-
-    // Load rooms
+    // Load rooms + 本地采集设备管理（云网关管理面）
     loadMxRooms();
-    refreshMxWsStatus();
-    // 本地采集设备管理（云网关管理面）：与 MX 配置同 tab 一次性拉齐
     loadMxIngestDevices();
 
     // Add event listeners for search/filter
@@ -8791,124 +8777,8 @@ async function loadMxAdmin() {
     if (enabledOnly) enabledOnly.onchange = () => loadMxRooms();
 
   } catch (err) {
-    box.innerHTML = `<p class="muted">${escapeHtml(err.message || "加载 MX 配置失败")}</p>
+    box.innerHTML = `<p class="muted">${escapeHtml(err.message || "加载 MX 数据失败")}</p>
       <div class="toolbar"><button type="button" class="btn-ghost" onclick="loadMxAdmin()">重试</button></div>`;
-  }
-}
-
-async function saveMxConfig() {
-  const btn = $("#mx-save-btn");
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  try {
-    // Parse numbers with defaults, ensure minimum values
-    const page_size = Math.max(1, Number($("#mx-page-size").value) || 30);
-    const max_history_pages = Math.max(1, Number($("#mx-max-pages").value) || 100);
-
-    const payload = {
-      enabled: $("#mx-enabled").checked,
-      token: $("#mx-token").value.trim(),
-      api_base: $("#mx-api-base").value.trim() || "https://mx.2026.naaifu.cn/business-api/5",
-      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn/business-api/5",
-      ws_path: $("#mx-ws-path").value.trim() || "/socket.io",
-      ws_namespace: $("#mx-ws-namespace").value.trim() || "/msg",
-      ws_enabled: $("#mx-ws-enabled").checked,
-      page_size,
-      max_history_pages,
-    };
-    console.log("Saving MX config payload:", payload);
-
-    await api("/api/admin/sources/mx", {
-      method: "PUT",
-      body: JSON.stringify(payload),
-    });
-    flash("MX配置已保存");
-    try {
-      updateMxTokenUpdatedLabel(await api("/api/admin/sources/mx"));
-    } catch {}
-    refreshMxWsStatus();
-  } catch (err) {
-    flash(err.message || "保存失败", "error");
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-function updateMxTokenUpdatedLabel(config) {
-  const el = $("#mx-token-updated");
-  if (!el) return;
-  if (config.token) {
-    el.textContent = config.token_updated_at
-      ? `Token 更新于 ${fmtTs(config.token_updated_at)}`
-      : "Token 更新时间：暂无记录（Token 可能由环境变量提供）";
-    el.style.display = "";
-  } else {
-    el.style.display = "none";
-  }
-}
-
-async function refreshMxWsStatus() {
-  const el = $("#mx-ws-status");
-  if (!el) return;
-  try {
-    const s = await api("/api/admin/sources/mx/ws-status");
-    const last = s.last_message_at ? new Date(s.last_message_at).toLocaleString() : "从未收到";
-    const detail = s.detail ? `（${escapeHtml(s.detail)}）` : "";
-    el.innerHTML = `<span>WebSocket 状态：${s.connected ? "✅ 已连接" : "❌ 未连接"}，最近收到消息：${escapeHtml(last)}${detail}</span>`;
-    renderMxApiStatus(s.login_report);
-  } catch (err) {
-    el.textContent = `WebSocket 状态：获取失败（${err.message || "未知错误"}）`;
-  }
-}
-
-function renderMxApiStatus(report) {
-  const box = $("#mx-api-status");
-  if (!box) return;
-  if (!report || !Array.isArray(report.steps) || !report.steps.length) {
-    box.textContent = "接口状态：尚无会话记录（等待运行时段到点系统自动 MX 平台登录，或点击「登录」手动执行）";
-    return;
-  }
-  const rows = report.steps.map((s) => {
-    const mark = s.ok ? "✅" : "❌";
-    const ms = Number.isFinite(s.ms) ? `（${s.ms}ms）` : "";
-    return `<li>${mark} ${escapeHtml(s.name)}${ms}：${escapeHtml(s.detail || "")}</li>`;
-  }).join("");
-  const head = report.ok ? "✅ 全部成功" : "❌ 存在失败项";
-  const source = report.source === "auto" ? "系统自动登录" : "管理员手动登录";
-  box.innerHTML = `<details><summary>接口状态（${escapeHtml(report.time || "")}，${source}）：${head}</summary><ul>${rows}</ul></details>`;
-}
-
-async function mxSessionLogin() {
-  const btn = $("#mx-login-btn");
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  if ($("#mx-logout-btn")) $("#mx-logout-btn").disabled = true;
-  try {
-    const result = await api("/api/admin/sources/mx/session/login", { method: "POST" });
-    renderMxApiStatus(result.report);
-    flash(result.ok ? "登录成功：启动序列、房间同步与 WS 均正常" : "登录完成，存在失败项（见接口状态）", result.ok ? "success" : "error");
-  } catch (err) {
-    flash(err.message || "登录失败", "error");
-  } finally {
-    if (btn) btn.disabled = false;
-    if ($("#mx-logout-btn")) $("#mx-logout-btn").disabled = false;
-    refreshMxWsStatus();
-    setTimeout(refreshMxWsStatus, 2500);
-  }
-}
-
-async function mxSessionLogout() {
-  const btn = $("#mx-logout-btn");
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  try {
-    const res = await api("/api/admin/sources/mx/ws/disconnect", { method: "POST" });
-    flash(res.message || "已退出 MX 会话");
-  } catch (err) {
-    flash(err.message || "退出失败", "error");
-  } finally {
-    if (btn) btn.disabled = false;
-    refreshMxWsStatus();
   }
 }
 
@@ -9056,7 +8926,6 @@ async function loadMxRooms() {
 	              <div class="toolbar">
 	                <button type="button" class="btn-ghost" onclick="updateMxRoom(${r.id}, { enabled: !${r.enabled} })">${r.enabled ? "禁用" : "启用"}</button>
 	                <button type="button" class="btn-ghost" onclick="updateMxRoom(${r.id}, { show_in_plaza: !${r.show_in_plaza} })">${r.show_in_plaza ? "隐藏广场" : "显示广场"}</button>
-	                <button type="button" class="btn-ghost" onclick="pullMxRoomHistory(${r.id})">拉取历史消息</button>
 	              </div>
 	            </td>
           </tr>`).join("")}
@@ -9079,17 +8948,6 @@ async function updateMxRoom(roomId, body) {
     loadMxRooms();
   } catch (err) {
     flash(err.message || "更新失败", "error");
-  }
-}
-
-async function pullMxRoomHistory(roomId) {
-  try {
-    await api(`/api/admin/sources/mx/rooms/${roomId}/pull-history`, {
-      method: "POST",
-    });
-    flash("历史消息拉取已触发");
-  } catch (err) {
-    flash(err.message || "拉取历史消息失败", "error");
   }
 }
 
@@ -9432,13 +9290,8 @@ const INLINE_HANDLERS = {
   updateAdminNewsStatus,
   // ---- hmf：MX 数据源管理（st-mx 面板）----
   loadMxAdmin,
-  saveMxConfig,
-  mxSessionLogin,
-  mxSessionLogout,
   loadMxRooms,
   updateMxRoom,
-  pullMxRoomHistory,
-  refreshMxWsStatus,
   // ---- hmf：MX 本地采集设备管理（云网关管理面）----
   loadMxIngestDevices,
   mxIngestMintCode,
