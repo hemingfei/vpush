@@ -209,16 +209,84 @@ class BrowserRuntime:
 
     async def switch_room(self, room_name: str) -> None:
         """真点击切房间：点房间名 strong，回落头像区（选择器先例
-        scripts/mx_room_switch_capture.py:126-143 open_room）。"""
+        scripts/mx_room_switch_capture.py:126-143 open_room）。
+
+        分组折叠防御（2026-11-15 实战：侧栏「默认分组」被折叠后
+        mx_web_room_group_open 持久化 {"0":false}，房间项 0×0 点不到，
+        切房连败到出窗）：点击前若目标房间项不可见，先把所有分组
+        group-toggle 全部展开再重找——分组态是用户/平台可变的 UI 状态，
+        agent 不猜来源，只保证「目标房间可见可点」这一不变式。
+        """
         import re
 
         page = self._page
         if page is None:
             raise RuntimeError("浏览器会话未建立")
+        await self._dismiss_system_notice()
         item = page.get_by_role("button", name=re.compile(f"^{re.escape(room_name)}")).first
+        if await item.count() == 0 or not await item.is_visible():
+            await self._expand_room_groups()
+            item = page.get_by_role("button", name=re.compile(f"^{re.escape(room_name)}")).first
         if await item.count() == 0:
             raise RuntimeError(f"房间列表里没找到：{room_name}")
         try:
             await item.locator(CDPExecutor.ROOM_STRONG_SELECTOR).first.click(timeout=3000)
         except Exception:  # noqa: BLE001 - 无 strong 点头像区
             await item.click(position=CDPExecutor.FALLBACK_CLICK_OFFSET)
+
+    async def _dismiss_system_notice(self) -> None:
+        """关掉拦截点击的系统公告弹窗（幂等，无弹窗零开销）。
+
+        2026-11-15 实战第二根因：开窗加载后弹「系统公告/我知道了」
+        modal-backdrop，拦截全部 pointer events——房间项看得见点不着
+        （click 重试到超时）。每次切房前点一下「我知道了」，没有弹窗时
+        evaluate 直接空转。
+        """
+        page = self._page
+        await page.evaluate(
+            """() => {
+              const backdrop = document.querySelector('.modal-backdrop.system-notice-backdrop');
+              if (!backdrop) return false;
+              const btn = Array.from(backdrop.querySelectorAll('button'))
+                .find(b => (b.textContent || '').includes('我知道了'))
+                || backdrop.querySelector('.icon-close');
+              if (!btn) return false;
+              btn.click();
+              return true;
+            }"""
+        )
+
+    async def _expand_room_groups(self) -> None:
+        """展开侧栏全部折叠分组（幂等：只点「房间容器 0×0」的组）。
+
+        纯 JS 单次求值（2026-11-15 实机 DOM：toggle 在 .group-header 里、
+        .group-rooms 在分组容器另一支，Playwright locator/xpath 组合容易
+        写错——JS 里用「最近同时包含两者的祖先」判定，结构容错）。
+        返回展开的组数（日志用）。
+        """
+        page = self._page
+        expanded = await page.evaluate(
+            """() => {
+              let clicked = 0;
+              for (const toggle of document.querySelectorAll('.group-toggle')) {
+                // 最近公共祖先：toggle 的祖先里最小的同时含 .group-rooms 的元素
+                let anc = toggle.parentElement;
+                let rooms = null;
+                while (anc && !rooms) {
+                  rooms = anc.querySelector(':scope .group-rooms');
+                  if (!rooms) anc = anc.parentElement;
+                }
+                if (!rooms) continue;
+                const box = rooms.getBoundingClientRect();
+                if (box.width > 0 && box.height > 0) continue; // 已展开
+                toggle.click();
+                clicked += 1;
+              }
+              return clicked;
+            }"""
+        )
+        if expanded:
+            import logging
+
+            logging.getLogger(__name__).info("展开折叠分组 %s 个", expanded)
+
