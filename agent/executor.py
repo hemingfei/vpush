@@ -46,6 +46,9 @@ def chrome_launch_args(
         f"--remote-debugging-port={cdp_port}",
         "--no-first-run",
         "--no-default-browser-check",
+        # 全屏启动：站点在 CSS 宽 <~1100px 时隐藏房间列表且恢复尺寸后
+        # 不自动回来（2026-11-15 实测粘滞态），小窗口直接废掉切房
+        "--start-maximized",
         origin,
     ]
 
