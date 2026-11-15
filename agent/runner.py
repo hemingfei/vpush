@@ -20,7 +20,7 @@ import logging
 import os
 import random
 import time
-from datetime import datetime
+from datetime import datetime, time as dt_time, timedelta
 
 from app.services.mx_window import CN_TZ, build_daily_plan, restart_login_allowed
 
@@ -47,6 +47,15 @@ def _fatal_mark(exc: BaseException) -> str:
     return next((m for m in FATAL_LOGIN_MARKERS if m in text), "fatal")
 
 
+def _combine_hm(day, hhmm: str, tzinfo):
+    """当日 "HH:MM" → aware datetime（自定义窗口解析；坏值返回 None）。"""
+    try:
+        hour, minute = (int(p) for p in hhmm.split(":"))
+        return datetime.combine(day, dt_time(hour, minute), tzinfo=tzinfo)
+    except ValueError:
+        return None
+
+
 class AgentRunner:
     """常驻行为器：一个循环驱动窗口/登录/接力/切房全生命周期。"""
 
@@ -60,7 +69,15 @@ class AgentRunner:
             config.accounts,
             on_switch=self._on_relay_switch,
         )
-        self._restart_login = restart_login_allowed(datetime.now(CN_TZ))
+        # always_on 全天窗起点 00:00 必然 start<now：arm_windows 会判「错过」，
+        # 必须借 restart_login 的重武装语义让全天窗任何时刻重启都开窗
+        # （用户主动打开软件=要监听，这是 always_on 的存在理由）。
+        # 自定义窗口同理：打开软件时正处自定义窗内 → 立即在线（否则重启
+        # 后整段窗口报废，违背「主动打开也要能监听」的需求原点）。
+        # 默认窗口维持云端口径：仅工作日 08-22 重启才补登。
+        self._restart_login = (self.config.always_on
+                               or self.config.windows is not None
+                               or restart_login_allowed(datetime.now(CN_TZ)))
         self.runner = WindowRunner(
             on_window_open=lambda now: None,   # 异步动作在 _tick 里由 decision 驱动
             on_window_close=lambda now: None,
@@ -154,6 +171,29 @@ class AgentRunner:
     # ---- 窗口动作（tick 决策驱动的异步执行） ----
 
     def _plan_windows(self, now: datetime):
+        """当日窗口：三态（优先级 always_on > 自定义窗口 > 默认三段随机窗）。
+
+        - always_on（MX_AGENT_ALWAYS_ON=1）：全天单窗——用户主动打开软件
+          就要能监听，窗口调度整体旁路（开窗即登录在线，关进程才下线）；
+        - 自定义窗口（MX_AGENT_WINDOWS）：确定性解析成当日 datetime 对，
+          不走计划文件（env 即事实源，当日形状天然不漂移）；
+        - 默认：当日计划（计划文件持久化，重启不漂移，既有语义零改动）。
+        """
+        if self.config.always_on:
+            day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+            return [(day_start, day_end)]
+        if self.config.windows:
+            day = now.date()
+            windows = []
+            for start_hm, stop_hm in self.config.windows:
+                start = _combine_hm(day, start_hm, now.tzinfo)
+                stop = _combine_hm(day, stop_hm, now.tzinfo)
+                if start is not None and stop is not None:
+                    windows.append((start, stop))
+            if windows:
+                return windows
+            # 全部解析失败不该发生（config 层已词法校验）：落回默认计划
         plan = get_today_plan(
             store_dir=self.config.data_dir / "plans",
             now=now,

@@ -13,6 +13,8 @@
     MX_AGENT_CDP_PORT=9223                   专用 Chrome 调试端口
     MX_AGENT_ROOMS='["房A","房B"]'           切房目标池 JSON
     MX_AGENT_DATA_DIR=data/agent             数据目录（注册表/当日计划/生命周期日志）
+    MX_AGENT_ALWAYS_ON=1                     全天在线：打开软件即登录监听，关进程才下线（旁路窗口）
+    MX_AGENT_WINDOWS='[["07:00","11:30"]]'   自定义窗口 JSON（覆盖默认三段随机窗；确定性无漂移）
     MX_AGENT_CHROME_EXE=C:/path/chrome.exe  Chrome 可执行文件覆盖
     视觉识码：MX_VISION_* 或 LLM_*（与 scripts/mx_login.py --ai-ocr 同一套）
 
@@ -103,6 +105,9 @@ def main(argv=None) -> int:
         for a in config.accounts:
             print(f"account={a.user} role={a.role} profile={config.registry().profile_dir(a.user)}")
         print(f"origin={config.origin} cdp_port={config.cdp_port} rooms={config.rooms}")
+        mode = "always_on" if config.always_on else (
+            f"custom={config.windows}" if config.windows else "default-plan")
+        print(f"window_mode={mode}")
         print(f"data_dir={config.data_dir}")
         return 0
 

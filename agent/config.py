@@ -10,6 +10,10 @@
 - MX_AGENT_CDP_PORT            专用 Chrome 远程调试端口（默认 9223，避开常见 9222）
 - MX_AGENT_ROOMS               房间清单 JSON（切房目标池；默认沿用实机抓包先例）
 - MX_AGENT_DATA_DIR            数据目录（注册表/当日计划/日志）
+- MX_AGENT_ALWAYS_ON           =1 全天在线模式：打开软件即登录监听，关进程才下线
+                               （窗口调度整体旁路——用户主动打开软件时也要能监听）
+- MX_AGENT_WINDOWS             自定义窗口 JSON '[["07:00","11:30"],["13:00","17:00"]]'
+                               （覆盖默认三段随机窗；确定性解析，当日形状不漂移）
 """
 from __future__ import annotations
 
@@ -36,6 +40,10 @@ class AgentConfig:
     cdp_port: int = DEFAULT_CDP_PORT
     rooms: list[str] = field(default_factory=lambda: list(DEFAULT_ROOMS))
     data_dir: Path = Path("data") / "agent"
+    # 全天在线（MX_AGENT_ALWAYS_ON=1）：窗口调度旁路，打开即在线
+    always_on: bool = False
+    # 自定义窗口（MX_AGENT_WINDOWS，"HH:MM" 对列表）：None=用默认三段随机窗
+    windows: list[tuple[str, str]] | None = None
 
     def password_of(self, account: Account) -> str:
         """账号密码：只从环境变量读，缺失返回空串（登录链路用时再报缺凭据）。"""
@@ -60,6 +68,39 @@ def _parse_rooms(raw: str | None) -> list[str]:
     return rooms if rooms else list(DEFAULT_ROOMS)
 
 
+def _parse_custom_windows(raw: str | None) -> list[tuple[str, str]] | None:
+    """解析 MX_AGENT_WINDOWS JSON（[["HH:MM","HH:MM"],...]）；非法/缺席→None。
+
+    只做形态与 HH:MM 词法校验（时间语义由 runner 当日具体化）；非法静默
+    回退默认窗口——配置写错不能把在线监听整个弄停。
+    """
+    if not (raw and raw.strip()):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(parsed, list):
+        return None
+    windows: list[tuple[str, str]] = []
+    for pair in parsed:
+        if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
+            return None
+        start, stop = str(pair[0]).strip(), str(pair[1]).strip()
+        if not (_is_hhmm(start) and _is_hhmm(stop)):
+            return None
+        windows.append((start, stop))
+    return windows or None
+
+
+def _is_hhmm(value: str) -> bool:
+    parts = value.split(":")
+    if len(parts) != 2 or not all(p.isdigit() and len(p) == 2 for p in parts):
+        return False
+    hour, minute = int(parts[0]), int(parts[1])
+    return hour < 24 and minute < 60
+
+
 def load_agent_config() -> AgentConfig:
     """从环境变量组装配置（.env 由调用方先 load_dotenv，与 mx_login 同序）。"""
     accounts = parse_accounts(os.environ.get("MX_AGENT_ACCOUNTS", ""))
@@ -69,6 +110,7 @@ def load_agent_config() -> AgentConfig:
     except ValueError:
         port = DEFAULT_CDP_PORT
     data_raw = os.environ.get("MX_AGENT_DATA_DIR", "").strip()
+    always_on_raw = os.environ.get("MX_AGENT_ALWAYS_ON", "").strip().lower()
     return AgentConfig(
         accounts=accounts,
         origin=(os.environ.get("MX_LOGIN_ORIGIN", "").strip().rstrip("/")
@@ -76,4 +118,6 @@ def load_agent_config() -> AgentConfig:
         cdp_port=port,
         rooms=_parse_rooms(os.environ.get("MX_AGENT_ROOMS")),
         data_dir=Path(data_raw) if data_raw else Path("data") / "agent",
+        always_on=always_on_raw in ("1", "true", "yes", "on"),
+        windows=_parse_custom_windows(os.environ.get("MX_AGENT_WINDOWS")),
     )
