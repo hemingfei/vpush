@@ -71,6 +71,7 @@ from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))  # agent.single_instance 按 cwd-first 导入（mx_agent.py 同款引导）
 LOG = REPO / "data" / "collector_guard.log"
 STDOUT_LOG = REPO / "data" / "collector_stdout.log"
 AGENT_LOCK = REPO / "data" / "agent" / "agent.lock"
