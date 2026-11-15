@@ -2,9 +2,10 @@
 
 唯一 CI 接缝 = 云网关 wss 入口：进程内起真实 uvicorn 服务端挂生产 app，
 用真 WebSocket 客户端连入扮演「采集器（扩展）」，断言端到端行为（配对/
-认证/帧入库/幂等/跨账号去重/引擎帧丢弃/断连补传）。方向与
-tests/test_mx_native_integration.py 相反：那边服务端=Mini EIO、客户端=生产
-MxWsClient；这边服务端=云网关（生产 FastAPI app）、客户端=模拟扩展。
+认证/帧入库/幂等/跨账号去重/引擎帧丢弃/断连补传）。方向与旧
+tests/test_mx_native_integration.py（已随 ADR-0001 分层删除退役）相反：
+那边服务端=Mini EIO、客户端=生产 MxWsClient 连接层；这边服务端=云网关
+（生产 FastAPI app）、客户端=模拟扩展。
 
 网关之下（解析层/入库/推送）已有 660+ 测试覆盖，这里只测网关可观察行为，
 不重复测内部链路。

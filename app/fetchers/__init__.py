@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import logging
-
 from .base import Fetcher
-
-logger = logging.getLogger(__name__)
 from .combination import CombinationFetcher
 from .ima import ImaFetcher
 from .truth import TruthFetcher
@@ -25,10 +21,6 @@ def build_fetchers(config, db) -> dict[str, Fetcher]:
         "zsxq": ZsxqFetcher(db=db),
         "truth": TruthFetcher(db=db),
     }
-    if config.sources.mx.enabled:
-        try:
-            from .mx.fetcher import MxFetcher
-            fetchers["mx"] = MxFetcher(config.sources.mx, db)
-        except Exception as e:
-            logger.warning("Failed to initialize MxFetcher: %s", e)
+    # MX 不再由云端轮询：消息经本地行为器+采集器上行到 /api/mx-ingest，
+    # 解析/入库在网关内按需构造 MxFetcher。这里不注册 mx 抓取器。
     return fetchers

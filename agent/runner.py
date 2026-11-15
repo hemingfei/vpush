@@ -321,7 +321,7 @@ class AgentRunner:
             return
         try:
             await self.runtime.switch_room(room)
-        except Exception:  # noqa: BLE001 - 单次点击失败只顺延节奏（mx_activity 同语义）
+        except Exception:  # noqa: BLE001 - 单次点击失败只顺延节奏（原 mx_activity 同语义）
             self.log.record("room_switch", account=account.user,
                             detail=f"点击 {room} 失败，顺延节奏")
         else:

@@ -55,6 +55,5 @@ def _disable_mx_human_jitter(monkeypatch):
     抖动本身的行为由 tests/test_mx.py 的专项用例显式改回环境变量验证。
     """
     monkeypatch.setenv("VPUSH_MX_JITTER", "0")
-    # 会话活动模拟同理默认关闭：任何带「会话在线」桩的调度器用例都不应意外
-    # 发起点房间请求；专项用例在 tests/test_mx_activity.py 显式开启
-    monkeypatch.setenv("MX_ACTIVITY_SIM", "0")
+    # 云端会话活动模拟（mx_activity）已随 ADR-0001 分层删除退役：
+    # 不再需要全局关掉 MX_ACTIVITY_SIM（原防误触发开关随模块一起退役）

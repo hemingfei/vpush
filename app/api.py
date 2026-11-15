@@ -1623,11 +1623,7 @@ def create_api_router(
     notifiers_config=None,
     trust_proxy: bool = False,
     ima_documents: ImaDocumentService | None = None,
-    on_mx_config_changed=None,
     on_external_post=None,
-    on_mx_ws_control=None,
-    on_mx_session_login=None,
-    on_mx_alert=None,
     feishu_documents: FeishuDocumentSyncService | None = None,
     news_service: NewsService | None = None,
     turnstile_site_key: str = "",
@@ -6132,114 +6128,6 @@ def create_api_router(
     # ---- MX 平台管理 ----
     # 暂时直接使用原始 dict，避免 Pydantic 验证问题
 
-    @router.get("/admin/sources/mx", dependencies=[Depends(require_admin)])
-    def get_mx_config():
-        """获取 MX 平台配置。"""
-        from .config import load_config
-        try:
-            config = load_config()
-            mx_config = config.sources.mx if hasattr(config.sources, "mx") else None
-            if mx_config is None:
-                return {
-                    "enabled": False,
-                    "token": "",
-                    "token_updated_at": db.get_setting("mx_token_updated_at") or "",
-                    "api_base": "https://mx.2026.foodtop1.com/business-api/4",
-                    "ws_url": "wss://mx.2026.foodtop1.com/business-api/4",
-                    "ws_path": "/socket.io",
-                    "ws_namespace": "/msg",
-                    "ws_enabled": True,
-                    "page_size": 30,
-                    "max_history_pages": 100,
-                }
-            return {
-                "enabled": bool(getattr(mx_config, "enabled", False)),
-                "token": getattr(mx_config, "token", ""),
-                "token_updated_at": db.get_setting("mx_token_updated_at") or "",
-                "api_base": getattr(mx_config, "api_base", "https://mx.2026.foodtop1.com/business-api/4"),
-                "ws_url": getattr(mx_config, "ws_url", "wss://mx.2026.foodtop1.com/business-api/4"),
-                "ws_path": getattr(mx_config, "ws_path", "/socket.io"),
-                "ws_namespace": getattr(mx_config, "ws_namespace", "/msg"),
-                "ws_enabled": bool(getattr(mx_config, "ws_enabled", True)),
-                "page_size": int(getattr(mx_config, "page_size", 30)),
-                "max_history_pages": int(getattr(mx_config, "max_history_pages", 100)),
-            }
-        except Exception:
-            return {
-                "enabled": False,
-                "token": "",
-                "token_updated_at": db.get_setting("mx_token_updated_at") or "",
-                "api_base": "https://mx.2026.foodtop1.com/business-api/4",
-                "ws_url": "wss://mx.2026.foodtop1.com/business-api/4",
-                "ws_path": "/socket.io",
-                "ws_namespace": "/msg",
-                "ws_enabled": True,
-                "page_size": 30,
-                "max_history_pages": 100,
-            }
-
-
-    @router.put("/admin/sources/mx", dependencies=[Depends(require_admin)])
-    async def update_mx_config(request: Request, admin: dict = Depends(require_admin)):
-        """更新 MX 平台配置。"""
-        try:
-            from .config import load_config, save_config
-            raw_body = await request.json()
-            # token 是凭据，不能进日志（全局 RedactingFormatter 只匹配 token=/Bearer 形式，
-            # 匹配不到 dict-repr 的 'token': '…'）：非敏感键照常落日志
-            safe_body = {k: v for k, v in (raw_body or {}).items() if k != "token"}
-            logger.info(f"Received MX config update: {safe_body}")
-
-            config = load_config()
-            logger.info(f"Loaded config, mx.enabled={config.sources.mx.enabled}")
-
-            # 直接从原始字典更新配置
-            if "enabled" in raw_body:
-                config.sources.mx.enabled = bool(raw_body["enabled"])
-            if "token" in raw_body:
-                new_token = str(raw_body["token"] or "")
-                if new_token != (config.sources.mx.token or ""):
-                    config.sources.mx.token = new_token
-                    db.set_setting("mx_token_updated_at", str(int(time.time())))
-            if "api_base" in raw_body:
-                config.sources.mx.api_base = str(raw_body["api_base"] or "https://mx.2026.naaifu.cn/business-api/5")
-            if "ws_url" in raw_body:
-                config.sources.mx.ws_url = str(raw_body["ws_url"] or "wss://mx.2026.naaifu.cn/business-api/5")
-            if "ws_path" in raw_body:
-                config.sources.mx.ws_path = str(raw_body["ws_path"] or "/socket.io")
-            if "ws_namespace" in raw_body:
-                config.sources.mx.ws_namespace = str(raw_body["ws_namespace"] or "/msg")
-            if "ws_enabled" in raw_body:
-                config.sources.mx.ws_enabled = bool(raw_body["ws_enabled"])
-            if "page_size" in raw_body:
-                config.sources.mx.page_size = max(1, int(raw_body["page_size"] or 30))
-            if "max_history_pages" in raw_body:
-                config.sources.mx.max_history_pages = max(1, int(raw_body["max_history_pages"] or 100))
-
-            logger.info("Attempting to save config...")
-            # 保存配置
-            save_config(config)
-            logger.info("Config saved successfully")
-
-            # 热应用到运行中的调度器：重建抓取器、重启房间同步与 WebSocket。
-            # body 带 hot_apply=false 时只保存不热应用（无人值守回填用：写回后由
-            # Jenkins 重启容器冷启动生效，避免写回链路立刻登录；重启失败时运行中的
-            # 服务仍持旧 token，后台重存一次配置可立即热应用）
-            if bool(raw_body.get("hot_apply", True)):
-                if on_mx_config_changed is not None:
-                    try:
-                        await on_mx_config_changed(config.sources.mx)
-                    except Exception:
-                        logger.exception("MX 配置热应用失败（配置已保存，重启后生效）")
-            else:
-                logger.info("MX 配置已保存（hot_apply=false，跳过热应用，待重启生效）")
-
-            _audit(admin, "update_mx_config", "", f"enabled={raw_body.get('enabled', False)}")
-            return {"ok": True}
-        except Exception as exc:
-            logger.exception(f"Failed to save MX config: {exc}")
-            raise HTTPException(status_code=400, detail=f"保存配置失败: {exc}") from exc
-
     @router.get("/admin/sources/mx/rooms", dependencies=[Depends(require_admin)])
     def get_mx_rooms(search: str = "", enabled_only: bool = False):
         """获取 MX 房间列表。"""
@@ -6309,135 +6197,6 @@ def create_api_router(
         db.update_kol(kol["id"], extra_data=new_extra)
         _audit(admin, "update_mx_room", str(room_id), f"enabled={enabled}, show_in_plaza={show_in_plaza}")
         return {"ok": True}
-
-    @router.post("/admin/sources/mx/rooms/{room_id}/pull-history", dependencies=[Depends(require_admin)])
-    async def pull_mx_room_history(room_id: int, background_tasks: BackgroundTasks, admin: dict = Depends(require_admin)):
-        """拉取 MX 房间历史消息。"""
-        kol = db.get_kol_by_external("mx", str(room_id))
-        if not kol:
-            raise HTTPException(status_code=404, detail="房间不存在")
-        
-        from .config import load_config
-        from .fetchers.mx.client import MXTokenExpiredError
-        from .fetchers.mx.fetcher import MxFetcher
-        
-        config = load_config()
-        mx_config = config.sources.mx if hasattr(config.sources, "mx") else None
-        if not mx_config or not mx_config.enabled:
-            raise HTTPException(status_code=400, detail="MX 平台未启用")
-        
-        def pull_history_task():
-            fetcher = None
-            try:
-                # 风控对策：手动拉取也只取最新 100 条，一次请求完成，不再无限翻页
-                MX_PULL_LIMIT = 100
-                logger.info(f"开始拉取 MX 房间 {room_id} 最新 {MX_PULL_LIMIT} 条消息")
-                fetcher = MxFetcher(mx_config, db)
-
-                # 官方网页端打开房间都先 room/view 进房上报（抓包实测）：拉取前
-                # 对齐「人打开了这个房间」的行为链；上报失败不阻断拉取，
-                # TOKEN 过期则照常抛给下方告警/熔断逻辑
-                try:
-                    fetcher.mx_client.room_view(room_id)
-                except MXTokenExpiredError:
-                    raise
-                except Exception:
-                    logger.warning("MX room/view 上报失败 room=%s", room_id, exc_info=True)
-
-                all_messages = fetcher.mx_client.get_room_history(room_id, 0, MX_PULL_LIMIT)
-                logger.info(f"获取到 {len(all_messages)} 条消息")
-                
-                # 解析并保存帖子
-                posts = fetcher._build_posts(kol, all_messages)
-                logger.info(f"解析后得到 {len(posts)} 条帖子")
-                
-                # 按发布时间升序处理
-                from app.fetchers.base import parse_published_at
-                def get_sort_key(p):
-                    dt = parse_published_at(getattr(p, 'published_at', ''))
-                    return int(dt.timestamp() * 1000) if dt else 0
-                        
-                posts = sorted(posts, key=get_sort_key)
-                post_ids = db.insert_posts_batch(posts)
-                
-                # 标记基线（如果还没有）
-                if not kol.get("baseline_ready"):
-                    db.mark_kol_baseline(kol["id"])
-                
-                new_count = sum(1 for pid in post_ids if pid is not None)
-                logger.info(f"完成拉取 MX 房间 {room_id} 最新消息：共 {len(posts)} 条，新增 {new_count} 条")
-            except Exception as e:
-                logger.error(f"拉取 MX 房间 {room_id} 消息失败：{e}", exc_info=True)
-                # MX 报错统一走V平台「系统通知」发布；TOKEN 过期同时触发熔断
-                if on_mx_alert is not None:
-                    try:
-                        key = (
-                            "token_expired"
-                            if isinstance(e, MXTokenExpiredError)
-                            or "token expired" in str(e).lower()
-                            else "pull_history"
-                        )
-                        detail = (
-                            "MX TOKEN 已过期，手动拉取失败，MX 已暂停拉取与实时推送。"
-                            "\n请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次）。"
-                            if key == "token_expired"
-                            else f"⚠️ 拉取 MX 房间 {room_id} 消息失败：{e}"
-                        )
-                        on_mx_alert(key, "MX 拉取消息失败" if key != "token_expired" else "MX TOKEN 已过期", detail)
-                    except Exception:
-                        logger.error("发布 MX 拉取失败告警出错", exc_info=True)
-            finally:
-                if fetcher is not None:
-                    fetcher.mx_client.close()
-        
-        background_tasks.add_task(pull_history_task)
-        _audit(admin, "pull_mx_room_history", str(room_id), "")
-        return {"ok": True, "message": "历史消息拉取已开始"}
-
-    @router.get("/admin/sources/mx/ws-status", dependencies=[Depends(require_admin)])
-    def get_mx_ws_status():
-        """获取 MX WebSocket 连接状态。"""
-        try:
-            from .scheduler import get_mx_ws_status
-            return get_mx_ws_status()
-        except Exception:
-            return {"connected": False, "last_message_at": None}
-
-    @router.post("/admin/sources/mx/ws/disconnect")
-    async def disconnect_mx_ws(admin: dict = Depends(require_admin)):
-        """主动断开 MX WebSocket 连接（断线仅自动重连一次，失败即停止，可再手动接入）。"""
-        if on_mx_ws_control is None:
-            raise HTTPException(status_code=503, detail="后台任务未启用，无法控制 WebSocket")
-        try:
-            message = await on_mx_ws_control("disconnect")
-        except RuntimeError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _audit(admin, "disconnect_mx_ws", "", "")
-        return {"ok": True, "message": message}
-
-    @router.post("/admin/sources/mx/ws/connect")
-    async def connect_mx_ws(admin: dict = Depends(require_admin)):
-        """主动接入 MX WebSocket 连接（同时复位「重连失败已停止」状态）。"""
-        if on_mx_ws_control is None:
-            raise HTTPException(status_code=503, detail="后台任务未启用，无法控制 WebSocket")
-        try:
-            message = await on_mx_ws_control("connect")
-        except RuntimeError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _audit(admin, "connect_mx_ws", "", "")
-        return {"ok": True, "message": message}
-
-    @router.post("/admin/sources/mx/session/login", dependencies=[Depends(require_admin)])
-    async def login_mx_session(admin: dict = Depends(require_admin)):
-        """后台「登录」：像真人打开网页一样执行启动序列 + 房间同步 + 连接 WS，逐接口返回结果。"""
-        if on_mx_session_login is None:
-            raise HTTPException(status_code=503, detail="后台任务未启用，无法执行登录")
-        try:
-            report = await on_mx_session_login()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _audit(admin, "login_mx_session", "", "")
-        return {"ok": bool(report.get("ok")), "report": report}
 
     # ---- MX 本地采集设备管理（spec #14 云网关管理面前端接线）----
     # 与 mx_gateway 的 Bearer 管理面（MX_INGEST_ADMIN_TOKEN）并行：这里是后台
@@ -9169,6 +8928,11 @@ def create_api_router(
 
         sources = []
         for platform in sorted(ALLOWED_PLATFORMS):
+            # MX 走本地采集上行（/api/mx-ingest），云端不再轮询：不当作服务端
+            # 数据源上报，避免后台把「未轮询」误报为失败/逾期。MX 可用性在
+            # 「MX 采集」页的设备面看。
+            if platform == "mx":
+                continue
             summary = platform_fetch_health(
                 tracked_by_platform.get(platform) or [],
                 now,

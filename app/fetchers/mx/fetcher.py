@@ -1,26 +1,19 @@
 """MX platform fetcher."""
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
 import re
 import time
-from typing import Callable
 from urllib.parse import unquote, urlparse
 
 from ...avatar_cache import PLATFORM_IMAGE_DIRS, cache_image_file, should_direct_access
 from ..base import (
-    BACKFILL_PAGES,
     Fetcher,
     Post,
     format_published_at,
-    warn_timeline_gap,
 )
-from .client import MXClient, MXTokenExpiredError
-from .human import human_pause
-from .ws import MxWsClient
 
 logger = logging.getLogger(__name__)
 
@@ -136,124 +129,9 @@ class MxFetcher(Fetcher):
         super().__init__(source_config)
         self.db = db
         self.config = source_config
-        self.mx_client = MXClient(
-            getattr(source_config, "api_base", "https://mx.2026.naaifu.cn/business-api/5"),
-            getattr(source_config, "token", "")
-        )
-        self.max_history_pages = getattr(source_config, "max_history_pages", 100)
-        # 官方 msg/list 的 pagesize 实测为 30（2026-09-02 抓包）
-        self.page_size = getattr(source_config, "page_size", 30)
-        self.ws_client = None
         # (monotonic, kol) 元组：kol 为 None 也缓存（更短 TTL），未知房间噪音事件不至于打爆数据库；
-        # WS 解析在线程池并发执行，dict 读写靠 GIL 原子性即可（最坏情况重复查一次库）
+        # 采集帧解析在线程池并发执行，dict 读写靠 GIL 原子性即可（最坏情况重复查一次库）
         self._room_cache: dict = {}
-        self._ws_tasks: set = set()
-        self._ws_enabled = getattr(source_config, "ws_enabled", True)
-
-    def fetch(self, kol):
-        room_id = int(kol["external_id"])
-
-        # 官方网页端每次打开房间都先发 room/view 进房上报（2026-09-02 抓包实测）：
-        # 拉取前对齐「人打开了这个房间」的请求链。上报失败只记日志不阻断拉取；
-        # TOKEN 过期照常抛出，交由上层熔断/告警接管
-        try:
-            self.mx_client.room_view(room_id)
-        except MXTokenExpiredError:
-            raise
-        except Exception:  # noqa: BLE001 - 上报失败不影响拉取
-            logger.warning("MX room/view 上报失败 room=%s", room_id, exc_info=True)
-
-        # 进房上报与拉历史之间补人形间隔（房间页挂载时两个 XHR 的天然时差）；
-        # fetch 全程跑在线程池，阻塞睡不影响事件循环
-        human_pause("room_open")
-
-        try:
-            # 直接获取最新消息
-            messages = self.mx_client.get_room_history(room_id, limit=self.page_size)
-            posts = self._build_posts(kol, messages)
-        except Exception as e:
-            logger.error("Failed to fetch MX room history: %s", e, exc_info=True)
-            raise
-
-        # 首页尾部出现了未入库的新帖 → 继续向后翻页追平，防止爆发发帖时漏抓
-        return self._backfill_history(kol, room_id, messages, posts)
-
-    def _backfill_history(self, kol, room_id, first_messages, first_posts):
-        """首页最末一帖未入库 → 用 msgid 游标向后追平（cursor 版 catchup_pages）。"""
-        if self.db is None or not first_posts or not first_messages:
-            return first_posts
-        # 不足一页说明已返回全部历史，不存在缺口
-        if len(first_messages) < self.page_size:
-            return first_posts
-        platform = self.platform
-        known = self.db.existing_post_keys(
-            [(platform, p.external_id) for p in first_posts]
-        )
-        if (platform, first_posts[-1].external_id) in known:
-            return first_posts
-
-        merged = {p.external_id for p in first_posts}
-        all_posts = list(first_posts)
-        caught_up = False
-        msg_ids = self._numeric_msg_ids(first_messages)
-        if not msg_ids:
-            return first_posts
-        cursor = min(msg_ids)
-
-        for page in range(2, BACKFILL_PAGES + 2):
-            try:
-                batch = self.mx_client.get_room_history(room_id, cursor, self.page_size)
-            except Exception as exc:  # noqa: BLE001 - 追平失败不影响本轮已有结果
-                logger.warning("MX 第 %d 页追平失败 room=%s err=%s", page, room_id, exc)
-                break
-            if not batch:
-                caught_up = True  # 游标越过房间历史起点：天然无缺口
-                break
-            posts = self._build_posts(kol, batch)
-            seen = self.db.existing_post_keys([(platform, p.external_id) for p in posts])
-            for p in posts:
-                if p.external_id not in merged:
-                    merged.add(p.external_id)
-                    all_posts.append(p)
-            if posts and (platform, posts[-1].external_id) in seen:
-                caught_up = True
-                break
-            batch_ids = self._numeric_msg_ids(batch)
-            if not batch_ids or min(batch_ids) >= cursor:
-                break  # 游标未前移，避免原地死循环
-            cursor = min(batch_ids)
-            if len(batch) < self.page_size:
-                caught_up = True  # 不足一页=已到历史起点：天然无缺口
-                break
-
-        if not caught_up:
-            warn_timeline_gap(platform)
-        return all_posts
-
-    @staticmethod
-    def _numeric_msg_ids(messages) -> list[int]:
-        ids = []
-        for m in messages:
-            mid = m.get("id")
-            if isinstance(mid, bool):
-                continue
-            if isinstance(mid, int):
-                ids.append(mid)
-            elif isinstance(mid, str) and mid.isdigit():
-                ids.append(int(mid))
-        return ids
-
-    def _build_posts(self, kol, messages):
-        posts = []
-        for msg in messages:
-            try:
-                post = self._parse_message_to_post(msg, kol)
-                if post:
-                    posts.append(post)
-            except Exception as e:
-                logger.error("Failed to build post from MX message: %s", e, exc_info=True)
-                continue
-        return posts
 
     def _format_published_at(self, createtime):
         """格式化 MX 消息时间。"""
@@ -267,62 +145,6 @@ class MxFetcher(Fetcher):
             return format_published_at(str(createtime))
         except Exception:
             return format_published_at(str(int(time.time())))
-
-    async def start_ws(
-        self,
-        on_message,
-        on_ws_give_up=None,
-        on_storm=None,
-        on_reconnected=None,
-    ):
-        """
-        启动 WebSocket 连接并监听实时消息。
-
-        Args:
-            on_message: 回调函数，当收到新消息时调用（可以是异步函数）
-            on_ws_give_up: 自动重连永久放弃时的回调（参数为失败原因），用于发布系统告警
-            on_storm: 风暴形态确认回调（连续 2 次连上即断），用于触发自动换 TOKEN
-            on_reconnected: 断线后重新连上的回调，用于触发房间同步补拉断流期消息
-        """
-        if not self._ws_enabled:
-            logger.info("MX WebSocket is disabled")
-            return
-
-        async def on_raw_message(raw_msg):
-            try:
-                # 解析含同步 IO（房间查库、图片 httpx 下载最长 15s/张），而调度器
-                # 与 API 共用同一事件循环：直接在 loop 上解析会冻结整个服务，还拖垮
-                # socket.io 心跳导致服务端断连，必须丢线程池执行
-                post = await asyncio.to_thread(self._parse_message_to_post, raw_msg)
-                if post:
-                    if asyncio.iscoroutinefunction(on_message):
-                        await on_message(post)
-                    else:
-                        on_message(post)
-            except Exception as e:
-                logger.error(f"Failed to process MX WebSocket message: {e}", exc_info=True)
-
-        # 为了让 ws.py 能调用异步回调，我们需要一个包装器
-        def _on_raw_message(raw_msg):
-            # 在新的任务中运行异步回调，避免阻塞事件循环；
-            # 必须持有任务引用，否则事件循环只持弱引用，任务可能被 GC 中途取消
-            task = asyncio.create_task(on_raw_message(raw_msg))
-            self._ws_tasks.add(task)
-            task.add_done_callback(self._ws_tasks.discard)
-
-        self.ws_client = MxWsClient(
-            self.config,
-            _on_raw_message,
-            on_give_up=on_ws_give_up,
-            on_storm=on_storm,
-            on_reconnected=on_reconnected,
-        )
-        await self.ws_client.run_forever()
-
-    async def stop_ws(self, reason: str = "已手动断开"):
-        """停止 WebSocket 连接（reason 记录触发者，供状态页如实展示）。"""
-        if self.ws_client:
-            await self.ws_client.stop(reason=reason)
 
     def _parse_message_to_post(self, raw_msg, kol=None):
         """
@@ -399,8 +221,8 @@ class MxFetcher(Fetcher):
                 images=images,
                 detail=detail,
             )
-        except Exception as e:
-            logger.error(f"Failed to parse MX message to post: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Failed to parse MX message to post")
             return None
 
     @staticmethod
@@ -534,41 +356,3 @@ class MxFetcher(Fetcher):
         if cached is not None:
             images.append(cached)
         return cached
-
-    def get_ws_status(self):
-        """
-        获取 WebSocket 连接状态。
-
-        Returns:
-            状态字典（detail 用于区分未连接的具体原因）
-        """
-        if self.ws_client:
-            client = self.ws_client
-            gave_up = bool(getattr(client, "gave_up", False))
-            if getattr(client, "manually_stopped", False):
-                detail = getattr(client, "stop_reason", "") or "已手动断开"
-            elif gave_up:
-                # 唯一一次自动重连也失败了：已永久放弃自动重连
-                detail = "自动重连失败已停止，请手动接入"
-            elif not client.connected:
-                # 断线后等 16-36 秒随机重连一次；任务已退出且未放弃时需管理员接入
-                detail = "未连接，等待自动重连" if getattr(client, "running", False) else "已断线，请手动接入"
-            else:
-                detail = ""
-            return {
-                "connected": client.connected,
-                "last_message_at": client.last_message_at,
-                "gave_up": gave_up,
-                "detail": detail,
-            }
-        if not self._ws_enabled:
-            return {
-                "connected": False,
-                "last_message_at": None,
-                "detail": "WS 未启用（ws_enabled=false）",
-            }
-        return {
-            "connected": False,
-            "last_message_at": None,
-            "detail": "WS 尚未启动",
-        }

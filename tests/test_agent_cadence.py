@@ -1,19 +1,20 @@
 """行为器切房间节奏的纯逻辑测试（票 #17 交付物 ③）。
 
-语义红线（票 #17 交付物 3）：间隔与抖动从 app/services/mx_activity
-搬运，不重写——ACTIVITY_INTERVAL_RANGE = (300.0, 600.0)「用户口径 5-10 分钟」、
+语义红线（票 #17 交付物 3）：间隔与抖动自原 app/services/mx_activity
+搬运，不重写——ACTIVITY_INTERVAL_RANGE = (300.0, 600.0)「用户口径 5-10 分钟」
+（原云端模块已随 ADR-0001 分层删除退役，常量现落地 agent.cadence）、
 「排除上一个房间」、「会话开启即武装、首次点击落在随机间隔后」；房间点击后
 记录「最后打开的房间」（本地等价云端 settings 键 mx_last_room）。
 
-本地 agent 与云端 mx_activity 的差异只有执行面：云端发 HTTP 三连，本地
+本地 agent 与原云端行为模拟的差异只有执行面：云端发 HTTP 三连，本地
 CDP 真点击（浏览器自己发请求）——选择目标/间隔/排除上一个/最后房间记录
-语义照搬（mx_activity.py:72-83 的 _pick_room、:62 的武装语义）。
+语义照搬（原 mx_activity.py:72-83 的 _pick_room、:62 的武装语义）。
 """
 from __future__ import annotations
 
 import random
 
-from agent.cadence import RoomCadence, pick_room
+from agent.cadence import ACTIVITY_INTERVAL_RANGE, RoomCadence, pick_room
 
 ROOMS = ["格兰投研888", "妖股刺客", "姆爷的守护", "老樊"]
 
@@ -21,9 +22,8 @@ ROOMS = ["格兰投研888", "妖股刺客", "姆爷的守护", "老樊"]
 # ---- 间隔与抖动 ----
 
 def test_interval_range_is_5_to_10_minutes():
-    """间隔常量与 mx_activity.ACTIVITY_INTERVAL_RANGE 一致（300-600 秒）。"""
-    from app.services.mx_activity import ACTIVITY_INTERVAL_RANGE
-
+    """间隔常量为 300-600 秒（用户口径 5-10 分钟，搬运红线锁定数值）。"""
+    assert ACTIVITY_INTERVAL_RANGE == (300.0, 600.0)
     assert RoomCadence.interval_range() == ACTIVITY_INTERVAL_RANGE
 
 
@@ -36,7 +36,7 @@ def test_next_fire_sampled_within_range():
 
 
 def test_arms_first_click_after_random_interval():
-    """会话开启即武装：首次点击落在一个随机间隔之后（mx_activity.py:62
+    """会话开启即武装：首次点击落在一个随机间隔之后（原 mx_activity.py:62
     「启动序列本身已是官方冷启动足迹，紧跟着就点房间反而不像」）。"""
     lo, hi = RoomCadence.interval_range()
     for _ in range(50):
@@ -71,7 +71,7 @@ def test_pick_room_excludes_last_room():
 
 
 def test_pick_room_falls_back_when_all_excluded():
-    """只有一个房间（排除后为空）：回卷到它（mx_activity.fresh or kols 同语义）。"""
+    """只有一个房间（排除后为空）：回卷到它（原 mx_activity.fresh or kols 同语义）。"""
     assert pick_room(["唯一房"], last_room="唯一房", rng=random.Random()) == "唯一房"
 
 

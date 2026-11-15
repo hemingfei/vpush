@@ -257,7 +257,6 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         config.sources.xueqiu,
         config.sources.weibo,
         config.llm,
-        config.sources.mx,
         news_service=news_service,
         ima_archive_file=_ima_archive_file,
     )
@@ -444,14 +443,6 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             # MX 观点截图页 token（/api/mx-shot/{token}）：留空=功能整体关闭
             mx_shot_token=config.mx_shot_token,
             ima_documents=ima_documents,
-            # MX 配置保存后热应用到调度器；纯 UI 调试模式无后台任务，不做热应用
-            on_mx_config_changed=scheduler.apply_mx_config if background_workers_enabled() else None,
-            # MX WebSocket 手动接入/断开（设置页按钮），同样仅在后台任务启用时可用
-            on_mx_ws_control=scheduler.mx_ws_control if background_workers_enabled() else None,
-            # MX 设置页「登录」按钮：开窗式完整启动序列 + 房间同步 + 连接 WS
-            on_mx_session_login=scheduler.mx_manual_login if background_workers_enabled() else None,
-            # MX 报错统一走V平台 KOL「系统通知」发布（含 TOKEN 过期熔断标记）
-            on_mx_alert=scheduler.publish_mx_error if background_workers_enabled() else None,
             feishu_documents=feishu_documents,
             news_service=news_service,
             # V平台 KOL Webhook 来帖的入库+推送回调（纯 UI 调试模式下只入库不推送）

@@ -1,5 +1,12 @@
 # MX 平台半自动换 TOKEN 脚本
 
+> **2026-11-15 注**：下文「自动触发（2026-10-13 起，vpush 服务端内置）」一节
+> 所述云端自动换 TOKEN（原 `app/services/mx_auto_renew.py` / MxAutoRenewer +
+> scheduler 接线）已随 ADR-0001 分层删除（云端直连链路退役，见
+> `docs/adr/0001-local-dual-component-capture.md`）一并退役，触发点
+> （WS 风暴/永久放弃）已不存在；本脚本的手动换 token 与 Jenkins
+> `vpush-mx-token` 任务（mx-shot 等旁路功能依赖）不受影响，照常使用。
+
 > `python scripts/mx_login.py` —— 拉验证码 → 人工/OCR 输码 → 登录 → 写回 vpush。
 > 取代旧流程「浏览器登录 → F12 抠 token → 后台手粘」，把每次换 token 的成本
 > 从几分钟降到约 15 秒（输一次验证码）。

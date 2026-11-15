@@ -160,7 +160,7 @@ def test_room_switch_flow_records_last_room(monkeypatch, tmp_path, env):
 
 
 def test_room_click_failure_postpones_only(monkeypatch, tmp_path, env):
-    """单次点击失败只顺延节奏，不炸循环（mx_activity 单次失败顺延语义）。"""
+    """单次点击失败只顺延节奏，不炸循环（原 mx_activity 单次失败顺延语义）。"""
     from agent.cadence import RoomCadence
 
     cfg, tmp_path = env

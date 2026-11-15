@@ -75,8 +75,7 @@ def check_cadence() -> None:
     """切房节奏冒烟：5-10 分钟区间 + 排除上一个。"""
     import random
 
-    from agent.cadence import pick_room
-    from app.services.mx_activity import ACTIVITY_INTERVAL_RANGE
+    from agent.cadence import ACTIVITY_INTERVAL_RANGE, pick_room
 
     lo, hi = ACTIVITY_INTERVAL_RANGE
     assert (lo, hi) == (300.0, 600.0), "间隔区间必须是 5-10 分钟（搬运红线）"

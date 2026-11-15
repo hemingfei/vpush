@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from urllib.parse import urlparse
 
 import yaml
 
@@ -126,21 +125,10 @@ class ImaConfig:
 
 @dataclass
 class MxConfig:
-    enabled: bool = False
-    token: str = ""
+    # 只保留 api_base：云端已不再直连 MX，唯一用途是云网关把采集器上行的
+    # 相对附件地址拼成可访问的绝对地址（解析层与 fetcher 同源配置）。
     # 2026-10-12 平台迁至 foodtop1.com（旧域 naaifu.cn 的 /business-api/* 已 404）。
-    # 新域 4/5 两版并存、token 通用（默认取浏览器实连的 /4）；WS 端点形态 {api_base}/socket.io/
     api_base: str = "https://mx.2026.foodtop1.com/business-api/4"
-    ws_url: str = "wss://mx.2026.foodtop1.com/business-api/4"
-    ws_path: str = "/socket.io"
-    ws_namespace: str = "/msg"
-    ws_enabled: bool = True
-    # WS 传输实现：curl_cffi=原生 EIO4/SIO5 栈（Chrome TLS 指纹，2026-10-12
-    # 起默认）；socketio=旧 python-socketio/aiohttp 路径（协议异常时回滚开关）
-    ws_impl: str = "curl_cffi"
-    # 官方 msg/list 的 pagesize 实测为 30（2026-09-02 抓包）
-    page_size: int = 30
-    max_history_pages: int = 100
 
 
 @dataclass
@@ -254,15 +242,7 @@ _ENV_MAP = {
     "WEIBO_TOKEN": ("sources", "weibo", "token"),
     "WEIBO_USERNAME": ("sources", "weibo", "username"),
     "WEIBO_PASSWORD": ("sources", "weibo", "password"),
-    "MX_ENABLED": ("sources", "mx", "enabled"),
-    "MX_TOKEN": ("sources", "mx", "token"),
     "MX_API_BASE": ("sources", "mx", "api_base"),
-    "MX_WS_URL": ("sources", "mx", "ws_url"),
-    "MX_WS_PATH": ("sources", "mx", "ws_path"),
-    "MX_WS_ENABLED": ("sources", "mx", "ws_enabled"),
-    "MX_WS_IMPL": ("sources", "mx", "ws_impl"),
-    "MX_PAGE_SIZE": ("sources", "mx", "page_size"),
-    "MX_MAX_HISTORY_PAGES": ("sources", "mx", "max_history_pages"),
     "POLLING_INTERVAL_SECONDS": ("polling", "interval_seconds"),
     "POLLING_PRIORITY_INTERVAL_SECONDS": ("polling", "priority_interval_seconds"),
     "POLLING_JITTER_SECONDS": ("polling", "jitter_seconds"),
@@ -316,26 +296,6 @@ def _set_path(obj, path, value) -> None:
     for key in path[:-1]:
         obj = getattr(obj, key)
     setattr(obj, path[-1], value)
-
-
-def _migrate_legacy_mx_ws_url(config: Config) -> None:
-    """旧版默认 ws_url（站点根路径）自动迁移为官方实际形态（{api_base} 的 wss 形态）。
-
-    2026-09-02 抓包确认官方网页端 WS 实际连 {api_base}/socket.io/，代码默认值与
-    文档已同步；更早部署的 config.yaml 里可能还存着旧的站点根路径值，加载时自动
-    纠正（管理端下次保存配置即落盘新值）。ws_url 已是带路径的形态则视为自定义
-    配置，原样保留。
-    """
-    mx = config.sources.mx
-    api_base = (mx.api_base or "").strip()
-    if not api_base:
-        return
-    parsed = urlparse(api_base)
-    if not parsed.netloc:
-        return
-    legacy = f"wss://{parsed.netloc}"
-    if (mx.ws_url or "").strip().rstrip("/") == legacy:
-        mx.ws_url = f"wss://{parsed.netloc}{parsed.path}".rstrip("/")
 
 
 def _validate(config: Config) -> None:
@@ -457,6 +417,5 @@ def load_config(path: str | Path | None = None) -> Config:
             continue
         # 原始字符串交给 _validate 的 checks 表归一化（str→int/bool），不在此重复转换
         _set_path(config, attr_path, value)
-    _migrate_legacy_mx_ws_url(config)
     _validate(config)
     return config
