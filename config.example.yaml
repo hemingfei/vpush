@@ -51,24 +51,11 @@ sources:
     username: ""      # 可选：微博账号（配置后自动登录续期 cookie）
     password: ""      # 可选：微博密码
   mx:
-    enabled: false     # 是否启用 MX 平台
-    token: ""         # MX API 访问 token
-    api_base: "https://mx.2026.naaifu.cn/business-api/5"  # MX API 基础地址
-    ws_url: "wss://mx.2026.naaifu.cn/business-api/5"  # MX WebSocket 地址（与官方网页端一致：连 {api_base}/socket.io/）
-    ws_path: "/socket.io"  # MX WebSocket 路径
-    ws_namespace: "/msg"  # MX WebSocket namespace
-    ws_enabled: true   # 是否启用 WebSocket 实时推送
-    page_size: 30      # 历史消息分页大小（官方 msg/list 实测值）
-    max_history_pages: 100  # 最大历史消息页数
-    # 自动换 TOKEN（2026-10-13 起）：WS 风暴形态（连续 2 次连上即断）或放弃
-    # 重连时自动触发 Jenkins vpush-mx-token 构建换新 token。凭据只走环境变量
-    # （不入配置文件/数据库）：MX_RENEW_JENKINS_USER / MX_RENEW_JENKINS_PASSWORD
-    # 必填，缺省=功能关闭；可选 MX_RENEW_JENKINS_URL / MX_RENEW_JENKINS_JOB /
-    # MX_RENEW_DAILY_BUDGET（默认 2 次/日）/ MX_RENEW_COOLDOWN_MIN（默认 60）/
-    # MX_RENEW_DISABLED=1 强制关闭
-    # 会话中段真人活动模拟（2026-10-13 起）：会话在线期间每 5-10 分钟点开一个
-    # 启用房间（room/view + room/notice，官方点选房间同形），对冲「会话零操作」
-    # 画像假设；环境变量 MX_ACTIVITY_SIM=0 关闭（默认开启）
+    # 云端已不再直连 MX（ADR-0001 本地双组件采集，2026-11-15 起）：消息由本地
+    # 行为器+采集器扩展经 wss 上行云网关；此块只留 api_base——云网关把上行帧里的
+    # 相对附件地址拼成绝对地址用。旧 ws_*/token/enabled 等键已随分层删除退役，
+    # 存量配置里的残留键会被加载器忽略，无需手工清理。
+    api_base: "https://mx.2026.foodtop1.com/business-api/5"  # MX API 基础地址（2026-10-12 迁域后）
 
 polling:
   interval_seconds: 180

@@ -26,24 +26,36 @@ class LockState:
 
 
 def _pid_alive(pid: int | None) -> bool:
-    """Windows 进程存活探测（无第三方依赖：OpenProcess 探柄即判）。"""
+    """进程存活探测（无第三方依赖；跨平台——agent 仅在 Windows 运行，
+    但 CI 的 test-python 车道是 Linux，windll 仅存在于 Windows）。"""
     if not pid or pid <= 0:
         return False
-    import ctypes
+    if os.name == "nt":
+        import ctypes
 
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    STILL_ACTIVE = 259
-    handle = ctypes.windll.kernel32.OpenProcess(
-        PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not handle:
-        return False  # 打不开：进程不存在（或权限不足——本场景同用户，可判死）
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        handle = ctypes.windll.kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False  # 打不开：进程不存在（或权限不足——本场景同用户，可判死）
+        try:
+            code = ctypes.c_ulong()
+            if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return code.value == STILL_ACTIVE
+            return True  # 查不到退出码按活着算（保守侧：宁不拉起勿双开）
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    # 非 Windows（CI/测试）：os.kill 探活，权限错=活着、无此进程=死
     try:
-        code = ctypes.c_ulong()
-        if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-            return code.value == STILL_ACTIVE
-        return True  # 查不到退出码按活着算（保守侧：宁不拉起勿双开）
-    finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True  # 未知异常按活着算（保守侧：宁不拉起勿双开）
 
 
 def acquire_lock(lock_path) -> LockState:
