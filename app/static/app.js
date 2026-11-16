@@ -9080,7 +9080,9 @@ async function mxRoomGroupEdit(groupId) {
     return;
   }
   if (!group) { flash("分组不存在", "error"); return; }
-  _mxGroupOpenDialog(`编辑分组：${group.name}`, Number(group.id), group.name,
+  // 标题拼接走普通字符串（组名进 _mxGroupOpenDialog 后由 escapeHtml 转义渲染，
+  // 不在模板字面量里插值——innerHTML 静态防线只信 escapeHtml 上下文）
+  _mxGroupOpenDialog("编辑分组：" + group.name, Number(group.id), group.name,
     (group.members || []).map((m) => m.kol_id), group.push_mode || "merged");
 }
 
