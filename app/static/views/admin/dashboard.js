@@ -338,6 +338,17 @@ export function createAdminDashboardView(dependencies) {
       </section>
       <section class="section-panel">
         <header class="section-head">
+          <div><h2 class="section-title">房间分组</h2>
+          <p class="section-meta">把任意房间合并成组：智囊团页面可按组看合并观点流/合并榜；订阅组内任一房间的用户按组收合并推送（模式可改回逐房间）。成员以本地大V为准，房间重映射不受影响。</p></div>
+          <div class="toolbar mx-rooms-head-actions">
+            <button class="btn-ghost" onclick="loadMxRoomGroups()">刷新</button>
+            <button class="btn-normal" onclick="mxRoomGroupCreate()">新建分组</button>
+          </div>
+        </header>
+        <div id="mx-room-groups-list"><p class="muted">加载中…</p></div>
+      </section>
+      <section class="section-panel">
+        <header class="section-head">
           <div><h2 class="section-title">本地采集设备</h2>
           <p class="section-meta">MX 消息已改由本地真实浏览器采集（行为器 + 采集器扩展，ADR-0001）：扩展经 wss 把帧上行到云网关。这里签发一次性配对码绑定新设备、查看设备在线状态与生命周期事件；换电脑或疑似泄露时吊销设备，其采集连接立即断开。</p></div>
         </header>

@@ -29,7 +29,8 @@ export function createMxViewsView(dependencies) {
     feedSearch: "", feedKolOpen: false, feedKolSearch: "", feedFreshPending: false, actionTags: [],
     applySeq: 0, tlDrag: false, tlPreviewIdx: -1,
     hlKey: "", hlPinned: false, boardMode: { topic: "heat", stock: "heat" },
-    boardStep: 1, hlDocBound: false };
+    boardStep: 1, hlDocBound: false,
+    groups: [], group: 0, groupOpen: false };
   const MXV_BOARD_LIST_LIMIT = 4; // 双榜明细默认条数，超出走「更多」展开
   const MXV_HEAT_ROWS = 4; // 热力云默认最多行数，超出出「更多」展开
   const MXV_KOL_COLLAPSE_ROWS = 4; // 大V总览单列（手机）默认露出的卡片数，超出走「更多」展开
@@ -44,6 +45,7 @@ export function createMxViewsView(dependencies) {
         // 展示口径偏好同桶持久化：双榜热力/明细、大V区按大V/按个股、卡片折叠
         boardMode: { topic: _mxv.boardMode.topic, stock: _mxv.boardMode.stock },
         kolMode: _mxv.kolMode, kolExpanded: !!_mxv.kolExpanded,
+        group: _mxv.group, // 房间分组选择同桶持久化；旧数据无此字段回落 0=全部
       }));
     } catch (e) { /* 存储不可用（隐私模式等）：筛选仍在本页生效，只是不跨刷新 */ }
   }
@@ -70,6 +72,8 @@ export function createMxViewsView(dependencies) {
       }
       if (saved.kolMode === "kol" || saved.kolMode === "stock") _mxv.kolMode = saved.kolMode;
       if (typeof saved.kolExpanded === "boolean") _mxv.kolExpanded = saved.kolExpanded;
+      // 房间分组恢复（旧数据无字段回落 0=全部；正整数才认）
+      if (Number.isInteger(saved.group) && saved.group > 0) _mxv.group = saved.group;
     } catch (e) { /* 坏数据忽略，用默认筛选 */ }
   }
 
@@ -85,15 +89,22 @@ export function createMxViewsView(dependencies) {
       mxvSetHighlight("");
     });
     document.addEventListener("click", (e) => {
-      // 月历外点关闭（按钮自身点击交给 mxvCalToggle 切换）
-      if (!document.querySelector(".mxv-cal")) return;
-      if (e.target.closest && (e.target.closest(".mxv-cal") || e.target.closest("#mxv-day-btn"))) return;
-      mxvCalClose();
+      // 月历/分组弹层外点关闭（按钮自身点击交给各自 toggle 切换）
+      if (document.querySelector(".mxv-cal")
+          && !(e.target.closest && (e.target.closest(".mxv-cal") || e.target.closest("#mxv-day-btn")))) {
+        mxvCalClose();
+      }
+      // 分组弹层（与月历同为状态栏弹出层，外点同语义）
+      if (document.querySelector("#mxv-group-slot .mxv-cal")
+          && !(e.target.closest && (e.target.closest("#mxv-group-slot") || e.target.closest("#mxv-group-btn")))) {
+        mxvGroupClose();
+      }
     });
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       if (e.isComposing || e.keyCode === 229) return; // 输入法组字中：Esc 先取消组词，不当页面级 Esc 处理
       if (document.querySelector(".mxv-cal")) { mxvCalClose(); return; }
+      if (document.querySelector("#mxv-group-slot .mxv-cal")) { mxvGroupClose(); return; }
       if (document.querySelector(".mxc-drawer")) { closeHoldingsDrawer(); return; }
       if (document.querySelector(".mxv-drawer")) { mxvCloseDrawer(); return; } // 桌面端关观点/标的抽屉（安卓返回键已有同层）
       if (_mxv.feedKolOpen) { _mxv.feedKolOpen = false; mxvRenderFeed(); return; }
@@ -146,14 +157,20 @@ export function createMxViewsView(dependencies) {
     setPageTitle(window.matchMedia("(max-width: 900px)").matches ? "研判" : "观点研判");
     $("#main").innerHTML = `<div class="mxv-root"><div class="mxv-empty">加载中…</div></div>`;
     try {
-      const [daysData, subRows] = await Promise.all([
+      const [daysData, subRows, groupsData] = await Promise.all([
         api("/api/mx-views/days"),
         api("/api/my/subscriptions").catch(() => []), // 关注大V置顶用；失败不阻塞页面
+        api("/api/mx-views/groups").catch(() => null), // 分组列表失败不阻塞页面（旧后端无此端点）
       ]);
       if (!routeStillActive(seq)) return;
       _mxv.days = (daysData.days || []).map((d) => d.trading_day);
       _mxv.followed = new Set((Array.isArray(subRows) ? subRows : [])
         .filter((r) => r.platform === "mx").map((r) => Number(r.id)));
+      _mxv.groups = (groupsData && groupsData.groups) || [];
+      // 持久化的分组已不存在（被删）：回落全部，避免一直 404
+      if (_mxv.group && !_mxv.groups.some((g) => Number(g.id) === Number(_mxv.group))) {
+        _mxv.group = 0;
+      }
       const qday = routeQuery().get("day");
       await mxvLoadDay(qday && _mxv.days.includes(qday) ? qday : (_mxv.days[0] || null), seq);
       if (!routeStillActive(seq)) return;
@@ -185,7 +202,7 @@ export function createMxViewsView(dependencies) {
     // 调用方（内联 onclick / SSE handler）不再产生 unhandled rejection
     let data;
     try {
-      data = await api(`/api/mx-views/snapshot?day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(at)}`);
+      data = await api(`/api/mx-views/snapshot?day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(at)}${_mxv.group ? `&group_id=${_mxv.group}` : ""}`);
     } catch (err) {
       if (routeStillActive(_mxv.seq)) flash(`快照加载失败: ${err.message}`, "error");
       return;
@@ -218,7 +235,7 @@ export function createMxViewsView(dependencies) {
     _mxv.feedPending = false;
     const key = _mxv.feedKey;
     try {
-      const data = await api(`/api/mx-views/feed?day=${encodeURIComponent(_mxv.day)}`);
+      const data = await api(`/api/mx-views/feed?day=${encodeURIComponent(_mxv.day)}${_mxv.group ? `&group_id=${_mxv.group}` : ""}`);
       if (!routeStillActive(_mxv.seq) || key !== _mxv.feedKey) return;
       _mxv.feedBatches = data.batches || [];
       _mxv.feedFailed = false;
@@ -299,6 +316,56 @@ export function createMxViewsView(dependencies) {
   function mxvPickDay(day) { go(`/mx-views?day=${encodeURIComponent(day)}`); }
 
   // ---- 交易日月历选择器：状态栏日期按钮弹出月历，仅有观点数据的交易日可点 ----
+  function mxvGroupName() {
+    const g = _mxv.groups.find((x) => Number(x.id) === Number(_mxv.group));
+    return g ? g.name : "全部房间";
+  }
+
+  function mxvGroupToggle() {
+    if (_mxv.groupOpen) { mxvGroupClose(); return; }
+    _mxv.groupOpen = true;
+    const slot = document.getElementById("mxv-group-slot");
+    if (!slot) { _mxv.groupOpen = false; return; }
+    slot.innerHTML = `
+    <div class="mxv-cal" role="listbox" aria-label="选择房间分组" style="min-width:180px;padding:6px">
+      <button type="button" class="cal-d has ${!_mxv.group ? "sel" : ""}" style="width:100%;justify-content:flex-start"
+        onclick="mxvGroupPick(0)" role="option" aria-selected="${!_mxv.group}">全部房间</button>
+      ${_mxv.groups.map((g) => `
+      <button type="button" class="cal-d has ${Number(g.id) === Number(_mxv.group) ? "sel" : ""}" style="width:100%;justify-content:flex-start"
+        onclick="mxvGroupPick(${Number(g.id)})" role="option" aria-selected="${Number(g.id) === Number(_mxv.group)}">${escapeHtml(g.name)}<span class="muted" style="margin-left:auto;font-size:11px">${Number(g.member_count) || 0}</span></button>`).join("")}
+    </div>`;
+    // 定位同 mxvCalPlace 口径：按钮下方 + 视口内钳位（CSS 的居中位移被 transform:none 覆盖）
+    const cal = slot.querySelector(".mxv-cal");
+    const btn = document.getElementById("mxv-group-btn");
+    if (cal && btn) {
+      const root = cal.closest(".mxv-root");
+      const rr = root ? root.getBoundingClientRect() : { left: 0, top: 0 };
+      const br = btn.getBoundingClientRect();
+      const w = cal.offsetWidth || 180;
+      const vw = document.documentElement.clientWidth;
+      const left = Math.max(8, Math.min(br.left + br.width / 2 - w / 2, vw - w - 8));
+      cal.style.left = `${Math.round(left - rr.left)}px`;
+      cal.style.top = `${Math.round(br.bottom + 6 - rr.top)}px`;
+      cal.style.transform = "none";
+    }
+  }
+
+  function mxvGroupClose() {
+    const slot = document.getElementById("mxv-group-slot");
+    if (slot) slot.innerHTML = "";
+    _mxv.groupOpen = false;
+  }
+
+  function mxvGroupPick(id) {
+    mxvGroupClose();
+    if (Number(id) === Number(_mxv.group)) return;
+    _mxv.group = Number(id) || 0;
+    mxvSaveFilters();
+    // 组是整页口径（流/榜/大V/下钻全过滤）：换组即按当前时刻重取整页
+    mxvApplySnapshot(_mxv.snapshots.length && _mxv.atLatest
+      ? _mxv.snapshots[_mxv.snapshots.length - 1].snapshot_at : (_mxv.at || ""));
+  }
+
   function mxvCalToggle() {
     if (document.querySelector(".mxv-cal")) { mxvCalClose(); return; }
     const base = _mxv.day || _mxv.days[_mxv.days.length - 1] || "";
@@ -412,6 +479,10 @@ export function createMxViewsView(dependencies) {
         <span class="mxv-pill"><span class="mxv-dot sse${_mxv.sseOk ? " on" : ""}" title="实时推送状态"></span>数据 ${escapeHtml(_mxv.at || "—")}${p.message_count != null ? ` · ${p.message_count} 条消息` : ""}</span>
         <button type="button" class="mxv-pill mxv-day-btn" id="mxv-day-btn" style="color:var(--mxv-text);cursor:pointer"
           onclick="mxvCalToggle()" aria-label="选择交易日，当前 ${escapeHtml(_mxv.day || "")}">📅 ${escapeHtml(_mxv.day || "—")}</button>
+        ${_mxv.groups.length ? `
+        <button type="button" class="mxv-pill mxv-day-btn" id="mxv-group-btn" style="color:var(--mxv-text);cursor:pointer"
+          onclick="mxvGroupToggle()" aria-label="选择房间分组，当前 ${escapeHtml(mxvGroupName())}" aria-expanded="${!!_mxv.groupOpen}">👥 ${escapeHtml(mxvGroupName())}</button>
+        <div id="mxv-group-slot"></div>` : ""}
         <button class="mxv-btn" onclick="mxvRefreshLatest()" style="margin-left:auto">刷新</button>
       </div>
       ${mxvTimelineHtml()}
@@ -1707,7 +1778,7 @@ export function createMxViewsView(dependencies) {
     // 请求时刻捕获 day/at：换快照后旧 at 的慢响应不得回退抽屉数据
     const reqDay = _mxv.day, reqAt = _mxv.at || "";
     try {
-      const data = await api(`/api/mx-views/target?type=${type}&name=${encodeURIComponent(name)}&day=${encodeURIComponent(reqDay)}&at=${encodeURIComponent(reqAt)}`);
+      const data = await api(`/api/mx-views/target?type=${type}&name=${encodeURIComponent(name)}&day=${encodeURIComponent(reqDay)}&at=${encodeURIComponent(reqAt)}${_mxv.group ? `&group_id=${_mxv.group}` : ""}`);
       // 竞态守卫：题材与个股可同名，type 也要比对，防止旧响应污染新抽屉（同 mxvOpenKol 口径）
       if (!_mxv.drawer || _mxv.drawer.type !== type || _mxv.drawer.name !== name) return;
       if (_mxv.day !== reqDay || (_mxv.at || "") !== reqAt) return;
@@ -2586,6 +2657,9 @@ export function createMxViewsView(dependencies) {
     mxvCalNav,
     mxvCalPick,
     mxvCalClose,
+    mxvGroupToggle,
+    mxvGroupClose,
+    mxvGroupPick,
     mxvRefreshLatest,
     mxvApplySnapshot,
     mxvGoLatest,

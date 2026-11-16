@@ -6951,8 +6951,103 @@ def create_api_router(
         _audit(admin, "delete_category", str(category_id))
         return {"ok": True}
 
+    # ---- MX 房间分组：管理端 CRUD（spec 2026-11-16，require_admin） ----
+
+    def _mx_group_members_with_names(group: dict) -> dict:
+        """组行 + 成员名明细（管理端列表展示用；kol 名现查，停用大V也照实展示）。"""
+        member_ids = group.pop("member_ids", [])
+        members = []
+        for kid in member_ids:
+            kol = db.get_kol(int(kid))
+            members.append({"kol_id": int(kid),
+                            "name": (kol or {}).get("name") or "",
+                            "enabled": bool((kol or {}).get("enabled"))})
+        out = dict(group)
+        out["members"] = members
+        out["member_count"] = len(members)
+        return out
+
+    @router.get("/admin/mx-room-groups", dependencies=[Depends(require_admin)])
+    def list_mx_room_groups():
+        return {"groups": [_mx_group_members_with_names(g)
+                           for g in db.list_mx_room_groups(enabled_only=False)]}
+
+    @router.post("/admin/mx-room-groups", dependencies=[Depends(require_admin)])
+    async def create_mx_room_group(request: Request, admin: dict = Depends(require_admin)):
+        raw = await request.json()
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="组名不能为空")
+        member_ids = [int(i) for i in (raw.get("member_ids") or [])]
+        push_mode = str(raw.get("push_mode") or "merged")
+        try:
+            group_id = db.create_mx_room_group(name, member_ids, push_mode)
+        except Exception as exc:  # noqa: BLE001 - UNIQUE 冲突转 409，其余照抛
+            if "UNIQUE" in str(exc):
+                raise HTTPException(status_code=409, detail="组名已存在")
+            raise
+        _audit(admin, "create_mx_room_group", str(group_id),
+               f"name={name}, members={len(member_ids)}, push_mode={push_mode}")
+        return {"id": group_id}
+
+    @router.put("/admin/mx-room-groups/{group_id}", dependencies=[Depends(require_admin)])
+    async def update_mx_room_group(group_id: int, request: Request,
+                                   admin: dict = Depends(require_admin)):
+        raw = await request.json()
+        ok = db.update_mx_room_group(
+            group_id,
+            name=raw.get("name"),
+            enabled=raw.get("enabled"),
+            push_mode=raw.get("push_mode"),
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="分组不存在")
+        _audit(admin, "update_mx_room_group", str(group_id),
+               f"name={raw.get('name')}, enabled={raw.get('enabled')}, "
+               f"push_mode={raw.get('push_mode')}")
+        return {"ok": True}
+
+    @router.put("/admin/mx-room-groups/{group_id}/members",
+                dependencies=[Depends(require_admin)])
+    async def replace_mx_room_group_members(group_id: int, request: Request,
+                                            admin: dict = Depends(require_admin)):
+        raw = await request.json()
+        member_ids = [int(i) for i in (raw.get("member_ids") or [])]
+        if not db.replace_mx_room_group_members(group_id, member_ids):
+            raise HTTPException(status_code=404, detail="分组不存在")
+        _audit(admin, "replace_mx_room_group_members", str(group_id),
+               f"members={len(member_ids)}")
+        return {"ok": True}
+
+    @router.delete("/admin/mx-room-groups/{group_id}", dependencies=[Depends(require_admin)])
+    def delete_mx_room_group(group_id: int, admin: dict = Depends(require_admin)):
+        if not db.delete_mx_room_group(group_id):
+            raise HTTPException(status_code=404, detail="分组不存在")
+        _audit(admin, "delete_mx_room_group", str(group_id))
+        return {"ok": True}
+
     # ---- MX 大V实时观点（用户端） ----
     from .mx_view_analysis import get_view_version
+
+    def _mxv_group_kol_ids(group_id: int | None) -> list[int] | None:
+        """组过滤辅助：group_id 空/0=不过滤（None）；组不存在或停用→ 422/404 由
+        调用方在取不到组时报。返回成员 id 列表（空组=空列表→无观点）。"""
+        if not group_id:
+            return None
+        group = db.get_mx_room_group(int(group_id))
+        if group is None:
+            raise HTTPException(status_code=404, detail="分组不存在")
+        if not int(group.get("enabled") or 0):
+            raise HTTPException(status_code=422, detail="分组已停用")
+        return db.mx_room_group_member_ids(int(group_id))
+
+    @router.get("/mx-views/groups")
+    async def mx_views_groups(current_user: dict = Depends(get_current_user)):
+        """启用分组列表（观看端选择器）：只暴露 id/name/成员数，成员明细走管理端。"""
+        return {"groups": [{"id": int(g["id"]), "name": g["name"],
+                            "member_count": len(g["member_ids"])}
+                           for g in db.list_mx_room_groups(enabled_only=True)]}
+
 
     @router.get("/mx-views/days")
     async def mx_views_days(current_user: dict = Depends(get_current_user)):
@@ -6971,15 +7066,41 @@ def create_api_router(
                 "action_tags": db.get_action_tag_vocabulary()}
 
     @router.get("/mx-views/snapshot")
-    async def mx_views_snapshot(day: str, at: str, current_user: dict = Depends(get_current_user)):
-        snap = db.get_mx_view_snapshot(day, at)
-        if not snap:
-            raise HTTPException(status_code=404, detail="快照不存在")
-        return {"trading_day": day, "snapshot_at": at, "version": get_view_version(db),
-                "payload": snap["payload"]}
+    async def mx_views_snapshot(day: str, at: str, group_id: int = 0,
+                                current_user: dict = Depends(get_current_user)):
+        """快照整页状态。group_id 非空=按组成员重聚合（合并榜/合并大V/合并流的上游），
+        纯计算零 LLM；快照存档本身不动。"""
+        payload = None
+        version = get_view_version(db)
+        if group_id:
+            member_ids = _mxv_group_kol_ids(group_id)
+            opinions = db.list_mx_opinions(day, kol_ids=member_ids)
+            if not member_ids:
+                payload = None  # 空组：前端按空态渲染，不落聚合
+            else:
+                from .mx_view_analysis import aggregate_day_state
+                # 逐快照重聚合到 at 时刻：prev 传 None 逐段续算保证动量正确
+                snaps = db.list_mx_view_snapshot_meta(day)
+                for s in snaps:
+                    if str(s["snapshot_at"]) > at:
+                        break
+                    payload = aggregate_day_state(
+                        day, str(s["snapshot_at"]),
+                        [o for o in opinions if str(o["snapshot_at"]) <= str(s["snapshot_at"])],
+                        prev_payload=payload,
+                    )
+                if payload is None:
+                    raise HTTPException(status_code=404, detail="快照不存在")
+        else:
+            snap = db.get_mx_view_snapshot(day, at)
+            if not snap:
+                raise HTTPException(status_code=404, detail="快照不存在")
+            payload = snap["payload"]
+        return {"trading_day": day, "snapshot_at": at, "version": version,
+                "payload": payload}
 
     @router.get("/mx-views/feed")
-    def mx_views_feed(day: str, after_id: int = 0,
+    def mx_views_feed(day: str, after_id: int = 0, group_id: int = 0,
                       current_user: dict = Depends(get_current_user)):
         """全天实时观点流：直读当日 mx_opinions 全量（观点流唯一数据源，快照
         payload 不再冗余存 new_opinions）。最新批次在前、批内按发生时间倒序
@@ -6988,12 +7109,14 @@ def create_api_router(
         after_id 可选增量拉取：只返回 id > after_id 的观点，响应带 max_id（本次
         实际下发观点的最大 id，无下发则不带——客户端维持旧游标下轮再取）；不传时
         行为不变（全量，响应也不带 max_id），旧前端零改动。
+        group_id 非空=按组成员过滤（合并流）。
         同步 def 走线程池：前端 30s 轮询 + SSE 触发，async def 里同步查库会卡事件循环。
         """
+        kol_ids = _mxv_group_kol_ids(group_id)
         meta = {str(r["snapshot_at"]): r for r in db.list_mx_view_snapshot_meta(day)}
         grouped: dict = {}
         # after_id 下推进 SQL：增量客户端不为过滤付全量加载的成本
-        all_opinions = db.list_mx_opinions(day, after_id=after_id)
+        all_opinions = db.list_mx_opinions(day, after_id=after_id, kol_ids=kol_ids)
         for o in all_opinions:
             grouped.setdefault(str(o["snapshot_at"]), []).append(o)
         # max_id 只推进到本次实际下发的最大 id：批次进行中「观点已落库、快照 meta
@@ -7080,11 +7203,12 @@ def create_api_router(
         )
 
     @router.get("/mx-views/target")
-    def mx_views_target(type: str, name: str, day: str, at: str = "",
+    def mx_views_target(type: str, name: str, day: str, at: str = "", group_id: int = 0,
                         current_user: dict = Depends(get_current_user)):
         if type not in ("topic", "stock"):
             raise HTTPException(status_code=422, detail="type 须为 topic|stock")
-        detail = db.get_mx_view_target_detail(day, type, name, up_to_at=at or None)
+        detail = db.get_mx_view_target_detail(day, type, name, up_to_at=at or None,
+                                             kol_ids=_mxv_group_kol_ids(group_id))
         if not detail:
             raise HTTPException(status_code=404, detail="该标的暂无观点")
         return detail

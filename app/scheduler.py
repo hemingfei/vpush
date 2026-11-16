@@ -76,6 +76,11 @@ from .wscn_flash import build_wscn_post
 # 下批生效速度对齐（轮询管线也是每轮现取一次）
 MX_RULE_TAG_INPUTS_TTL = 60.0
 
+# MX 房间分组（merged 组）映射缓存：MX 消息逐条进 ingest，分组映射不能每帖查库；
+# 30 秒与管理端改组的下批生效速度对齐（改组即刻生效语义见 spec §6）
+MX_GROUP_CACHE_TTL = 30.0
+_MX_GROUP_CACHE: dict = {}
+
 logger = logging.getLogger(__name__)
 
 WEIBO_WARNING_KEY = "weibo_warning_date"
@@ -1622,6 +1627,196 @@ def _buffer_personal_secondary(db, kol_id: int, post: Post, secondary_buffer) ->
             secondary_buffer.setdefault(user["id"], []).append(post)
 
 
+# ---- MX 房间分组推送（spec 2026-11-16）----
+# merged 组：订阅组内任一房间即视为组订阅者，组内新帖合并成一张卡片按
+# digest 周期统一推（每用户一条，卡片内按来源房间分节）；per_room 组与非组
+# 成员走既有逐房间链路，零改动。
+
+def mx_merged_group_of_post(db: DB, kol_id: int) -> dict | None:
+    """该大V所在的第一个启用 merged 组（无则 None）。
+
+    一次查库 TTL 短缓存：MX 实时消息逐条进 ingest，不能每帖都全表扫分组。
+    组少（个位数）成员少，命中路径是内存集合判断。
+    """
+    now = time.monotonic()
+    cached = _MX_GROUP_CACHE.get("data")
+    if cached is not None and now - cached[0] < MX_GROUP_CACHE_TTL:
+        groups, member_map = cached[1], cached[2]
+    else:
+        groups = [g for g in db.list_mx_room_groups(enabled_only=True)
+                  if (g.get("push_mode") or "merged") == "merged"]
+        member_map: dict[int, int] = {}
+        for g in groups:
+            for kid in g.get("member_ids") or []:
+                member_map.setdefault(int(kid), int(g["id"]))
+        _MX_GROUP_CACHE["data"] = (now, groups, member_map)
+        cached = _MX_GROUP_CACHE["data"]
+    _, groups, member_map = cached
+    group_id = member_map.get(int(kol_id))
+    if group_id is None:
+        return None
+    return next((g for g in groups if int(g["id"]) == group_id), None)
+
+
+def notify_group_digest_subscribers(
+    db: DB,
+    posts: list[Post],
+    group: dict,
+    notifiers_config,
+    notifiers=None,
+    retry_queue: PushRetryQueue | None = None,
+    dnd_buffer: dict[int, list[Post]] | None = None,
+    llm_config=None,
+    summary_cache: dict | None = None,
+) -> None:
+    """组级合并摘要：订阅组内任一成员的用户并集去重，每人一张合并卡片。
+
+    卡片标题=组名，正文逐条带来源大V名（复用 daily 的 named 口径——
+    多来源列表天然需要点名）；免打扰/关键词/订阅类型与逐 KOL 摘要同语义。
+    组解散/停用后残留缓冲由 flush 前的组校验收口（组没了=照旧逐 KOL 回退）。
+    """
+    if notifiers_config is None or not posts:
+        return
+    import httpx
+
+    from .channels import build_channel_notifier, iter_user_channels
+
+    client = httpx.Client(timeout=15)
+    # 组订阅者=成员订阅者并集（按 user_id 去重，第一条订阅记录定
+    # subscribe_type/favorite 等推送属性——同用户多房订阅属性不同属极端边角，
+    # 并集后按「任一房间命中」口径，只要有一个房间是 favorite 即按 favorite 推）
+    merged_users: dict[int, dict] = {}
+    for member_id in group.get("member_ids") or []:
+        for user in db.subscribers_of_kol(int(member_id)):
+            uid = int(user["id"])
+            if uid not in merged_users:
+                merged_users[uid] = user
+            else:
+                prev = merged_users[uid]
+                prev["favorite"] = bool(prev.get("favorite")) or bool(user.get("favorite"))
+    group_name = group.get("name") or "房间分组"
+    try:
+        keywords_by_user = db.get_users_keywords(list(merged_users.keys()))
+        for user in merged_users.values():
+            sub_type = user.get("subscribe_type") or "post"
+            matched = [p for p in posts if _sub_type_matches(sub_type, p.post_type)]
+            if not matched:
+                continue
+            favorite = bool(user.get("favorite"))
+            if bool(user.get("secondary")) and not favorite:
+                continue  # 次要用户与逐 KOL 摘要同口径跳过（防双推，走个人缓冲）
+            keywords = keywords_by_user.get(user["id"], [])
+            if (
+                dnd_buffer is not None
+                and _in_dnd_window(user)
+                and not (favorite and _dnd_favorite_passthrough(user))
+            ):
+                delayed, instant = [], []
+                for post in matched:
+                    if _keyword_hit(keywords, post):
+                        instant.append(post)
+                    else:
+                        delayed.append(post)
+                if delayed:
+                    dnd_buffer.setdefault(user["id"], []).extend(delayed)
+                if not instant:
+                    continue
+                matched = instant
+            matched = [
+                with_twitter_display(p, twitter_translate_enabled(user)) for p in matched
+            ]
+            summary = None
+            llm_cfg = _user_llm_config(user, db=db)
+            if llm_cfg is not None:
+                try:
+                    from .llm import summarize_posts
+
+                    summary = summarize_posts(matched, llm_cfg, cache=summary_cache)
+                except Exception as exc:  # noqa: BLE001 - 摘要失败降级，不影响推送
+                    logger.warning(
+                        "LLM 摘要异常 user=%s group=%s err=%s", user["username"], group_name, exc
+                    )
+            _record_llm_status(db, user, llm_cfg, summary)
+            for channel in iter_user_channels(user, notifiers_config, db):
+                notifier = build_channel_notifier(
+                    channel,
+                    user,
+                    notifiers_config,
+                    client=client,
+                    favorite=favorite,
+                    db=db,
+                )
+                try:
+                    if summary:
+                        notifier.send_text(f"📊 AI 摘要\n\n{summary}")
+                    notifier.send_digest(matched, group_name, "mx")
+                    for post in matched:
+                        db.add_push_log(
+                            db.get_post_id(post.platform, post.external_id),
+                            channel,
+                            "success",
+                            user_id=user["id"],
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "组摘要推送失败 user=%s channel=%s group=%s err=%s",
+                        user["username"], channel, group_name, exc,
+                    )
+                    if retry_queue is not None and not is_permanent_push_error(exc):
+                        for post in matched:
+                            retry_queue.add(post, channel, user["id"])
+                    for post in matched:
+                        db.add_push_log(
+                            db.get_post_id(post.platform, post.external_id),
+                            channel,
+                            "failed",
+                            str(exc),
+                            user_id=user["id"],
+                        )
+    finally:
+        client.close()
+
+
+def flush_group_digest(
+    db: DB,
+    group_digest: dict[int, list[Post]],
+    notifiers_config,
+    notifiers=None,
+    retry_queue: PushRetryQueue | None = None,
+    dnd_buffer: dict[int, list[Post]] | None = None,
+    llm_config=None,
+) -> None:
+    """到点把组缓冲统一推给组订阅者；组被删/停用则回退逐 KOL 链路。"""
+    if not group_digest:
+        return
+    summary_cache: dict = {}
+    for group_id, posts in list(group_digest.items()):
+        group_digest.pop(group_id, None)
+        try:
+            group = db.get_mx_room_group(group_id)
+            if group is None or not int(group.get("enabled") or 0) \
+                    or (group.get("push_mode") or "merged") != "merged":
+                # 组没了/per_room：按现有逐 KOL 摘要回退，帖子不丢
+                per_kol: dict[int, list[Post]] = {}
+                for p in posts:
+                    per_kol.setdefault(int(p.kol_id), []).append(p)
+                for kol_id, kol_posts in per_kol.items():
+                    kol = db.get_kol(kol_id)
+                    if kol is None:
+                        continue
+                    notify_digest_subscribers(
+                        db, kol_posts, kol, notifiers_config, notifiers,
+                        retry_queue, dnd_buffer, llm_config, summary_cache,
+                    )
+                continue
+            notify_group_digest_subscribers(
+                db, posts, group, notifiers_config, notifiers,
+                retry_queue, dnd_buffer, llm_config, summary_cache,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("组摘要推送失败 group=%s", group_id)
+
+
 def _buffer_secondary_subscribers(db, kol_id: int, post: Post, secondary_buffer) -> None:
     """次要大V新帖：所有非特别关注订阅者进用户级合并缓冲。
 
@@ -2223,6 +2418,7 @@ class Scheduler:
         self.ima_archive_file = ima_archive_file
         self.states: dict[str, PlatformState] = {}
         self._digest: dict[int, list[Post]] = {}
+        self._group_digest: dict[int, list[Post]] = {}  # MX merged 组级缓冲（spec 2026-11-16）
         self._dnd_buffer: dict[int, list[Post]] = {}
         self._secondary_buffer: dict[int, list[Post]] = {}
         self._secondary_first_at: dict[int, float] = {}
@@ -2282,6 +2478,11 @@ class Scheduler:
                 retry_queue=self.retry_queue,
                 dnd_buffer=self._dnd_buffer,
             )
+            flush_group_digest(
+                self.db, self._group_digest, self.notifiers_config, self.notifiers,
+                retry_queue=self.retry_queue,
+                dnd_buffer=self._dnd_buffer,
+            )
         except Exception:  # noqa: BLE001
             logger.exception("关闭时摘要推送失败")
         # 免打扰缓冲也尽量补推（关闭时立即发汇总，避免丢失）
@@ -2317,6 +2518,13 @@ class Scheduler:
                 post.platform, post.kol_name, post.external_id,
             )
             return post_id
+        # MX 房间分组（merged）：组内房间的新帖进组级缓冲，按 digest 周期
+        # 合并成一张组卡片推给组订阅者（订阅任一成员即收整组，每用户一条）
+        if post.platform == "mx" and self._group_digest is not None:
+            group = mx_merged_group_of_post(self.db, post.kol_id)
+            if group is not None:
+                self._group_digest.setdefault(int(group["id"]), []).append(post)
+                return post_id
         notify_subscribers(
             self.db,
             post_id,
@@ -2650,7 +2858,7 @@ class Scheduler:
         # 合并摘要到点统一推送（普通大V，优先大V保持实时）
         if (
             digest_interval > 0
-            and self._digest
+            and (self._digest or self._group_digest)
             and now_mono - self._last_digest_flush >= digest_interval
         ):
             self._last_digest_flush = now_mono
@@ -2661,6 +2869,16 @@ class Scheduler:
                     self._digest,
                     self.notifiers,
                     self.notifiers_config,
+                    self.retry_queue,
+                    self._dnd_buffer,
+                    self.llm_config,
+                )
+                await asyncio.to_thread(
+                    flush_group_digest,
+                    self.db,
+                    self._group_digest,
+                    self.notifiers_config,
+                    self.notifiers,
                     self.retry_queue,
                     self._dnd_buffer,
                     self.llm_config,

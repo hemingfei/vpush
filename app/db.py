@@ -167,6 +167,38 @@ SCHEMA_MIGRATIONS: list[tuple[int, str, str | tuple[str, ...]]] = [
             ),
         ),
     ),
+    (
+        2026111601,
+        "MX 房间分组：组 + 组成员（多房间合并观看/推送/研判，spec 2026-11-16）",
+        (
+            # 房间分组是读取端叠加层：房间数据（kols/posts/mx_opinions）不动，
+            # 组成员用 kol_id 而非 external_id——rid 会随平台重映射漂移（2026-11-15
+            # 重映射事故），kol_id 是本地稳定主键，天然抗重映射。
+            # - mx_room_groups：组（名称唯一；enabled=0 组在各读取端整体隐身）
+            # - mx_room_group_members：组成员（组×大V，同一大V可属多组；不做
+            #   UNIQUE 约束进 kols——删大V不级联，读取端 JOIN enabled=1 自然滤掉）
+            (
+                "CREATE TABLE IF NOT EXISTS mx_room_groups (\n"
+                "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+                "    name TEXT NOT NULL UNIQUE,\n"
+                "    enabled INTEGER NOT NULL DEFAULT 1,\n"
+                "    push_mode TEXT NOT NULL DEFAULT 'merged',\n"
+                "    created_at TEXT NOT NULL DEFAULT (datetime('now'))\n"
+                ")"
+            ),
+            (
+                "CREATE TABLE IF NOT EXISTS mx_room_group_members (\n"
+                "    group_id INTEGER NOT NULL,\n"
+                "    kol_id INTEGER NOT NULL,\n"
+                "    PRIMARY KEY (group_id, kol_id)\n"
+                ")"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_mx_room_group_members_kol "
+                "ON mx_room_group_members(kol_id)"
+            ),
+        ),
+    ),
 ]
 
 _SLOW_QUERY_SECONDS = 0.2
@@ -7265,6 +7297,131 @@ class DB:
 
     # ---- MX 大V实时观点 ----
 
+    # ---- MX 房间分组（多房间合并，spec 2026-11-16）----
+
+    def list_mx_room_groups(self, enabled_only: bool = False) -> list[dict]:
+        """列房间分组（含成员明细/成员数）；enabled_only 供观看端，False 供管理端。"""
+        rows = self._rows(
+            "SELECT * FROM mx_room_groups" + (" WHERE enabled = 1" if enabled_only else "")
+            + " ORDER BY id"
+        )
+        for r in rows:
+            r["member_ids"] = [
+                int(m["kol_id"]) for m in self._rows(
+                    "SELECT kol_id FROM mx_room_group_members WHERE group_id = ? ORDER BY kol_id",
+                    (r["id"],),
+                )
+            ]
+        return rows
+
+    def get_mx_room_group(self, group_id: int) -> dict | None:
+        rows = self._rows("SELECT * FROM mx_room_groups WHERE id = ?", (int(group_id),))
+        if not rows:
+            return None
+        group = rows[0]
+        group["member_ids"] = [
+            int(m["kol_id"]) for m in self._rows(
+                "SELECT kol_id FROM mx_room_group_members WHERE group_id = ? ORDER BY kol_id",
+                (group["id"],),
+            )
+        ]
+        return group
+
+    def create_mx_room_group(self, name: str, member_ids: list[int],
+                             push_mode: str = "merged") -> int:
+        """建组：成员去重入组（存在性/启用性由管理端校验，这里只管存储）。"""
+        name = str(name or "").strip()
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                cur = self._conn.execute(
+                    "INSERT INTO mx_room_groups (name, push_mode) VALUES (?, ?)",
+                    (name, push_mode if push_mode in ("merged", "per_room") else "merged"),
+                )
+                group_id = int(cur.lastrowid)
+                for kol_id in sorted({int(i) for i in member_ids}):
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO mx_room_group_members (group_id, kol_id) VALUES (?, ?)",
+                        (group_id, kol_id),
+                    )
+                self._conn.execute("COMMIT")
+                return group_id
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        # sqlite3.IntegrityError 在 with 外抛（重名 UNIQUE）：调用方转 409
+
+    def update_mx_room_group(self, group_id: int, name: str | None = None,
+                             enabled: bool | None = None, push_mode: str | None = None) -> bool:
+        """改名/启停/推送模式；组不存在返回 False。"""
+        sets, params = [], []
+        if name is not None and str(name).strip():
+            sets.append("name = ?")
+            params.append(str(name).strip())
+        if enabled is not None:
+            sets.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if push_mode is not None:
+            sets.append("push_mode = ?")
+            params.append(push_mode if push_mode in ("merged", "per_room") else "merged")
+        if not sets:
+            return self.get_mx_room_group(group_id) is not None
+        params.append(int(group_id))
+        with self._lock:
+            cur = self._conn.execute(
+                f"UPDATE mx_room_groups SET {', '.join(sets)} WHERE id = ?", tuple(params)
+            )
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def replace_mx_room_group_members(self, group_id: int, member_ids: list[int]) -> bool:
+        """全量替换成员（单事务防中间态）；组不存在返回 False。"""
+        if not self.get_mx_room_group(group_id):
+            return False
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(
+                    "DELETE FROM mx_room_group_members WHERE group_id = ?", (int(group_id),)
+                )
+                for kol_id in sorted({int(i) for i in member_ids}):
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO mx_room_group_members (group_id, kol_id) "
+                        "VALUES (?, ?)",
+                        (int(group_id), kol_id),
+                    )
+                self._conn.execute("COMMIT")
+                return True
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def delete_mx_room_group(self, group_id: int) -> bool:
+        """删组（级联删成员）：组是纯叠加层无历史资产，硬删。"""
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                cur = self._conn.execute(
+                    "DELETE FROM mx_room_groups WHERE id = ?", (int(group_id),)
+                )
+                self._conn.execute(
+                    "DELETE FROM mx_room_group_members WHERE group_id = ?", (int(group_id),)
+                )
+                self._conn.execute("COMMIT")
+                return cur.rowcount > 0
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def mx_room_group_member_ids(self, group_id: int) -> list[int]:
+        """组成员的 kol_id（观看端过滤用；空组返回空列表）。"""
+        return [
+            int(r["kol_id"]) for r in self._rows(
+                "SELECT kol_id FROM mx_room_group_members WHERE group_id = ? ORDER BY kol_id",
+                (int(group_id),),
+            )
+        ]
+
     def upsert_mx_view_batch(self, trading_day, snapshot_at, kind, status="running",
                              message_count=0, error="") -> int:
         self._execute(
@@ -7394,7 +7551,10 @@ class DB:
                 self._conn.rollback()
                 raise
 
-    def list_mx_opinions(self, trading_day, up_to_at=None, after_id: int = 0) -> list[dict]:
+    def list_mx_opinions(self, trading_day, up_to_at=None, after_id: int = 0,
+                         kol_ids: list[int] | None = None) -> list[dict]:
+        """当日观点明细；kol_ids 非空时按集合过滤（房间分组视图用），
+        None=不过滤（既有调用零改动）。"""
         sql = (
             "SELECT o.*, k.name AS kol_name, k.avatar_url, COALESCE(k.priority, 0) AS kol_priority "
             "FROM mx_opinions o JOIN kols k ON k.id = o.kol_id WHERE o.trading_day = ?"
@@ -7406,6 +7566,11 @@ class DB:
         if after_id:
             sql += " AND o.id > ?"
             params.append(int(after_id))
+        if kol_ids is not None:
+            if not kol_ids:
+                return []  # 空集合=组无成员，语义上无观点（不出全量）
+            sql += f" AND o.kol_id IN ({','.join('?' * len(kol_ids))})"
+            params.extend(int(i) for i in kol_ids)
         sql += " ORDER BY o.snapshot_at ASC, o.occurred_at ASC, o.id ASC"
         return self._rows(sql, tuple(params))
 
@@ -7569,8 +7734,10 @@ class DB:
                           (trading_day,))
         return int(rows[0]["m"]) if rows else 0
 
-    def get_mx_view_target_detail(self, trading_day, target_type, target_name, up_to_at=None):
-        """题材/个股下钻：多空大V分组（各取最新一条）+ 观点时间线（含证据原帖全文）。"""
+    def get_mx_view_target_detail(self, trading_day, target_type, target_name, up_to_at=None,
+                                  kol_ids: list[int] | None = None):
+        """题材/个股下钻：多空大V分组（各取最新一条）+ 观点时间线（含证据原帖全文）。
+        kol_ids 非空按集合过滤（房间分组视图），None=不过滤。"""
         sql = ("SELECT o.*, k.name AS kol_name, k.avatar_url FROM mx_opinions o "
                "JOIN kols k ON k.id = o.kol_id WHERE o.trading_day = ? "
                "AND o.target_type = ? AND o.target_name = ?")
@@ -7578,6 +7745,11 @@ class DB:
         if up_to_at:
             sql += " AND o.snapshot_at <= ?"
             params.append(up_to_at)
+        if kol_ids is not None:
+            if not kol_ids:
+                return None  # 空组：该标的必无观点，短路不查
+            sql += f" AND o.kol_id IN ({','.join('?' * len(kol_ids))})"
+            params.extend(int(i) for i in kol_ids)
         sql += " ORDER BY o.snapshot_at ASC, o.occurred_at ASC, o.id ASC"
         rows = self._rows(sql, tuple(params))
         if not rows:

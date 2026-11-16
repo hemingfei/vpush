@@ -24,6 +24,7 @@ from app.scheduler import (
     _x_fallback_advice,
     extract_tweet_id,
     flush_digest,
+    flush_group_digest,
     format_startup_message,
     keepalive_weibo_cookie,
     keepalive_xueqiu_cookie,
@@ -2036,6 +2037,96 @@ def test_digest_failure_alerts_admin(monkeypatch):
     notifier = FakeNotifier()
     flush_digest(db, digest, [notifier], ncfg)
     assert any("推送失败" in t for t in notifier.texts)
+
+
+def _mx_group_ncfg():
+    return SimpleNamespace(
+        telegram=SimpleNamespace(bot_token="t", chat_id=""),
+        feishu=SimpleNamespace(),
+        wecom=SimpleNamespace(),
+    )
+
+
+def test_group_digest_merges_per_user_once(monkeypatch):
+    """merged 组：订阅任一成员收整组合并卡片（每用户一条，卡片名=组名）；
+    只订非组成员的用户不受影响。"""
+    app_scheduler._MX_GROUP_CACHE.clear()
+    db = make_db()
+    a = db.add_kol("mx", "甲", "100")
+    b = db.add_kol("mx", "乙", "101")
+    c = db.add_kol("mx", "丙", "102")  # 不进组
+    gid = db.create_mx_room_group("游资组", [a, b], push_mode="merged")
+    group = db.get_mx_room_group(gid)
+
+    # 两个订阅者：u1 订甲（组内），u2 订丙（组外，不应收到）
+    u1 = db.add_user("u1", "h", telegram_chat_id="111")
+    u2 = db.add_user("u2", "h", telegram_chat_id="222")
+    db.add_subscription(u1, a)
+    db.add_subscription(u2, c)
+
+    posts = [make_post(a), make_post(b)]
+    posts[0].platform = "mx"; posts[0].kol_name = "甲"; posts[0].external_id = "m1"
+    posts[1].platform = "mx"; posts[1].kol_name = "乙"; posts[1].external_id = "m2"
+    for p in posts:
+        db.insert_post(p.platform, p.kol_id, p.external_id, p.title, p.content, p.url, p.published_at)
+
+    received = []
+    class FakeTG:
+        channel = "telegram"
+        def __init__(self, *args, **kwargs):
+            self.client = SimpleNamespace(close=lambda: None)
+        def send_text(self, text):
+            pass
+        def send_digest(self, send_posts, kol_name, platform):
+            received.append((kol_name, [p.external_id for p in send_posts]))
+
+    monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", FakeTG)
+    flush_group_digest(db, {gid: posts}, _mx_group_ncfg(), notifiers=[])
+
+    assert len(received) == 1  # u2（只订组外房间）收不到
+    kol_name, sent_ids = received[0]
+    assert kol_name == "游资组"  # 卡片标题=组名
+    assert sorted(sent_ids) == ["m1", "m2"]  # 整组合并下发
+    app_scheduler._MX_GROUP_CACHE.clear()
+
+
+def test_group_digest_per_room_and_dissolved_fallback(monkeypatch):
+    """per_room 组与已解散组：回退逐 KOL 摘要链路（帖子不丢）。"""
+    app_scheduler._MX_GROUP_CACHE.clear()
+    db = make_db()
+    a = db.add_kol("mx", "甲", "100")
+    uid = db.add_user("u1", "h", telegram_chat_id="111")
+    db.add_subscription(uid, a)
+
+    per_gid = db.create_mx_room_group("逐房组", [a], push_mode="per_room")
+    posts = [make_post(a)]
+    posts[0].platform = "mx"; posts[0].kol_name = "甲"; posts[0].external_id = "m1"
+    for p in posts:
+        db.insert_post(p.platform, p.kol_id, p.external_id, p.title, p.content, p.url, p.published_at)
+
+    received = []
+    class FakeTG:
+        channel = "telegram"
+        def __init__(self, *args, **kwargs):
+            self.client = SimpleNamespace(close=lambda: None)
+        def send_text(self, text):
+            pass
+        def send_digest(self, send_posts, kol_name, platform):
+            received.append((kol_name, [p.external_id for p in send_posts]))
+
+    monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", FakeTG)
+    ncfg = _mx_group_ncfg()
+
+    # per_room：回退逐 KOL（卡片名=大V名，非组名）
+    flush_group_digest(db, {per_gid: list(posts)}, ncfg, notifiers=[])
+    assert received == [("甲", ["m1"])]
+
+    # 已解散组：同样回退
+    received.clear()
+    db.delete_mx_room_group(per_gid)
+    flush_group_digest(db, {per_gid: list(posts)}, ncfg, notifiers=[])
+    assert received == [("甲", ["m1"])]
+    app_scheduler._MX_GROUP_CACHE.clear()
 
 
 def test_digest_llm_summary_computed_once_for_multiple_subscribers(monkeypatch):

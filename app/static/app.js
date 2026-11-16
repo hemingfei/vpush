@@ -6869,6 +6869,9 @@ const {
   mxvCalNav,
   mxvCalPick,
   mxvCalClose,
+  mxvGroupToggle,
+  mxvGroupClose,
+  mxvGroupPick,
   mxvRefreshLatest,
   mxvApplySnapshot,
   mxvGoLatest,
@@ -8763,6 +8766,7 @@ async function loadMxAdmin() {
     // Load rooms + 本地采集设备管理（云网关管理面）
     loadMxRooms();
     loadMxIngestDevices();
+    loadMxRoomGroups();
 
     // Add event listeners for search/filter
     const qInput = $("#mx-rooms-q");
@@ -8948,6 +8952,189 @@ async function updateMxRoom(roomId, body) {
     loadMxRooms();
   } catch (err) {
     flash(err.message || "更新失败", "error");
+  }
+}
+
+// ---------- MX 房间分组（合并观看/推送，spec 2026-11-16） ----------
+
+let _mxGroupRoomsCache = []; // 房间清单缓存（成员勾选下拉用，loadMxRoomGroups 时刷新）
+
+async function loadMxRoomGroups() {
+  const listBox = $("#mx-room-groups-list");
+  if (!listBox) return;
+  try {
+    const [groupsRes, roomsRes] = await Promise.all([
+      api("/api/admin/mx-room-groups"),
+      api("/api/admin/sources/mx/rooms"),
+    ]);
+    _mxGroupRoomsCache = roomsRes.rooms || [];
+    const groups = groupsRes.groups || [];
+    if (!groups.length) {
+      listBox.innerHTML = `<p class="muted">暂无分组。新建后把任意房间组合并成一组观看/推送。</p>`;
+      return;
+    }
+    listBox.innerHTML = `<div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">分组</th><th scope="col">成员</th><th scope="col">推送</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
+        <tbody>
+          ${groups.map((g) => `<tr>
+            <td><div class="kol-name">${escapeHtml(g.name)}</div></td>
+            <td>${escapeHtml((g.members || []).map((m) => m.name || `#${m.kol_id}`).join("、")) || '<span class="muted">空</span>'}</td>
+            <td>${g.push_mode === "merged" ? "合并" : "逐房间"}</td>
+            <td>${g.enabled ? "✅" : "❌"}</td>
+            <td>
+              <div class="toolbar">
+                <button type="button" class="btn-ghost" onclick="mxRoomGroupEdit(${g.id})">编辑</button>
+                <button type="button" class="btn-ghost" onclick="mxRoomGroupToggle(${g.id}, ${g.enabled ? 0 : 1})">${g.enabled ? "停用" : "启用"}</button>
+                <button type="button" class="btn-ghost danger" onclick="mxRoomGroupDelete(${g.id})">删除</button>
+              </div>
+            </td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  } catch (err) {
+    listBox.innerHTML = `<p class="muted">${escapeHtml(err.message || "加载分组失败")}</p>
+      <div class="toolbar"><button type="button" class="btn-ghost" onclick="loadMxRoomGroups()">重试</button></div>`;
+  }
+}
+
+function mxGroupMembersEditor(selectedIds) {
+  // 成员勾选列表（只列启用的房间——停用房间采不到新消息，进组无意义）
+  const rooms = _mxGroupRoomsCache.filter((r) => r.enabled);
+  const sel = new Set((selectedIds || []).map(Number));
+  if (!rooms.length) return `<p class="muted">暂无可用房间</p>`;
+  return rooms.map((r) => `<label class="mx-tag-kol-row">
+    <input type="checkbox" class="mx-group-member-ck" value="${r.kol_id}" ${sel.has(Number(r.kol_id)) ? "checked" : ""}>
+    <span class="mx-tag-kol-name">${escapeHtml(r.title)}</span>
+  </label>`).join("");
+}
+
+function mxGroupCollectMembers() {
+  return [...document.querySelectorAll("#mx-group-dialog .mx-group-member-ck:checked")].map((c) => Number(c.value));
+}
+
+async function _mxGroupEnsureRooms() {
+  if (_mxGroupRoomsCache.length) return;
+  const res = await api("/api/admin/sources/mx/rooms");
+  _mxGroupRoomsCache = res.rooms || [];
+}
+
+function _mxGroupOpenDialog(title, groupId, name, selectedIds, pushMode) {
+  document.getElementById("mx-group-dialog")?.remove();
+  const mask = document.createElement("div");
+  mask.className = "admin-modal-mask";
+  mask.id = "mx-group-dialog";
+  mask.innerHTML = `
+    <div class="admin-modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+      <h3 class="admin-modal-title">${escapeHtml(title)}</h3>
+      <label class="field-label" for="mx-group-name">分组名称</label>
+      <input id="mx-group-name" class="form-control" maxlength="30" placeholder="如：游资组" value="${escapeHtml(name || "")}">
+      <label class="field-label" style="margin-top:10px">成员房间</label>
+      <div class="admin-modal-list">${mxGroupMembersEditor(selectedIds)}</div>
+      <label class="field-label" style="margin-top:10px">推送模式</label>
+      <select id="mx-group-push-mode" class="form-control">
+        <option value="merged" ${pushMode !== "per_room" ? "selected" : ""}>合并推送（订阅任一成员收整组卡片）</option>
+        <option value="per_room" ${pushMode === "per_room" ? "selected" : ""}>逐房间推送（与未分组一致）</option>
+      </select>
+      <div class="toolbar" style="margin-top:12px">
+        <button type="button" class="btn-normal" onclick="mxRoomGroupSave(${Number(groupId) || 0})">${groupId ? "保存" : "创建"}</button>
+        <button type="button" class="btn-ghost" onclick="document.getElementById('mx-group-dialog').remove()">取消</button>
+      </div>
+    </div>`;
+  mask.addEventListener("click", (e) => {
+    if (e.target === mask) mask.remove(); // 点遮罩视为取消
+  });
+  mask._onEsc = (e) => {
+    if (e.key !== "Escape") return;
+    mask.remove();
+    document.removeEventListener("keydown", mask._onEsc, true);
+  };
+  document.addEventListener("keydown", mask._onEsc, true);
+  document.body.appendChild(mask);
+  const nameInput = mask.querySelector("#mx-group-name");
+  if (nameInput) nameInput.focus();
+}
+
+async function mxRoomGroupCreate() {
+  try {
+    await _mxGroupEnsureRooms();
+  } catch (err) {
+    flash(err.message || "加载房间失败", "error");
+    return;
+  }
+  _mxGroupOpenDialog("新建房间分组", 0, "", [], "merged");
+}
+
+async function mxRoomGroupEdit(groupId) {
+  let group;
+  try {
+    const [groupsRes, roomsRes] = await Promise.all([
+      api("/api/admin/mx-room-groups"),
+      api("/api/admin/sources/mx/rooms"),
+    ]);
+    _mxGroupRoomsCache = roomsRes.rooms || [];
+    group = (groupsRes.groups || []).find((g) => Number(g.id) === Number(groupId));
+  } catch (err) {
+    flash(err.message || "加载分组失败", "error");
+    return;
+  }
+  if (!group) { flash("分组不存在", "error"); return; }
+  _mxGroupOpenDialog(`编辑分组：${group.name}`, Number(group.id), group.name,
+    (group.members || []).map((m) => m.kol_id), group.push_mode || "merged");
+}
+
+async function mxRoomGroupSave(groupId) {
+  const name = ($("#mx-group-name")?.value || "").trim();
+  if (!name) { flash("分组名称不能为空", "error"); return; }
+  const memberIds = mxGroupCollectMembers();
+  const pushMode = $("#mx-group-push-mode")?.value || "merged";
+  try {
+    if (groupId) {
+      await api(`/api/admin/mx-room-groups/${groupId}`, {
+        method: "PUT",
+        body: JSON.stringify({ name, push_mode: pushMode }),
+      });
+      await api(`/api/admin/mx-room-groups/${groupId}/members`, {
+        method: "PUT",
+        body: JSON.stringify({ member_ids: memberIds }),
+      });
+      flash("分组已保存");
+    } else {
+      await api("/api/admin/mx-room-groups", {
+        method: "POST",
+        body: JSON.stringify({ name, member_ids: memberIds, push_mode: pushMode }),
+      });
+      flash("分组已创建");
+    }
+    document.getElementById("mx-group-dialog")?.remove();
+    loadMxRoomGroups();
+  } catch (err) {
+    flash(err.message || "保存失败", "error");
+  }
+}
+
+async function mxRoomGroupToggle(groupId, enabled) {
+  try {
+    await api(`/api/admin/mx-room-groups/${groupId}`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: !!enabled }),
+    });
+    flash(enabled ? "分组已启用" : "分组已停用");
+    loadMxRoomGroups();
+  } catch (err) {
+    flash(err.message || "操作失败", "error");
+  }
+}
+
+async function mxRoomGroupDelete(groupId) {
+  if (!confirm("删除该分组？房间本身不受影响（组是纯叠加层，误删重建即可）。")) return;
+  try {
+    await api(`/api/admin/mx-room-groups/${groupId}`, { method: "DELETE" });
+    flash("分组已删除");
+    loadMxRoomGroups();
+  } catch (err) {
+    flash(err.message || "删除失败", "error");
   }
 }
 
@@ -9292,6 +9479,13 @@ const INLINE_HANDLERS = {
   loadMxAdmin,
   loadMxRooms,
   updateMxRoom,
+  // ---- hmf：MX 房间分组（合并观看/推送）----
+  loadMxRoomGroups,
+  mxRoomGroupCreate,
+  mxRoomGroupEdit,
+  mxRoomGroupSave,
+  mxRoomGroupToggle,
+  mxRoomGroupDelete,
   // ---- hmf：MX 本地采集设备管理（云网关管理面）----
   loadMxIngestDevices,
   mxIngestMintCode,
@@ -9352,6 +9546,9 @@ const INLINE_HANDLERS = {
   mxvCalToggle,
   mxvCalNav,
   mxvCalPick,
+  mxvGroupToggle,
+  mxvGroupClose,
+  mxvGroupPick,
   mxvRefreshLatest,
   mxvApplySnapshot,
   mxvGoLatest,

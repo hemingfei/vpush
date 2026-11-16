@@ -352,6 +352,46 @@ def test_scheduler_ingest_external_post():
         scheduler_mod.notify_subscribers = orig
 
 
+def test_scheduler_ingest_mx_group_buffered():
+    """MX merged 组成员的新帖进组级缓冲（不走逐房间实时推送）；
+    per_room 组与非组房间照旧实时推送。"""
+    from app import scheduler as scheduler_mod
+
+    scheduler_mod._MX_GROUP_CACHE.clear()
+    tmp = tempfile.mkdtemp()
+    db = DB(Path(tmp) / "t.db")
+    a = db.add_kol("mx", "甲", "100")
+    b = db.add_kol("mx", "乙", "101")
+    c = db.add_kol("mx", "丙", "102")
+    db.create_mx_room_group("合并组", [a], push_mode="merged")
+    db.create_mx_room_group("逐房组", [b], push_mode="per_room")
+    sched = Scheduler(db, {}, [], None, None)
+
+    calls = []
+    orig = scheduler_mod.notify_subscribers
+    scheduler_mod.notify_subscribers = lambda *a, **k: calls.append(a[1])
+    try:
+        def mx_post(kol_id, name, n):
+            return Post(
+                platform="mx", kol_id=kol_id, kol_name=name,
+                external_id=f"mx_g_{kol_id}_{n}", title="", content="内容",
+                url="", published_at="2026-11-16 10:00:00",
+            )
+
+        # 合并组成员：进组缓冲，不实时推
+        assert sched.ingest_external_post(mx_post(a, "甲", 1)) is not None
+        assert list(sched._group_digest.keys()) and sched._digest == {}
+        assert calls == []
+
+        # per_room 组成员 + 非组成员：照旧实时推
+        assert sched.ingest_external_post(mx_post(b, "乙", 1)) is not None
+        assert sched.ingest_external_post(mx_post(c, "丙", 1)) is not None
+        assert len(calls) == 2
+    finally:
+        scheduler_mod.notify_subscribers = orig
+        scheduler_mod._MX_GROUP_CACHE.clear()
+
+
 # ---- 前端静态回归（与 test_frontend_interactions.py 同风格）----
 
 
