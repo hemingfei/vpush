@@ -84,6 +84,7 @@ const respTracker = createResponseTracker({ sessionStore });
 let ws = null;
 let wsReady = false;
 let connecting = false; // connectGateway 同步互斥位（同批入口第二发直接放弃）
+let connectingSince = 0; // connecting 起始时刻（keepalive 自检判挂死用，2026-11-16）
 let pairingWindowOpen = null; // options 页处于配对中：不自动 auth 打扰
 
 // ---------- badge 运维面（审计加分项） ----------
@@ -205,6 +206,7 @@ async function connectGateway() {
   const slot = await connState.acquire(); // 真退避门（session 持久，跨 SW 死亡）
   if (!slot) return; // 门内：等下一次 alarm 敲门
   connecting = true;
+  connectingSince = Date.now();
   let url;
   try {
     url = await gatewayUrl();
@@ -224,7 +226,17 @@ async function connectGateway() {
     return;
   }
   ws = sock;
+  // 连接看门狗（2026-11-16 过夜实锤）：网络黑洞下 WebSocket 卡在 CONNECTING
+  // 永不回调（onopen/onclose 都不来），connecting=true 永挂——后续 alarm 全部
+  // `if (connecting) return` 静默，断连 12 小时不自愈。10s 未 open 即主动
+  // close（合法操作，触发 onclose 走 bump+重连）；onopen 正常到达时撤销。
+  const openWatchdog = setTimeout(() => {
+    if (ws === sock && sock.readyState === 0) {
+      try { sock.close(); } catch (e) { /* 已死则无事 */ }
+    }
+  }, 10000);
   sock.onopen = async () => {
+    clearTimeout(openWatchdog);
     if (ws !== sock) return; // 陈旧回调守卫
     connecting = false;
     // 首帧认证（浏览器 WS API 不能自定义 header——网关契约）。
@@ -490,8 +502,15 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     // 采集自动恢复的机制面）
     const tabs = await chrome.tabs.query({});
     for (const t of tabs) maybeAttach(t);
+    // connecting 挂死自检（2026-11-16 过夜实锤第二道保险）：onopen 看门狗之外，
+    // 每 tick 复核——connecting=true 超过 5 分钟（十倍于正常握手）即判死锁，
+    // 强制复位（socket 由看门狗/浏览器超时自理，复位后本 tick 立即重试）。
+    if (connecting && Date.now() - connectingSince > 5 * 60 * 1000) {
+      console.warn("[mx] connecting 挂死 >5min，强制复位重试");
+      connecting = false;
+    }
     if (!ws || ws.readyState > 1) connectGateway();
-  })();
+  });
 });
 
 // ---------- 启动面 ----------
