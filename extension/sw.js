@@ -41,7 +41,7 @@ import { createConnState } from "./src/conn_state.js";
 import { shouldCaptureTab, shouldCaptureHttp } from "./src/attach_filter.js";
 import { createResponseTracker } from "./src/response_body.js";
 import { createWsWatchdog } from "./src/ws_watchdog.js";
-import { pickPageTarget, cdpMessageToEvent, LOCAL_CDP_LIST_URL } from "./src/cdp_fallback.js";
+import { pickPageTarget, pageWsUrl, cdpMessageToEvent } from "./src/cdp_fallback.js";
 
 const DEBUGGER_VERSION = "1.3";
 const ALARM_NAME = "mx-keepalive";
@@ -458,14 +458,16 @@ async function ensureCdpFallback(tab) {
   const prefix = (await storage.get(["mx_site_prefix"])).mx_site_prefix || undefined;
   let target = null;
   try {
-    const res = await fetch(LOCAL_CDP_LIST_URL);
-    target = pickPageTarget(await res.json(), prefix);
+    // getTargets（扩展 API，零网络请求）取代 fetch /json/list——MV3 SW
+    // 对环回 http 的 fetch 被 PNA 拦截（2026-11-17 实测）
+    const targets = await chrome.debugger.getTargets();
+    target = pickPageTarget(targets, prefix);
   } catch {
-    // 9223 不可达（agent/采集宿主未起）：本 tick 放弃，alarm 周期重试
+    // getTargets 报错：本 tick 放弃，alarm 周期重试
     return;
   }
   if (!target) return;
-  const sock = new WebSocket(target.webSocketDebuggerUrl);
+  const sock = new WebSocket(pageWsUrl(target.id));
   cdpSock = sock;
   sock.onopen = async () => {
     if (cdpSock !== sock) return;

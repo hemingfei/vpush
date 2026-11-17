@@ -6,8 +6,9 @@ import assert from "node:assert/strict";
 
 import {
   pickPageTarget,
+  pageWsUrl,
   cdpMessageToEvent,
-  LOCAL_CDP_LIST_URL,
+  LOCAL_CDP_HOST,
 } from "../src/cdp_fallback.js";
 
 const PREFIX = "https://mx.2026.foodtop1.com/";
@@ -15,13 +16,13 @@ const PREFIX = "https://mx.2026.foodtop1.com/";
 const PAGE_TARGET = {
   type: "page",
   url: "https://mx.2026.foodtop1.com/",
-  webSocketDebuggerUrl: "ws://127.0.0.1:9223/devtools/page/ABC",
+  id: "748EF25088F454B5C0AD49A10F1C96BE",
 };
 
-test("pickPageTarget 选 sitePrefix 前缀的 page 目标", () => {
+test("pickPageTarget 选 sitePrefix 前缀的 page 目标（getTargets 形态）", () => {
   const t = pickPageTarget(
     [
-      { type: "service_worker", url: "chrome-extension://x/sw.js", webSocketDebuggerUrl: "ws://x" },
+      { type: "service_worker", url: "chrome-extension://x/sw.js", id: "S" },
       PAGE_TARGET,
     ],
     PREFIX
@@ -29,11 +30,18 @@ test("pickPageTarget 选 sitePrefix 前缀的 page 目标", () => {
   assert.equal(t, PAGE_TARGET);
 });
 
-test("pickPageTarget 忽略无 webSocketDebuggerUrl / 前缀不符 / 非 page", () => {
+test("pickPageTarget 忽略无 id / 前缀不符 / 非 page", () => {
   assert.equal(pickPageTarget([{ type: "page", url: PREFIX }], PREFIX), null);
-  assert.equal(pickPageTarget([{ type: "page", url: "https://other.com/", webSocketDebuggerUrl: "ws://x" }], PREFIX), null);
-  assert.equal(pickPageTarget([{ type: "iframe", url: PREFIX, webSocketDebuggerUrl: "ws://x" }], PREFIX), null);
+  assert.equal(pickPageTarget([{ type: "page", url: "https://other.com/", id: "X" }], PREFIX), null);
+  assert.equal(pickPageTarget([{ type: "iframe", url: PREFIX, id: "X" }], PREFIX), null);
   assert.equal(pickPageTarget([], PREFIX), null);
+});
+
+test("pageWsUrl 固定模式：ws://127.0.0.1:9223/devtools/page/<id>", () => {
+  assert.equal(
+    pageWsUrl("748EF25088F454B5C0AD49A10F1C96BE"),
+    "ws://127.0.0.1:9223/devtools/page/748EF25088F454B5C0AD49A10F1C96BE"
+  );
 });
 
 test("cdpMessageToEvent 转换 Received/Sent 为同构事件", () => {
@@ -52,6 +60,6 @@ test("cdpMessageToEvent 过滤无关方法/坏报文", () => {
   assert.equal(cdpMessageToEvent("{}"), null);
 });
 
-test("LOCAL_CDP_LIST_URL 固定环回 9223", () => {
-  assert.equal(LOCAL_CDP_LIST_URL, "http://127.0.0.1:9223/json/list");
+test("LOCAL_CDP_HOST 固定环回 9223", () => {
+  assert.equal(LOCAL_CDP_HOST, "127.0.0.1:9223");
 });
