@@ -332,7 +332,7 @@ class AgentRunner:
                             detail="刷新失败，顺延节奏")
         else:
             self.log.record("page_reload", account=account.user,
-                            detail=f"周期刷新完成（下轮 {self.reload_cadence.next_fire_in():.0f}s 后）")
+                            detail="周期刷新完成")
         self.reload_cadence.advance()
 
     async def _maybe_switch_room(self) -> None:
