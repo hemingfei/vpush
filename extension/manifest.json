@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MX 采集器",
-  "version": "1.2.4",
+  "version": "1.3.1",
   "description": "MX 消息采集器（spec #14 本地双组件之采集器）：chrome.debugger Network 域被动转发，零行为零决策。",
   "minimum_chrome_version": "116",
   "background": {
@@ -20,6 +20,6 @@
     "https://*/*"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src wss: ws://127.0.0.1:9333"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src wss:"
   }
 }

@@ -576,7 +576,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     // 新帧到达自动解除）。reload 回大厅态：当前房间采集断，下次切房点击
     // （agent cadence ≤6min）自动恢复轮转。
     if (await wsWatchdog.shouldReload()) {
-      const mxTabs = tabs.filter((t) => await shouldCaptureTab(storage, t));
+      const mxTabs = [];
+      for (const t of tabs) {
+        if (await shouldCaptureTab(storage, t)) mxTabs.push(t);
+      }
       if (mxTabs.length) {
         await chrome.tabs.reload(mxTabs[0].id);
         await wsWatchdog.markReloaded();
