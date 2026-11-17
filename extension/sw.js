@@ -41,7 +41,7 @@ import { createConnState } from "./src/conn_state.js";
 import { shouldCaptureTab, shouldCaptureHttp } from "./src/attach_filter.js";
 import { createResponseTracker } from "./src/response_body.js";
 import { createWsWatchdog } from "./src/ws_watchdog.js";
-import { pickPageTarget, pageWsUrl, cdpMessageToEvent } from "./src/cdp_fallback.js";
+import { RELAY_WS_URL, cdpMessageToEvent } from "./src/cdp_fallback.js";
 
 const DEBUGGER_VERSION = "1.3";
 const ALARM_NAME = "mx-keepalive";
@@ -446,38 +446,21 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
 });
 chrome.tabs.onCreated.addListener((tab) => maybeAttach(tab));
 
-// ---------- CDP 直连 fallback 通道（票 #23 追加，1.2.0） ----------
+// ---------- CDP relay fallback 通道（票 #23 追加，1.2.x） ----------
 // chrome.debugger 名额被 agent Playwright 占住时的第二采集通道：
-// ws://127.0.0.1:9223/devtools/page/<id> + Network.enable，帧事件与
-// chrome.debugger onEvent 同构（cdp_fallback.js 解包），分派进同一
-// handleNetworkEvent。纯逻辑/URL 构造在 src/cdp_fallback.js（node --test）。
+// 连本地 relay（scripts/mx_cdp_relay.py，ws://127.0.0.1:9333——无
+// Origin 的 python 桥，连 page ws + Network.enable 转发帧事件）。
+// 解包后进同一 handleNetworkEvent。纯逻辑/URL 在 src/cdp_fallback.js。
 let cdpSock = null;
 
 async function ensureCdpFallback(tab) {
   if (cdpSock && cdpSock.readyState <= 1) return; // 已在跑
-  const prefix = (await storage.get(["mx_site_prefix"])).mx_site_prefix || undefined;
-  let target = null;
-  try {
-    // getTargets（扩展 API，零网络请求）取代 fetch /json/list——MV3 SW
-    // 对环回 http 的 fetch 被 PNA 拦截（2026-11-17 实测）
-    const targets = await chrome.debugger.getTargets();
-    target = pickPageTarget(targets, prefix);
-  } catch {
-    // getTargets 报错：本 tick 放弃，alarm 周期重试
-    return;
-  }
-  if (!target) return;
-  const sock = new WebSocket(pageWsUrl(target.id));
+  const sock = new WebSocket(RELAY_WS_URL);
   cdpSock = sock;
   sock.onopen = async () => {
     if (cdpSock !== sock) return;
     await wsWatchdog.noteAttached(); // 静默基线与主通道同语义
-    await reportLifecycle("cdp_fallback_up", `page=${target.id.slice(0, 12)}`);
-    try {
-      sock.send(JSON.stringify({ id: 1, method: "Network.enable" }));
-    } catch {
-      /* 发送失败由 onclose 收尾重试 */
-    }
+    await reportLifecycle("cdp_fallback_up", "relay ws://127.0.0.1:9333");
   };
   sock.onmessage = (m) => {
     if (cdpSock !== sock) return;
@@ -486,7 +469,13 @@ async function ensureCdpFallback(tab) {
   };
   sock.onclose = () => {
     if (cdpSock === sock) {
-      cdpSock = null; // 通道死：下一 alarm tick 的 maybeAttach 重建
+      cdpSock = null; // relay 死/页面死：下一 alarm tick 的 maybeAttach 重建
+    }
+  };
+  sock.onerror = () => {
+    // relay 未起（relay 进程缺失）：本 tick 放弃；alarm 周期重试
+    if (cdpSock === sock) {
+      cdpSock = null;
     }
   };
 }

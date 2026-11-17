@@ -5,43 +5,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  pickPageTarget,
-  pageWsUrl,
+  RELAY_WS_URL,
   cdpMessageToEvent,
-  LOCAL_CDP_HOST,
 } from "../src/cdp_fallback.js";
 
-const PREFIX = "https://mx.2026.foodtop1.com/";
-
-const PAGE_TARGET = {
-  type: "page",
-  url: "https://mx.2026.foodtop1.com/",
-  id: "748EF25088F454B5C0AD49A10F1C96BE",
-};
-
-test("pickPageTarget 选 sitePrefix 前缀的 page 目标（getTargets 形态）", () => {
-  const t = pickPageTarget(
-    [
-      { type: "service_worker", url: "chrome-extension://x/sw.js", id: "S" },
-      PAGE_TARGET,
-    ],
-    PREFIX
-  );
-  assert.equal(t, PAGE_TARGET);
-});
-
-test("pickPageTarget 忽略无 id / 前缀不符 / 非 page", () => {
-  assert.equal(pickPageTarget([{ type: "page", url: PREFIX }], PREFIX), null);
-  assert.equal(pickPageTarget([{ type: "page", url: "https://other.com/", id: "X" }], PREFIX), null);
-  assert.equal(pickPageTarget([{ type: "iframe", url: PREFIX, id: "X" }], PREFIX), null);
-  assert.equal(pickPageTarget([], PREFIX), null);
-});
-
-test("pageWsUrl 固定模式：ws://127.0.0.1:9223/devtools/page/<id>", () => {
-  assert.equal(
-    pageWsUrl("748EF25088F454B5C0AD49A10F1C96BE"),
-    "ws://127.0.0.1:9223/devtools/page/748EF25088F454B5C0AD49A10F1C96BE"
-  );
+test("RELAY_WS_URL 固定环回 9333（relay 桥接端点）", () => {
+  assert.equal(RELAY_WS_URL, "ws://127.0.0.1:9333");
 });
 
 test("cdpMessageToEvent 转换 Received/Sent 为同构事件", () => {
@@ -58,8 +27,5 @@ test("cdpMessageToEvent 过滤无关方法/坏报文", () => {
   assert.equal(cdpMessageToEvent(JSON.stringify({ method: "Network.requestWillBeSent", params: {} })), null);
   assert.equal(cdpMessageToEvent("not json"), null);
   assert.equal(cdpMessageToEvent("{}"), null);
-});
-
-test("LOCAL_CDP_HOST 固定环回 9223", () => {
-  assert.equal(LOCAL_CDP_HOST, "127.0.0.1:9223");
+  assert.equal(cdpMessageToEvent(JSON.stringify({ method: "hello", params: {} })), null);
 });
