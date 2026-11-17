@@ -40,6 +40,7 @@ import { createAuthClient } from "./src/auth_client.js";
 import { createConnState } from "./src/conn_state.js";
 import { shouldCaptureTab, shouldCaptureHttp } from "./src/attach_filter.js";
 import { createResponseTracker } from "./src/response_body.js";
+import { createWsWatchdog } from "./src/ws_watchdog.js";
 
 const DEBUGGER_VERSION = "1.3";
 const ALARM_NAME = "mx-keepalive";
@@ -80,6 +81,9 @@ const buffer = createBuffer({ cap: 5000 });
 const auth = createAuthClient({ storage });
 const connState = createConnState({ store: sessionStore });
 const respTracker = createResponseTracker({ sessionStore });
+// 页面 WS 静默看门狗（票 #23 防线二）：账目写穿 session（SW 死亡后存活，
+// 浏览器重启清零=新会话无历史静默）。random 不注入：生产用 Math.random。
+const wsWatchdog = createWsWatchdog({ store: sessionStore });
 
 let ws = null;
 let wsReady = false;
@@ -378,6 +382,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
         buffered: buffer.size(),
         droppedTotal: buffer.droppedTotal(),
         reconnect: await connState.snapshot(),
+        wsWatchdog: await wsWatchdog.snapshot(),
         gatewayConfigured: Boolean(got.mx_gateway_url),
         sitePrefix: got.mx_site_prefix || "",
       });
@@ -415,6 +420,7 @@ async function maybeAttach(tab) {
     // 新 Network 会话 = 新 requestId 空间：上一会话的响应体登记全部作废，
     // 清表（含 SW 死亡后从 session 恢复的陈旧登记，防跨会话累积）
     await respTracker.clear();
+    await wsWatchdog.noteAttached(); // 静默基线：新 attach 的页面从现在起算
     await reportLifecycle("attached", `tab=${tab.id} url=${tab.url}`);
   } catch (e) {
     // "Already attached to debugger with given target id" → 已挂（幂等），忽略；
@@ -438,6 +444,9 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     try {
       if (method === "Network.webSocketFrameReceived" || method === "Network.webSocketFrameSent") {
         const data = params?.response?.payloadData ?? "";
+        // 看门狗喂帧在引擎帧过滤之前（票 #23 防线二）：心跳（2/3）与业务帧
+        // 都算「页面 WS 活着」——连引擎帧都收不到才是连接死的权威信号
+        wsWatchdog.noteFrame().catch(() => {});
         if (isEngineFrame(data)) return; // 引擎帧不上行（与网关同判定）
         await send(
           await envelope.build(method.endsWith("Received") ? "ws_in" : "ws_out", data)
@@ -502,6 +511,23 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     // 采集自动恢复的机制面）
     const tabs = await chrome.tabs.query({});
     for (const t of tabs) maybeAttach(t);
+    // 页面 WS 静默看门狗（票 #23 防线二，2026-11-17 断流 4.3h 根治面）：
+    // 页面 WS 死亡时页面 JS 无自愈，三处（agent/网关/页面 DOM）全绿无告警
+    // ——唯一权威信号是「连引擎心跳帧都收不到」。静默超随机阈值（3-10min）
+    // → reload 页面重建 WS。防重入在 ws_watchdog 账目（本静默期只救一次，
+    // 新帧到达自动解除）。reload 回大厅态：当前房间采集断，下次切房点击
+    // （agent cadence ≤6min）自动恢复轮转。
+    if (await wsWatchdog.shouldReload()) {
+      const mxTabs = tabs.filter((t) => await shouldCaptureTab(storage, t));
+      if (mxTabs.length) {
+        await chrome.tabs.reload(mxTabs[0].id);
+        await wsWatchdog.markReloaded();
+        await reportLifecycle(
+          "page_reload",
+          `watchdog 静默 ${Math.round((await wsWatchdog.snapshot()).silenceMs / 1000)}s 超阈值，reload 重建页面 WS`
+        );
+      }
+    }
     // connecting 挂死自检（2026-11-16 过夜实锤第二道保险）：onopen 看门狗之外，
     // 每 tick 复核——connecting=true 超过 5 分钟（十倍于正常握手）即判死锁，
     // 强制复位（socket 由看门狗/浏览器超时自理，复位后本 tick 立即重试）。

@@ -284,6 +284,23 @@ class BrowserRuntime:
         except Exception:  # noqa: BLE001 - 无 strong 点头像区
             await item.click(position=CDPExecutor.FALLBACK_CLICK_OFFSET)
 
+    async def reload_page(self) -> None:
+        """周期性刷新页面重建 WS（票 #23 防线一）。
+
+        2026-11-17 断流 4.3h 根治面：页面 WS 死亡后页面 JS 无自愈重连，
+        reload 即重建会话（登录态在 localStorage，reload 无副作用——与
+        _expand_room_groups 的粘滞态恢复同机制）。刷新后页面回大厅态，
+        当前房间采集断，下次切房点击（cadence ≤6min）自动恢复轮转。
+        刷新后 SPA 首屏渲染 + 关系统公告弹窗（2026-11-15 实战：弹窗会
+        拦截后续切房点击，这里前置处理掉）。
+        """
+        page = self._page
+        if page is None:
+            raise RuntimeError("浏览器会话未建立")
+        await page.reload(wait_until="domcontentloaded")
+        await asyncio.sleep(3)  # SPA 首屏渲染
+        await self._dismiss_system_notice()
+
     async def _dismiss_system_notice(self) -> None:
         """关掉拦截点击的系统公告弹窗（幂等，无弹窗零开销）。
 

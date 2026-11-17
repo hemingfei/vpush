@@ -33,6 +33,7 @@ from .executor import CDPExecutor
 from .lifecycle import LifecycleLog
 from .login import FATAL_LOGIN_MARKERS, LoginRetryPacer, _is_fatal, relogin_needed
 from .relay import RelayStateMachine
+from .reload_cadence import ReloadCadence
 from .window_runner import WindowRunner
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,10 @@ class AgentRunner:
             restart_login=self._restart_login,
         )
         self.cadence = RoomCadence()
+        # 周期页面刷新（票 #23 防线一）：随机 50-90min reload 重建页面 WS，
+        # 扩展侧静默看门狗（3-10min 阈值）之外的第二道防线。开窗时重新
+        # 构造=新窗口首次刷新落在随机间隔后（不开窗即到点的假到期）。
+        self.reload_cadence = ReloadCadence()
         self.pacer = LoginRetryPacer()
         self.runtime: BrowserRuntime | None = None
         # BrowserRuntime 工厂（S2 接力换 profile 用）：签名 (account_user, token)
@@ -224,6 +229,7 @@ class AgentRunner:
                             detail=f"连续失败 {self._login_failures} 次，接力切换评估")
         self.runtime = rt
         self.cadence = RoomCadence()  # 会话开启即武装：首次点击落在一个随机间隔后
+        self.reload_cadence = ReloadCadence()  # 新窗口首次刷新落在随机间隔后
 
     async def _close_window(self, *, now: datetime) -> None:
         """关窗：关浏览器（采集器随浏览器一起退出；agent 不感知采集器）。"""
@@ -310,6 +316,25 @@ class AgentRunner:
 
     # ---- 切房 ----
 
+    async def _maybe_reload_page(self) -> None:
+        """到点刷新页面（票 #23 防线一）：随机 50-90min reload 重建页面 WS。
+
+        单次失败只顺延节奏（与切房同语义）——reload 失败大概率是 CDP/
+        页面状态问题，_ensure_session 的探针/重登链路会另行处理。
+        """
+        if self.runtime is None or not self.reload_cadence.due():
+            return
+        account = self.relay.active
+        try:
+            await self.runtime.reload_page()
+        except Exception:  # noqa: BLE001 - 失败顺延，下周期再试
+            self.log.record("page_reload", account=account.user,
+                            detail="刷新失败，顺延节奏")
+        else:
+            self.log.record("page_reload", account=account.user,
+                            detail=f"周期刷新完成（下轮 {self.reload_cadence.next_fire_in():.0f}s 后）")
+        self.reload_cadence.advance()
+
     async def _maybe_switch_room(self) -> None:
         if self.runtime is None or not self.cadence.due():
             return
@@ -350,6 +375,7 @@ class AgentRunner:
             if self.runtime is None and was_open:
                 await self._open_window(self.relay.active, now=now)
             await self._ensure_session()
+            await self._maybe_reload_page()
             await self._maybe_switch_room()
 
     async def run(self) -> None:
