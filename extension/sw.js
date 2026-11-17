@@ -41,6 +41,7 @@ import { createConnState } from "./src/conn_state.js";
 import { shouldCaptureTab, shouldCaptureHttp } from "./src/attach_filter.js";
 import { createResponseTracker } from "./src/response_body.js";
 import { createWsWatchdog } from "./src/ws_watchdog.js";
+import { pickPageTarget, cdpMessageToEvent, LOCAL_CDP_LIST_URL } from "./src/cdp_fallback.js";
 
 const DEBUGGER_VERSION = "1.3";
 const ALARM_NAME = "mx-keepalive";
@@ -421,13 +422,21 @@ async function maybeAttach(tab) {
     // 清表（含 SW 死亡后从 session 恢复的陈旧登记，防跨会话累积）
     await respTracker.clear();
     await wsWatchdog.noteAttached(); // 静默基线：新 attach 的页面从现在起算
+    await teardownCdpFallback("chrome.debugger 通道已恢复");
     await reportLifecycle("attached", `tab=${tab.id} url=${tab.url}`);
   } catch (e) {
     // "Already attached to debugger with given target id" → 已挂（幂等），忽略；
     // 外部 CDP attach 不通知扩展（chrome.debugger 事件只报自己会话）——双
     // debugger 共存已由 spike Phase A 实证
-    if (!String(e?.message || e).includes("Already attached")) {
-      await reportLifecycle("attach_failed", `tab=${tab?.id} err=${String(e?.message || e)}`);
+    const msgStr = String(e?.message || e);
+    if (!msgStr.includes("Already attached")) {
+      // 名额被外部 CDP 客户端（agent Playwright connect_over_cdp）占住：
+      // 2026-11-17 实锤——agent 先挂时扩展永远抢不到 chrome.debugger 单
+      // 名额，帧断流；CDP 协议层天然多客户端并存（实测 Playwright 持有
+      // 时外部直连 Network.enable 35s 收 11 帧含业务 room_msg）。fallback
+      // 到 CDP 直连通道（1.2.0）：ws://127.0.0.1:9223/devtools/page/<id>
+      await reportLifecycle("attach_failed", `tab=${tab?.id} err=${msgStr}`);
+      await ensureCdpFallback(tab);
     }
   }
 }
@@ -437,21 +446,76 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
 });
 chrome.tabs.onCreated.addListener((tab) => maybeAttach(tab));
 
-// ---------- Network 事件（帧捕获） ----------
+// ---------- CDP 直连 fallback 通道（票 #23 追加，1.2.0） ----------
+// chrome.debugger 名额被 agent Playwright 占住时的第二采集通道：
+// ws://127.0.0.1:9223/devtools/page/<id> + Network.enable，帧事件与
+// chrome.debugger onEvent 同构（cdp_fallback.js 解包），分派进同一
+// handleNetworkEvent。纯逻辑/URL 构造在 src/cdp_fallback.js（node --test）。
+let cdpSock = null;
 
-chrome.debugger.onEvent.addListener((source, method, params) => {
-  (async () => {
+async function ensureCdpFallback(tab) {
+  if (cdpSock && cdpSock.readyState <= 1) return; // 已在跑
+  const prefix = (await storage.get(["mx_site_prefix"])).mx_site_prefix || undefined;
+  let target = null;
+  try {
+    const res = await fetch(LOCAL_CDP_LIST_URL);
+    target = pickPageTarget(await res.json(), prefix);
+  } catch {
+    // 9223 不可达（agent/采集宿主未起）：本 tick 放弃，alarm 周期重试
+    return;
+  }
+  if (!target) return;
+  const sock = new WebSocket(target.webSocketDebuggerUrl);
+  cdpSock = sock;
+  sock.onopen = async () => {
+    if (cdpSock !== sock) return;
+    await wsWatchdog.noteAttached(); // 静默基线与主通道同语义
+    await reportLifecycle("cdp_fallback_up", `page=${target.id.slice(0, 12)}`);
     try {
-      if (method === "Network.webSocketFrameReceived" || method === "Network.webSocketFrameSent") {
-        const data = params?.response?.payloadData ?? "";
-        // 看门狗喂帧在引擎帧过滤之前（票 #23 防线二）：心跳（2/3）与业务帧
-        // 都算「页面 WS 活着」——连引擎帧都收不到才是连接死的权威信号
-        wsWatchdog.noteFrame().catch(() => {});
-        if (isEngineFrame(data)) return; // 引擎帧不上行（与网关同判定）
-        await send(
-          await envelope.build(method.endsWith("Received") ? "ws_in" : "ws_out", data)
-        );
-      } else if (method === "Network.requestWillBeSent") {
+      sock.send(JSON.stringify({ id: 1, method: "Network.enable" }));
+    } catch {
+      /* 发送失败由 onclose 收尾重试 */
+    }
+  };
+  sock.onmessage = (m) => {
+    if (cdpSock !== sock) return;
+    const evt = cdpMessageToEvent(m.data);
+    if (evt) handleNetworkEvent(evt.source, evt.method, evt.params);
+  };
+  sock.onclose = () => {
+    if (cdpSock === sock) {
+      cdpSock = null; // 通道死：下一 alarm tick 的 maybeAttach 重建
+    }
+  };
+}
+
+async function teardownCdpFallback(reason) {
+  const sock = cdpSock;
+  cdpSock = null;
+  if (sock && sock.readyState <= 1) {
+    try {
+      sock.close();
+    } catch {
+      /* 已死则无事 */
+    }
+    await reportLifecycle("cdp_fallback_down", reason);
+  }
+}
+
+// ---------- Network 事件（帧捕获；两通道共享分派） ----------
+
+async function handleNetworkEvent(source, method, params) {
+  try {
+    if (method === "Network.webSocketFrameReceived" || method === "Network.webSocketFrameSent") {
+      const data = params?.response?.payloadData ?? "";
+      // 看门狗喂帧在引擎帧过滤之前（票 #23 防线二）：心跳（2/3）与业务帧
+      // 都算「页面 WS 活着」——连引擎帧都收不到才是连接死的权威信号
+      wsWatchdog.noteFrame().catch(() => {});
+      if (isEngineFrame(data)) return; // 引擎帧不上行（与网关同判定）
+      await send(
+        await envelope.build(method.endsWith("Received") ? "ws_in" : "ws_out", data)
+      );
+    } else if (method === "Network.requestWillBeSent") {
         const url = params?.request?.url ?? "";
         if (!shouldCaptureHttp(url)) return;
         // 登记 + 先发请求面（响应体另帧补充：loadingFinished 后才能取）；
@@ -489,7 +553,10 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     } catch (e) {
       await reportLifecycle("on_event_error", String(e?.message || e));
     }
-  })();
+}
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  handleNetworkEvent(source, method, params);
 });
 
 chrome.debugger.onDetach.addListener(async (source, reason) => {
